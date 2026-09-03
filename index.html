@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>veditor – Professional PDF Editor & Annotator</title>
+  <link rel="icon" type="image/png" href="icons/icon-32.png">
+  <link rel="stylesheet" href="src/ui/styles/tokens.css">
+  <link rel="stylesheet" href="src/ui/styles/main.css">
+  <link rel="stylesheet" href="src/ui/styles/rtl.css">
+  <link rel="stylesheet" href="src/ui/styles/landing.css">
+</head>
+<body class="theme-dark">
+  <div id="app-root" class="app-container">
+    <!-- Top Navigation & Tab Bar -->
+    <header id="app-header" class="app-header"></header>
+
+    <!-- Main Workspace Container -->
+    <div id="app-workspace" class="app-workspace">
+      <!-- Left Collapsible Sidebar -->
+      <aside id="app-sidebar" class="app-sidebar collapsed"></aside>
+
+      <!-- Center Viewport Area with Document Canvas -->
+      <main id="app-viewport-container" class="app-viewport-container">
+        <!-- Floating / Dockable Toolbar -->
+        <div id="app-floating-toolbar" class="floating-toolbar"></div>
+
+        <!-- Document Viewer Scroll Area -->
+        <div id="document-scroll-container" class="document-scroll-container">
+          <div id="document-pages-wrapper" class="document-pages-wrapper">
+            <!-- Empty state when no document is open -->
+            <div id="empty-state-view" class="empty-state-view"></div>
+          </div>
+        </div>
+
+        <!-- Floating Quick Zoom & View Pill -->
+        <div id="app-view-controls" class="floating-view-controls"></div>
+      </main>
+
+      <!-- Right Collapsible Properties Inspector -->
+      <aside id="app-properties-panel" class="app-properties-panel collapsed"></aside>
+    </div>
+
+    <!-- Modals, Overlays & Command Palette Containers -->
+    <div id="modal-container" class="modal-container">
+      <div id="command-palette-container"></div>
+      <div id="shortcuts-modal-container"></div>
+      <div id="settings-modal-container"></div>
+      <div id="signature-modal-container"></div>
+    </div>
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script type="module" src="src/main.ts"></script>
+</body>
+</html>

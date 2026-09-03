@@ -1,0 +1,38 @@
+{
+  "name": "veditor",
+  "version": "1.0.0",
+  "description": "a simple extention for pdf annotation!",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build:chrome": "vite build --mode chrome",
+    "build:firefox": "vite build --mode firefox",
+    "build": "npm run build:chrome && npm run build:firefox",
+    "package": "npm run build && python3 scripts/package-extensions.py",
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/v3ndettaaa/veditor.git"
+  },
+  "keywords": [],
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/v3ndettaaa/veditor/issues"
+  },
+  "homepage": "https://github.com/v3ndettaaa/veditor#readme",
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/vazirmatn": "^5.3.0",
+    "idb": "^8.0.3",
+    "lucide": "^1.39.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289"
+  }
+}

@@ -1,0 +1,40 @@
+/**
+ * Persian / Arabic RTL Layout Styling
+ */
+
+[dir="rtl"] body {
+  font-family: var(--font-fa);
+  direction: rtl;
+  text-align: right;
+}
+
+[dir="rtl"] .app-sidebar {
+  border-right: none;
+  border-left: 1px solid var(--border-subtle);
+}
+
+[dir="rtl"] .app-sidebar.collapsed {
+  transform: translateX(100%);
+}
+
+[dir="rtl"] .app-properties-panel {
+  border-left: none;
+  border-right: 1px solid var(--border-subtle);
+}
+
+[dir="rtl"] .app-properties-panel.collapsed {
+  transform: translateX(-100%);
+}
+
+[dir="rtl"] .floating-view-controls {
+  right: auto;
+  left: 24px;
+}
+
+[dir="rtl"] .sidebar-header {
+  flex-direction: row-reverse;
+}
+
+[dir="rtl"] .header-left {
+  flex-direction: row-reverse;
+}
