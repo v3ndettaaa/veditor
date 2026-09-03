@@ -20,8 +20,14 @@ export interface CurveSegment {
 export function calculateStrokeWidth(
   baseWidth: number,
   pressure: number = 0.5,
-  pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear'
+  pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
+  pressureEnabled: boolean = true,
+  strength: 'light' | 'balanced' | 'strong' = 'balanced'
 ): number {
+  if (!pressureEnabled) {
+    return baseWidth;
+  }
+
   let mappedPressure = pressure;
   if (pressureCurve === 'soft') {
     mappedPressure = Math.sqrt(pressure);
@@ -31,8 +37,17 @@ export function calculateStrokeWidth(
     mappedPressure = Math.pow(pressure, 3);
   }
 
-  // Clamped width range between 30% and 180% of base width
-  const factor = 0.3 + 1.5 * mappedPressure;
+  let minFactor = 0.3;
+  let maxFactor = 1.8;
+  if (strength === 'light') {
+    minFactor = 0.6;
+    maxFactor = 1.4;
+  } else if (strength === 'strong') {
+    minFactor = 0.1;
+    maxFactor = 2.4;
+  }
+
+  const factor = minFactor + (maxFactor - minFactor) * mappedPressure;
   return Math.max(0.5, baseWidth * factor);
 }
 
@@ -42,7 +57,9 @@ export function calculateStrokeWidth(
 export function generateSmoothSegments(
   points: StrokePoint[],
   baseWidth: number,
-  pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear'
+  pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
+  pressureEnabled: boolean = true,
+  strength: 'light' | 'balanced' | 'strong' = 'balanced'
 ): CurveSegment[] {
   if (points.length < 2) return [];
 
@@ -51,8 +68,8 @@ export function generateSmoothSegments(
   if (points.length === 2) {
     const p0 = points[0];
     const p1 = points[1];
-    const w0 = calculateStrokeWidth(baseWidth, p0.pressure, pressureCurve);
-    const w1 = calculateStrokeWidth(baseWidth, p1.pressure, pressureCurve);
+    const w0 = calculateStrokeWidth(baseWidth, p0.pressure, pressureCurve, pressureEnabled, strength);
+    const w1 = calculateStrokeWidth(baseWidth, p1.pressure, pressureCurve, pressureEnabled, strength);
     segments.push({
       p0,
       p1,
@@ -85,8 +102,8 @@ export function generateSmoothSegments(
     const cp2x = p2.x - (d2 * (p3.x - p2.x) / d3 + (d2 + 2 * d3) * (p2.x - p1.x) / (d2 + d3)) / 3;
     const cp2y = p2.y - (d2 * (p3.y - p2.y) / d3 + (d2 + 2 * d3) * (p2.y - p1.y) / (d2 + d3)) / 3;
 
-    const wStart = calculateStrokeWidth(baseWidth, p1.pressure, pressureCurve);
-    const wEnd = calculateStrokeWidth(baseWidth, p2.pressure, pressureCurve);
+    const wStart = calculateStrokeWidth(baseWidth, p1.pressure, pressureCurve, pressureEnabled, strength);
+    const wEnd = calculateStrokeWidth(baseWidth, p2.pressure, pressureCurve, pressureEnabled, strength);
 
     segments.push({
       p0: p1,
@@ -102,7 +119,7 @@ export function generateSmoothSegments(
 }
 
 /**
- * Draws smooth stroke segments onto a canvas context with variable line width.
+ * Draws smooth stroke segments onto a canvas context with variable or uniform line width.
  */
 export function renderSmoothStroke(
   ctx: CanvasRenderingContext2D,
@@ -110,7 +127,9 @@ export function renderSmoothStroke(
   color: string,
   baseWidth: number,
   pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
-  isHighlighter = false
+  isHighlighter = false,
+  pressureEnabled = true,
+  strength: 'light' | 'balanced' | 'strong' = 'balanced'
 ): void {
   if (points.length === 0) return;
 
@@ -136,10 +155,37 @@ export function renderSmoothStroke(
     return;
   }
 
-  // Single point dot
+  // When pressure sensitivity is disabled, render clean uniform stroke
+  if (!pressureEnabled) {
+    if (points.length === 1) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(points[0].x, points[0].y, baseWidth / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = baseWidth;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      const xc = (points[i - 1].x + points[i].x) / 2;
+      const yc = (points[i - 1].y + points[i].y) / 2;
+      ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+    }
+    const last = points[points.length - 1];
+    ctx.lineTo(last.x, last.y);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // Single point dot with pressure
   if (points.length === 1) {
     const p = points[0];
-    const w = calculateStrokeWidth(baseWidth, p.pressure, pressureCurve);
+    const w = calculateStrokeWidth(baseWidth, p.pressure, pressureCurve, pressureEnabled, strength);
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(p.x, p.y, w / 2, 0, Math.PI * 2);
@@ -148,7 +194,7 @@ export function renderSmoothStroke(
     return;
   }
 
-  const segments = generateSmoothSegments(points, baseWidth, pressureCurve);
+  const segments = generateSmoothSegments(points, baseWidth, pressureCurve, pressureEnabled, strength);
 
   for (const seg of segments) {
     const avgWidth = (seg.widthStart + seg.widthEnd) / 2;

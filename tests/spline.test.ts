@@ -40,4 +40,35 @@ describe('Spline & Pressure Engine', () => {
     expect(segments[0].cp1).toBeDefined();
     expect(segments[0].cp2).toBeDefined();
   });
+
+  it('returns uniform stroke width when pressure sensitivity is disabled', () => {
+    const baseWidth = 8;
+    // When pressure sensitivity is off, line width is strictly uniform
+    expect(calculateStrokeWidth(baseWidth, 0.1, 'linear', false)).toBe(baseWidth);
+    expect(calculateStrokeWidth(baseWidth, 0.5, 'linear', false)).toBe(baseWidth);
+    expect(calculateStrokeWidth(baseWidth, 0.9, 'linear', false)).toBe(baseWidth);
+    expect(calculateStrokeWidth(baseWidth, 1.0, 'exponential', false)).toBe(baseWidth);
+  });
+
+  it('handles pressure sensitivity toggle and mouse velocity simulation in PressureEngine', () => {
+    // When disabled, returns fixed neutral 0.5
+    expect(PressureEngine.mapPressure(0.9, 'exponential', false)).toBe(0.5);
+    expect(PressureEngine.mapPressure(0.1, 'soft', false)).toBe(0.5);
+
+    // Mouse pointer without simulation returns 0.5
+    expect(PressureEngine.mapPressure(0.8, 'linear', true, 'mouse', false)).toBe(0.5);
+
+    // Mouse pointer with simulation returns velocity-simulated value
+    const simulated = 0.35;
+    expect(PressureEngine.mapPressure(0.0, 'linear', true, 'mouse', true, simulated)).toBe(0.35);
+  });
+
+  it('supports variable pressure dynamic range strengths', () => {
+    const baseWidth = 10;
+    const wLightMin = calculateStrokeWidth(baseWidth, 0.0, 'linear', true, 'light');
+    const wStrongMin = calculateStrokeWidth(baseWidth, 0.0, 'linear', true, 'strong');
+
+    // Strong dynamic range allows significantly thinner strokes at zero pressure
+    expect(wStrongMin).toBeLessThan(wLightMin);
+  });
 });

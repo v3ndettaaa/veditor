@@ -24,6 +24,10 @@ export class PointerHandler {
   private _activePageIndex: number = -1;
   private _pageScratchCanvas: HTMLCanvasElement | null = null;
   private _pageScratchCtx: CanvasRenderingContext2D | null = null;
+  private _lastPointerTime: number = 0;
+  private _lastPointerX: number = 0;
+  private _lastPointerY: number = 0;
+  private _simulatedVelocityPressure: number = 0.5;
 
   public handlePointerDown(
     e: PointerEvent,
@@ -31,25 +35,30 @@ export class PointerHandler {
     scratchCanvas: HTMLCanvasElement,
     onNeedRepaint: () => void
   ): void {
+    const tSettings = store.toolSettings;
+
     // Check palm rejection
-    if (store.appSettings.palmRejectionEnabled && palmRejection.registerPointer(e)) {
-      return; // Ignored palm touch
+    if (tSettings.palmRejectionEnabled && palmRejection.registerPointer(e)) {
+      return;
     }
 
     this._isPointerDown = true;
     this._activePageIndex = pageIndex;
     this._pageScratchCanvas = scratchCanvas;
     this._pageScratchCtx = scratchCanvas.getContext('2d');
+    this._lastPointerTime = Date.now();
+    this._lastPointerX = e.clientX;
+    this._lastPointerY = e.clientY;
+    this._simulatedVelocityPressure = 0.5;
 
     const pt = this.getPointInPage(e, scratchCanvas);
     let tool = store.activeTool;
 
     // Auto-detect stylus eraser tip (buttons === 32 or button === 5)
-    if (e.pointerType === 'pen' && (e.buttons === 32 || (e as any).button === 5)) {
+    if (tSettings.stylusInvertedEraserEnabled && e.pointerType === 'pen' && (e.buttons === 32 || (e as any).button === 5)) {
       tool = 'eraser';
     }
 
-    const tSettings = store.toolSettings;
     const defaultLayerId = 'layer-default';
 
     switch (tool) {
@@ -59,7 +68,9 @@ export class PointerHandler {
           pageIndex,
           tSettings.penColor,
           tSettings.penWidth,
-          tSettings.pressureCurve
+          tSettings.pressureCurve,
+          tSettings.pressureSensitivityEnabled !== false,
+          tSettings.pressureStrength || 'balanced'
         );
         break;
 
@@ -326,9 +337,31 @@ export class PointerHandler {
     const rawX = (e.clientX - rect.left) / zoom;
     const rawY = (e.clientY - rect.top) / zoom;
 
+    const tSettings = store.toolSettings;
+    const now = Date.now();
+
+    if (e.pointerType === 'mouse' && tSettings.mousePressureSimulation) {
+      const dt = Math.max(8, now - (this._lastPointerTime || now));
+      const dist = Math.hypot(e.clientX - (this._lastPointerX || e.clientX), e.clientY - (this._lastPointerY || e.clientY));
+      const speed = dist / dt; // pixels per ms
+      // Faster drawing -> thinner stroke (lower pressure), slower drawing -> thicker stroke
+      const targetP = Math.max(0.2, Math.min(0.9, 0.85 - speed * 0.35));
+      this._simulatedVelocityPressure = this._simulatedVelocityPressure * 0.65 + targetP * 0.35;
+    } else {
+      this._simulatedVelocityPressure = 0.5;
+    }
+
+    this._lastPointerTime = now;
+    this._lastPointerX = e.clientX;
+    this._lastPointerY = e.clientY;
+
     const mappedPressure = PressureEngine.mapPressure(
       e.pressure,
-      store.toolSettings.pressureCurve
+      tSettings.pressureCurve,
+      tSettings.pressureSensitivityEnabled !== false,
+      e.pointerType,
+      tSettings.mousePressureSimulation,
+      this._simulatedVelocityPressure
     );
 
     return {
@@ -337,7 +370,7 @@ export class PointerHandler {
       pressure: mappedPressure,
       tiltX: e.tiltX,
       tiltY: e.tiltY,
-      time: Date.now()
+      time: now
     };
   }
 }

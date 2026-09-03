@@ -128,12 +128,22 @@ export class AnnotationEngine {
     scale: number = 1.0
   ): void {
     switch (ann.type) {
-      case 'pen':
+      case 'pen': {
+        const penAnn = ann as PenAnnotation;
         ctx.save();
         ctx.scale(scale, scale);
-        renderSmoothStroke(ctx, ann.points, ann.color, ann.strokeWidth, 'linear', false);
+        renderSmoothStroke(
+          ctx,
+          penAnn.points,
+          penAnn.color,
+          penAnn.strokeWidth,
+          penAnn.pressureCurve || 'linear',
+          false,
+          penAnn.pressureEnabled !== false
+        );
         ctx.restore();
         break;
+      }
 
       case 'highlighter':
         ctx.save();

@@ -50,8 +50,13 @@ class StateStore {
     textAlign: 'left',
     measureUnit: 'mm',
     measureScale: 1.0,
+    pressureSensitivityEnabled: true,
+    mousePressureSimulation: false,
     pressureCurve: 'linear',
-    palmRejectionEnabled: true
+    pressureStrength: 'balanced',
+    strokeSmoothing: 'medium',
+    palmRejectionEnabled: true,
+    stylusInvertedEraserEnabled: true
   };
 
   // App Settings
@@ -60,12 +65,19 @@ class StateStore {
     accentColor: '#6366f1',
     language: 'en',
     backgroundPattern: 'none',
-    autoSaveIntervalMs: 3000,
+    autoSaveIntervalMs: 15000,
     snapToGrid: false,
     gridSize: 20,
     hardwareAcceleration: true,
     maxRenderBufferPages: 3,
-    showRuler: false
+    showRuler: false,
+    showPageShadows: true,
+    defaultZoomMode: 'fitWidth',
+    defaultViewMode: 'continuous',
+    uiDensity: 'comfortable',
+    smoothScroll: true,
+    invertDocumentOled: false,
+    retinaRendering: true
   };
 
   // Selection & Clipboard State
@@ -90,6 +102,22 @@ class StateStore {
     if (typeof window !== 'undefined' && window.matchMedia) {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       this._appSettings.theme = prefersDark ? 'dark' : 'light';
+    }
+
+    // Load persisted settings from localStorage if available
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const savedTools = localStorage.getItem('veditor_tool_settings');
+        if (savedTools) {
+          this._toolSettings = { ...this._toolSettings, ...JSON.parse(savedTools) };
+        }
+        const savedApp = localStorage.getItem('veditor_app_settings');
+        if (savedApp) {
+          this._appSettings = { ...this._appSettings, ...JSON.parse(savedApp) };
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load settings from localStorage:', e);
     }
   }
 
@@ -193,11 +221,83 @@ class StateStore {
 
   public updateToolSettings(partial: Partial<ToolSettings>) {
     this._toolSettings = { ...this._toolSettings, ...partial };
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('veditor_tool_settings', JSON.stringify(this._toolSettings));
+      }
+    } catch (e) {
+      console.warn('Failed to persist tool settings:', e);
+    }
     this.notify();
   }
 
   public updateAppSettings(partial: Partial<AppSettings>) {
     this._appSettings = { ...this._appSettings, ...partial };
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('veditor_app_settings', JSON.stringify(this._appSettings));
+      }
+    } catch (e) {
+      console.warn('Failed to persist app settings:', e);
+    }
+    this.notify();
+  }
+
+  public resetSettingsToDefault() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.removeItem('veditor_tool_settings');
+        localStorage.removeItem('veditor_app_settings');
+      }
+    } catch (e) {
+      console.warn('Failed to clear settings from localStorage:', e);
+    }
+    this._toolSettings = {
+      penColor: '#4f46e5',
+      penWidth: 3,
+      highlighterColor: 'rgba(250, 204, 21, 0.45)',
+      highlighterWidth: 20,
+      highlighterBlendMode: 'multiply',
+      eraserMode: 'stroke',
+      eraserWidth: 24,
+      shapeColor: '#ef4444',
+      shapeFillColor: 'transparent',
+      shapeWidth: 2,
+      shapeStyle: 'solid',
+      textColor: '#111827',
+      textBgColor: 'transparent',
+      fontSize: 16,
+      fontFamily: 'Inter',
+      textAlign: 'left',
+      measureUnit: 'mm',
+      measureScale: 1.0,
+      pressureSensitivityEnabled: true,
+      mousePressureSimulation: false,
+      pressureCurve: 'linear',
+      pressureStrength: 'balanced',
+      strokeSmoothing: 'medium',
+      palmRejectionEnabled: true,
+      stylusInvertedEraserEnabled: true
+    };
+    this._appSettings = {
+      theme: 'dark',
+      accentColor: '#6366f1',
+      language: 'en',
+      backgroundPattern: 'none',
+      autoSaveIntervalMs: 15000,
+      snapToGrid: false,
+      gridSize: 20,
+      hardwareAcceleration: true,
+      maxRenderBufferPages: 3,
+      showRuler: false,
+      showPageShadows: true,
+      defaultZoomMode: 'fitWidth',
+      defaultViewMode: 'continuous',
+      uiDensity: 'comfortable',
+      smoothScroll: true,
+      invertDocumentOled: false,
+      retinaRendering: true
+    };
     this.notify();
   }
 

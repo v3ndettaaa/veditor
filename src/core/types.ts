@@ -85,6 +85,8 @@ export interface PenAnnotation extends BaseAnnotation {
   strokeWidth: number;
   smoothing?: boolean;
   taper?: boolean;
+  pressureEnabled?: boolean;
+  pressureCurve?: 'linear' | 'soft' | 'firm' | 'exponential';
 }
 
 export interface HighlighterAnnotation extends BaseAnnotation {
@@ -227,8 +229,13 @@ export interface ToolSettings {
   textAlign: 'left' | 'center' | 'right';
   measureUnit: 'mm' | 'cm' | 'm' | 'in' | 'ft' | 'pt' | 'px';
   measureScale: number; // calibrated scale
+  pressureSensitivityEnabled: boolean; // toggle pressure sensitivity on/off
+  mousePressureSimulation: boolean;    // simulate pressure with mouse velocity
   pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential';
+  pressureStrength: 'light' | 'balanced' | 'strong';
+  strokeSmoothing: 'none' | 'subtle' | 'medium' | 'high';
   palmRejectionEnabled: boolean;
+  stylusInvertedEraserEnabled: boolean;
 }
 
 export interface AppSettings {
@@ -242,4 +249,11 @@ export interface AppSettings {
   hardwareAcceleration: boolean;
   maxRenderBufferPages: number;
   showRuler: boolean;
+  showPageShadows: boolean;
+  defaultZoomMode: 'fitWidth' | 'fitPage' | '100%' | '125%' | '150%' | 'lastUsed';
+  defaultViewMode: 'continuous' | 'single' | 'two-page';
+  uiDensity: 'comfortable' | 'compact';
+  smoothScroll: boolean;
+  invertDocumentOled: boolean;
+  retinaRendering: boolean;
 }

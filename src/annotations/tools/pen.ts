@@ -13,13 +13,25 @@ export class PenTool {
   private _color: string = '#4f46e5';
   private _width: number = 3;
   private _pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear';
+  private _pressureEnabled: boolean = true;
+  private _strength: 'light' | 'balanced' | 'strong' = 'balanced';
 
-  public start(point: StrokePoint, pageIndex: number, color: string, width: number, curve: 'linear' | 'soft' | 'firm' | 'exponential') {
+  public start(
+    point: StrokePoint,
+    pageIndex: number,
+    color: string,
+    width: number,
+    curve: 'linear' | 'soft' | 'firm' | 'exponential',
+    pressureEnabled: boolean = true,
+    strength: 'light' | 'balanced' | 'strong' = 'balanced'
+  ) {
     this._activePoints = [point];
     this._pageIndex = pageIndex;
     this._color = color;
     this._width = width;
     this._pressureCurve = curve;
+    this._pressureEnabled = pressureEnabled;
+    this._strength = strength;
   }
 
   public move(point: StrokePoint): void {
@@ -37,7 +49,9 @@ export class PenTool {
       this._color,
       this._width,
       this._pressureCurve,
-      false
+      false,
+      this._pressureEnabled,
+      this._strength
     );
     ctx.restore();
   }
@@ -56,6 +70,8 @@ export class PenTool {
       points: [...this._activePoints],
       color: this._color,
       strokeWidth: this._width,
+      pressureEnabled: this._pressureEnabled,
+      pressureCurve: this._pressureCurve,
       opacity: 1.0,
       createdAt: Date.now(),
       updatedAt: Date.now()

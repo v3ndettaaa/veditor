@@ -6,12 +6,35 @@
 export type PressureCurveType = 'linear' | 'soft' | 'firm' | 'exponential';
 
 export class PressureEngine {
-  public static mapPressure(rawPressure: number | undefined, curve: PressureCurveType = 'linear'): number {
-    if (rawPressure === undefined || isNaN(rawPressure) || rawPressure === 0) {
-      return 0.5; // fallback default for non-pressure devices (mouse)
+  public static mapPressure(
+    rawPressure: number | undefined,
+    curve: PressureCurveType = 'linear',
+    enabled: boolean = true,
+    pointerType: string = 'pen',
+    mouseSimulation: boolean = false,
+    simulatedPressure: number = 0.5
+  ): number {
+    if (!enabled) {
+      return 0.5; // fallback neutral pressure when pressure sensitivity is disabled
     }
 
-    const p = Math.max(0.01, Math.min(1.0, rawPressure));
+    let p: number;
+
+    if (pointerType === 'mouse') {
+      if (mouseSimulation) {
+        p = simulatedPressure;
+      } else {
+        return 0.5; // standard uniform mouse pressure
+      }
+    } else {
+      if (rawPressure === undefined || isNaN(rawPressure) || rawPressure === 0) {
+        p = 0.5;
+      } else {
+        p = rawPressure;
+      }
+    }
+
+    p = Math.max(0.01, Math.min(1.0, p));
 
     switch (curve) {
       case 'soft':
