@@ -5,6 +5,7 @@ import { PenAnnotation, DocumentSession } from '../src/core/types';
 
 describe('Undo / Redo History System', () => {
   beforeEach(() => {
+    store.closeAllDocumentTabs();
     history.clear();
     const mockDoc: DocumentSession = {
       id: 'test-doc',
@@ -110,5 +111,82 @@ describe('Undo / Redo History System', () => {
     // Redo replace
     history.redo();
     expect(store.activeDocument?.annotations[0].length).toBe(2);
+  });
+
+  it('maintains isolated undo/redo stacks when switching document tabs', () => {
+    store.closeAllDocumentTabs();
+    const docA: DocumentSession = {
+      id: 'doc-A',
+      name: 'DocA.pdf',
+      pageCount: 1,
+      pages: [],
+      bookmarks: [],
+      annotations: { 0: [] },
+      layers: {},
+      activePageIndex: 0,
+      createdAt: Date.now(),
+      lastModifiedAt: Date.now()
+    };
+
+    const docB: DocumentSession = {
+      id: 'doc-B',
+      name: 'DocB.pdf',
+      pageCount: 1,
+      pages: [],
+      bookmarks: [],
+      annotations: { 0: [] },
+      layers: {},
+      activePageIndex: 0,
+      createdAt: Date.now(),
+      lastModifiedAt: Date.now()
+    };
+
+    // Open Doc A and perform an edit
+    store.setActiveDocument(docA);
+    history.switchDocument('doc-A');
+    const annA: PenAnnotation = {
+      id: 'ann-A',
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'pen',
+      box: { x: 0, y: 0, width: 10, height: 10 },
+      points: [],
+      color: '#ff0000',
+      strokeWidth: 2,
+      opacity: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    history.execute(new AddAnnotationCommand(0, annA));
+    expect(history.canUndo).toBe(true);
+
+    // Open Doc B in a new tab
+    store.setActiveDocument(docB);
+    history.switchDocument('doc-B');
+    // Doc B history must be empty initially
+    expect(history.canUndo).toBe(false);
+
+    // Switch back to Doc A tab
+    store.switchDocumentTab('doc-A');
+    history.switchDocument('doc-A');
+    // Doc A history must be fully preserved
+    expect(history.canUndo).toBe(true);
+    history.undo();
+    expect(docA.annotations[0].length).toBe(0);
+
+    // Verify tabs list in store
+    expect(store.documentTabs.length).toBe(2);
+    expect(store.documentTabs[0].id).toBe('doc-A');
+    expect(store.documentTabs[1].id).toBe('doc-B');
+
+    // Close Doc A tab -> automatically switches to Doc B
+    store.closeDocumentTab('doc-A');
+    expect(store.documentTabs.length).toBe(1);
+    expect(store.activeDocument?.id).toBe('doc-B');
+
+    // Close remaining Doc B tab -> returns to landing empty state
+    store.closeDocumentTab('doc-B');
+    expect(store.documentTabs.length).toBe(0);
+    expect(store.activeDocument).toBeNull();
   });
 });

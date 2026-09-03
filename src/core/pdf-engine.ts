@@ -19,20 +19,74 @@ export interface RenderTaskToken {
   cancel(): void;
 }
 
+interface CachedDocSession {
+  doc: pdfjsLib.PDFDocumentProxy;
+  pageCache: Map<number, pdfjsLib.PDFPageProxy>;
+  renderedBitmaps: Map<number, { width: number; height: number; scale: number; rotation: number; canvas: HTMLCanvasElement }>;
+  meta: {
+    pageCount: number;
+    pages: PageInfo[];
+    bookmarks: PDFBookmarkItem[];
+  };
+}
+
 export class PDFEngine {
   private _pdfDoc: pdfjsLib.PDFDocumentProxy | null = null;
   private _pageCache: Map<number, pdfjsLib.PDFPageProxy> = new Map();
   private _activeRenderTasks: Map<number, any> = new Map();
+  private _renderedBitmaps = new Map<number, { width: number; height: number; scale: number; rotation: number; canvas: HTMLCanvasElement }>();
+  private _docSessions: Map<string, CachedDocSession> = new Map();
+  private _currentDocId: string | null = null;
 
   /**
-   * Loads a PDF document from raw binary bytes.
+   * Loads a PDF document from raw binary bytes, with multi-document tab caching.
    */
-  public async loadFromBytes(data: Uint8Array): Promise<{
+  public async loadFromBytes(data: Uint8Array, docId?: string): Promise<{
     pageCount: number;
     pages: PageInfo[];
     bookmarks: PDFBookmarkItem[];
   }> {
-    this.destroy();
+    // If this document is already cached in memory, switch to it instantly (<1ms)
+    if (docId && this._docSessions.has(docId)) {
+      if (this._currentDocId === docId) {
+        return this._docSessions.get(docId)!.meta;
+      }
+
+      // Save previous active session state
+      if (this._currentDocId && this._docSessions.has(this._currentDocId)) {
+        const prev = this._docSessions.get(this._currentDocId)!;
+        prev.pageCache = this._pageCache;
+        prev.renderedBitmaps = this._renderedBitmaps;
+      }
+
+      // Cancel any ongoing rendering tasks from previous document
+      for (const [, task] of this._activeRenderTasks) {
+        try { task.cancel(); } catch (e) {}
+      }
+      this._activeRenderTasks.clear();
+
+      // Switch active references
+      const cached = this._docSessions.get(docId)!;
+      this._pdfDoc = cached.doc;
+      this._pageCache = cached.pageCache;
+      this._renderedBitmaps = cached.renderedBitmaps;
+      this._currentDocId = docId;
+
+      return cached.meta;
+    }
+
+    // Cancel ongoing render tasks
+    for (const [, task] of this._activeRenderTasks) {
+      try { task.cancel(); } catch (e) {}
+    }
+    this._activeRenderTasks.clear();
+
+    // Save previous active session before replacing
+    if (this._currentDocId && this._docSessions.has(this._currentDocId)) {
+      const prev = this._docSessions.get(this._currentDocId)!;
+      prev.pageCache = this._pageCache;
+      prev.renderedBitmaps = this._renderedBitmaps;
+    }
 
     // Pass a fresh slice so PDF.js worker transfer never detaches the original buffer!
     const dataCopy = data.slice(0);
@@ -45,6 +99,8 @@ export class PDFEngine {
     });
 
     this._pdfDoc = await loadingTask.promise;
+    this._pageCache = new Map();
+    this._renderedBitmaps = new Map();
     const pageCount = this._pdfDoc.numPages;
     const pages: PageInfo[] = [];
 
@@ -87,7 +143,18 @@ export class PDFEngine {
       console.warn('Could not extract outline:', err);
     }
 
-    return { pageCount, pages, bookmarks };
+    const meta = { pageCount, pages, bookmarks };
+    if (docId) {
+      this._docSessions.set(docId, {
+        doc: this._pdfDoc,
+        pageCache: this._pageCache,
+        renderedBitmaps: this._renderedBitmaps,
+        meta
+      });
+      this._currentDocId = docId;
+    }
+
+    return meta;
   }
 
   private formatOutline(items: any[]): PDFBookmarkItem[] {
@@ -95,7 +162,7 @@ export class PDFEngine {
     return items.map(item => ({
       title: typeof item.title === 'string' ? item.title : String(item.title || ''),
       pageIndex: typeof item.pageIndex === 'number' ? item.pageIndex : undefined,
-      items: item.items && Array.isArray(item.items) ? this.formatOutline(item.items) : undefined
+      items: item.items && Array.isArray(items.items) ? this.formatOutline(item.items) : undefined
     }));
   }
 
@@ -112,8 +179,6 @@ export class PDFEngine {
       this._activeRenderTasks.delete(pageIndex);
     }
   }
-
-  private _renderedBitmaps = new Map<number, { width: number; height: number; scale: number; rotation: number; canvas: HTMLCanvasElement }>();
 
   public clearBitmapCache(): void {
     this._renderedBitmaps.clear();
@@ -240,9 +305,43 @@ export class PDFEngine {
   }
 
   /**
+   * Releases and cleans up a specific cached document session (when a tab is closed).
+   */
+  public unloadDoc(docId: string): void {
+    if (this._docSessions.has(docId)) {
+      const session = this._docSessions.get(docId)!;
+      try {
+        session.pageCache.clear();
+        session.renderedBitmaps.clear();
+        if (typeof (session.doc as any).cleanup === 'function') {
+          (session.doc as any).cleanup();
+        }
+        if (session.doc.loadingTask && typeof (session.doc.loadingTask as any).destroy === 'function') {
+          (session.doc.loadingTask as any).destroy();
+        }
+      } catch (e) {
+        // ignored
+      }
+      this._docSessions.delete(docId);
+    }
+
+    if (this._currentDocId === docId) {
+      this._pdfDoc = null;
+      this._pageCache.clear();
+      this._renderedBitmaps.clear();
+      this._currentDocId = null;
+    }
+  }
+
+  /**
    * Cleans up all document instances and caches.
    */
   public destroy() {
+    for (const [id] of this._docSessions) {
+      this.unloadDoc(id);
+    }
+    this._docSessions.clear();
+
     for (const [, task] of this._activeRenderTasks) {
       try {
         task.cancel();
@@ -266,6 +365,7 @@ export class PDFEngine {
       }
       this._pdfDoc = null;
     }
+    this._currentDocId = null;
   }
 }
 

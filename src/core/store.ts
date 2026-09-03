@@ -22,6 +22,8 @@ class StateStore {
   // Document State
   private _activeDocument: DocumentSession | null = null;
   private _documentTabs: Array<{ id: string; name: string }> = [];
+  private _openDocuments: Map<string, DocumentSession> = new Map();
+  private _closeTabListeners: Set<(tabId: string) => void> = new Set();
 
   // Navigation & Viewport State
   private _zoom: number = 1.0;
@@ -139,6 +141,7 @@ class StateStore {
   // Getters
   get activeDocument() { return this._activeDocument; }
   get documentTabs() { return this._documentTabs; }
+  get openDocuments() { return this._openDocuments; }
   get zoom() { return this._zoom; }
   get viewMode() { return this._viewMode; }
   get activePageIndex() { return this._activePageIndex; }
@@ -158,9 +161,20 @@ class StateStore {
   get signatureModalOpen() { return this._signatureModalOpen; }
 
   // Setters & Actions
+  public onTabClosed(listener: (tabId: string) => void) {
+    this._closeTabListeners.add(listener);
+    return () => this._closeTabListeners.delete(listener);
+  }
+
   public setActiveDocument(doc: DocumentSession | null) {
+    if (this._activeDocument && this._activeDocument.id) {
+      this._activeDocument.activePageIndex = this._activePageIndex;
+      this._openDocuments.set(this._activeDocument.id, this._activeDocument);
+    }
+
     this._activeDocument = doc;
     if (doc) {
+      this._openDocuments.set(doc.id, doc);
       if (!this._documentTabs.some(t => t.id === doc.id)) {
         this._documentTabs.push({ id: doc.id, name: doc.name });
       }
@@ -170,11 +184,57 @@ class StateStore {
     this.notify();
   }
 
+  public switchDocumentTab(tabId: string) {
+    if (this._activeDocument?.id === tabId) return;
+
+    if (this._activeDocument) {
+      this._activeDocument.activePageIndex = this._activePageIndex;
+      this._openDocuments.set(this._activeDocument.id, this._activeDocument);
+    }
+
+    const targetDoc = this._openDocuments.get(tabId);
+    if (targetDoc) {
+      this._activeDocument = targetDoc;
+      this._activePageIndex = targetDoc.activePageIndex || 0;
+      this._selectedAnnotationIds.clear();
+      this.notify();
+    }
+  }
+
   public closeDocumentTab(tabId: string) {
     this._documentTabs = this._documentTabs.filter(t => t.id !== tabId);
-    if (this._activeDocument?.id === tabId) {
-      this._activeDocument = null;
+    this._openDocuments.delete(tabId);
+
+    // Notify listeners (e.g. pdfEngine and history to clean up cache)
+    for (const listener of this._closeTabListeners) {
+      try {
+        listener(tabId);
+      } catch (e) {
+        console.error('Error in closeTab listener:', e);
+      }
     }
+
+    if (this._activeDocument?.id === tabId) {
+      if (this._documentTabs.length > 0) {
+        const nextTab = this._documentTabs[this._documentTabs.length - 1];
+        const nextDoc = this._openDocuments.get(nextTab.id) || null;
+        this._activeDocument = nextDoc;
+        this._activePageIndex = nextDoc?.activePageIndex || 0;
+      } else {
+        this._activeDocument = null;
+        this._activePageIndex = 0;
+      }
+    }
+    this._selectedAnnotationIds.clear();
+    this.notify();
+  }
+
+  public closeAllDocumentTabs() {
+    this._documentTabs = [];
+    this._openDocuments.clear();
+    this._activeDocument = null;
+    this._activePageIndex = 0;
+    this._selectedAnnotationIds.clear();
     this.notify();
   }
 

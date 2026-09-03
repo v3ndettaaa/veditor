@@ -39,11 +39,14 @@ export class HeaderComponent {
 
         <div class="document-tabs-bar">
           ${tabs.map(tab => `
-            <div class="doc-tab ${activeDoc?.id === tab.id ? 'active' : ''}" data-tab-id="${tab.id}">
-              <span class="doc-tab-title" title="${tab.name}">${tab.name}</span>
-              <span class="doc-tab-close" data-close-tab="${tab.id}">×</span>
+            <div class="doc-tab ${activeDoc?.id === tab.id ? 'active' : ''}" data-tab-id="${tab.id}" title="${tab.name}">
+              <span class="doc-tab-title">${tab.name}</span>
+              <span class="doc-tab-close" data-close-tab="${tab.id}" title="Close Tab">×</span>
             </div>
           `).join('')}
+          <button id="header-add-tab-btn" class="doc-tab-add" title="Open PDF in new tab">
+            ${getIconSvg('plus', 13)}
+          </button>
         </div>
       </div>
 
@@ -127,10 +130,10 @@ export class HeaderComponent {
     // Tab click events
     this._container.querySelectorAll('[data-tab-id]').forEach(tabEl => {
       tabEl.addEventListener('click', (e) => {
-        if ((e.target as HTMLElement).hasAttribute('data-close-tab')) return;
+        if ((e.target as HTMLElement).closest('[data-close-tab]')) return;
         const tabId = tabEl.getAttribute('data-tab-id');
         if (tabId) {
-          // Switch to this tab
+          store.switchDocumentTab(tabId);
         }
       });
     });
@@ -141,6 +144,10 @@ export class HeaderComponent {
         const tabId = closeEl.getAttribute('data-close-tab');
         if (tabId) store.closeDocumentTab(tabId);
       });
+    });
+
+    this._container.querySelector('#header-add-tab-btn')?.addEventListener('click', () => {
+      this._onOpenFileRequested();
     });
   }
 }

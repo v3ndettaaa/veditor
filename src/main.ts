@@ -23,6 +23,8 @@ import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
+import { history } from './core/history';
+import { DocumentSession } from './core/types';
 
 class VeditorApp {
   private _scrollContainer: HTMLElement;
@@ -101,7 +103,13 @@ class VeditorApp {
     // 7. Check URL parameters
     await this.checkUrlParams();
 
-    // 8. Subscribe to document/page changes
+    // 8. Clean up cached PDF documents and history when a tab is closed
+    store.onTabClosed((tabId) => {
+      pdfEngine.unloadDoc(tabId);
+      history.removeDocument(tabId);
+    });
+
+    // 9. Subscribe to document/page changes
     store.subscribe(() => {
       this.handleStoreUpdate();
     });
@@ -124,9 +132,13 @@ class VeditorApp {
         await this.loadPDF(name, bytes);
       },
       onOpenRecent: async (docId: string) => {
+        if (store.openDocuments.has(docId)) {
+          store.switchDocumentTab(docId);
+          return;
+        }
         const session = await getDocumentSession(docId);
         if (session && session.fileData) {
-          await this.loadPDF(session.name, session.fileData);
+          await this.loadPDF(session.name, session.fileData, docId);
         }
       }
     });
@@ -160,14 +172,14 @@ class VeditorApp {
     });
   }
 
-  public async loadPDF(name: string, bytes: Uint8Array) {
+  public async loadPDF(name: string, bytes: Uint8Array, existingDocId?: string) {
     showToast(`Loading ${name}...`);
     try {
       const masterBytes = new Uint8Array(bytes);
-      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes.slice(0));
-      const docId = await openDocumentSession(name, masterBytes.slice(0));
+      const docId = existingDocId || await openDocumentSession(name, masterBytes.slice(0));
+      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes.slice(0), docId);
 
-      const session = {
+      const session: DocumentSession = {
         id: docId,
         name,
         fileData: masterBytes,
@@ -181,10 +193,12 @@ class VeditorApp {
         lastModifiedAt: Date.now()
       };
 
+      this._lastDocId = docId;
+      history.switchDocument(docId);
       store.setActiveDocument(session);
       this.clearRenderedPages();
       this.renderEmptyState();
-      viewportManager.updateLayout();
+      viewportManager.updateLayout(true);
       showToast(`${name} loaded (${pageCount} pages)`);
     } catch (err: any) {
       console.error('Error opening PDF:', err);
@@ -201,11 +215,12 @@ class VeditorApp {
     this._renderedPages.clear();
   }
 
-  private handleStoreUpdate() {
+  private async handleStoreUpdate() {
     if (!store.activeDocument) {
       this.clearRenderedPages();
       this.renderEmptyState();
       this._lastDocId = null;
+      history.switchDocument(null);
       return;
     }
 
@@ -216,9 +231,26 @@ class VeditorApp {
     const docChanged = store.activeDocument.id !== this._lastDocId;
     const viewModeChanged = store.viewMode !== this._lastViewMode;
 
-    if (zoomChanged || docChanged || viewModeChanged) {
-      this._lastZoom = store.zoom;
+    if (docChanged) {
       this._lastDocId = store.activeDocument.id;
+      this._lastZoom = store.zoom;
+      this._lastViewMode = store.viewMode;
+      history.switchDocument(store.activeDocument.id);
+
+      // Instant switch: activate cached document proxy in pdfEngine
+      if (store.activeDocument.fileData) {
+        await pdfEngine.loadFromBytes(store.activeDocument.fileData, store.activeDocument.id);
+      }
+      this.clearRenderedPages();
+      viewportManager.updateLayout(true);
+      if (store.activePageIndex > 0) {
+        viewportManager.scrollToPage(store.activePageIndex);
+      }
+      return;
+    }
+
+    if (zoomChanged || viewModeChanged) {
+      this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
       viewportManager.updateLayout(true);
       return;

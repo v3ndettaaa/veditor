@@ -136,6 +136,28 @@ body {
   opacity: 1;
 }
 
+.doc-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px dashed var(--border-medium);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.doc-tab-add:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* Header Action Buttons */
 .header-btn {
   display: flex;

@@ -18,6 +18,37 @@ class HistoryManager {
   private _undoStack: Command[] = [];
   private _redoStack: Command[] = [];
   private _maxStackSize: number = 150;
+  private _docHistories: Map<string, { undoStack: Command[]; redoStack: Command[] }> = new Map();
+  private _currentDocId: string | null = null;
+
+  public switchDocument(docId: string | null) {
+    if (this._currentDocId) {
+      this._docHistories.set(this._currentDocId, {
+        undoStack: [...this._undoStack],
+        redoStack: [...this._redoStack]
+      });
+    }
+
+    this._currentDocId = docId;
+    if (docId && this._docHistories.has(docId)) {
+      const saved = this._docHistories.get(docId)!;
+      this._undoStack = [...saved.undoStack];
+      this._redoStack = [...saved.redoStack];
+    } else {
+      this._undoStack = [];
+      this._redoStack = [];
+    }
+    store.notify();
+  }
+
+  public removeDocument(docId: string) {
+    this._docHistories.delete(docId);
+    if (this._currentDocId === docId) {
+      this._undoStack = [];
+      this._redoStack = [];
+      this._currentDocId = null;
+    }
+  }
 
   public execute(command: Command) {
     command.execute();
@@ -25,6 +56,12 @@ class HistoryManager {
     this._redoStack = []; // Clear redo stack on new action
     if (this._undoStack.length > this._maxStackSize) {
       this._undoStack.shift();
+    }
+    if (this._currentDocId) {
+      this._docHistories.set(this._currentDocId, {
+        undoStack: [...this._undoStack],
+        redoStack: [...this._redoStack]
+      });
     }
     store.notify();
   }
@@ -34,6 +71,12 @@ class HistoryManager {
     if (!cmd) return false;
     cmd.undo();
     this._redoStack.push(cmd);
+    if (this._currentDocId) {
+      this._docHistories.set(this._currentDocId, {
+        undoStack: [...this._undoStack],
+        redoStack: [...this._redoStack]
+      });
+    }
     store.notify();
     return true;
   }
@@ -43,6 +86,12 @@ class HistoryManager {
     if (!cmd) return false;
     cmd.execute();
     this._undoStack.push(cmd);
+    if (this._currentDocId) {
+      this._docHistories.set(this._currentDocId, {
+        undoStack: [...this._undoStack],
+        redoStack: [...this._redoStack]
+      });
+    }
     store.notify();
     return true;
   }
@@ -67,6 +116,8 @@ class HistoryManager {
   public clear() {
     this._undoStack = [];
     this._redoStack = [];
+    this._docHistories.clear();
+    this._currentDocId = null;
   }
 }
 
