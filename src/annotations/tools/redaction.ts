@@ -9,11 +9,13 @@ export class RedactionTool {
   private _startPoint: Point | null = null;
   private _currentPoint: Point | null = null;
   private _pageIndex: number = 0;
+  private _color: string = '#000000';
 
-  public start(point: Point, pageIndex: number) {
+  public start(point: Point, pageIndex: number, color: string = '#000000') {
     this._startPoint = point;
     this._currentPoint = point;
     this._pageIndex = pageIndex;
+    this._color = color;
   }
 
   public move(point: Point): void {
@@ -32,9 +34,9 @@ export class RedactionTool {
     const h = Math.abs(this._currentPoint.y - this._startPoint.y);
 
     // Diagonal warning stripes in scratchpad
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.25)';
+    ctx.fillStyle = this._color === '#ffffff' ? 'rgba(255, 255, 255, 0.45)' : 'rgba(239, 68, 68, 0.25)';
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#dc2626';
+    ctx.strokeStyle = this._color === '#ffffff' ? '#94a3b8' : '#dc2626';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(x, y, w, h);
@@ -58,7 +60,7 @@ export class RedactionTool {
       layerId,
       type: 'redaction',
       box,
-      color: '#000000',
+      color: this._color || '#000000',
       applied: false,
       opacity: 1.0,
       createdAt: Date.now(),

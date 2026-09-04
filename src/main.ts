@@ -74,6 +74,15 @@ class VeditorApp {
     new PropertiesPanelComponent(document.getElementById('app-properties-panel') as HTMLElement);
     new ViewControlsComponent(document.getElementById('app-view-controls') as HTMLElement);
 
+    if (!store.activeDocument) {
+      const tb = document.getElementById('app-floating-toolbar');
+      if (tb) tb.style.display = 'none';
+      const vc = document.getElementById('app-view-controls');
+      if (vc) vc.style.display = 'none';
+      const pp = document.getElementById('app-properties-panel');
+      if (pp) pp.style.display = 'none';
+    }
+
     const commandPaletteEl = document.getElementById('command-palette-container') || modalContainer;
     const shortcutsModalEl = document.getElementById('shortcuts-modal-container') || modalContainer;
     const settingsModalEl = document.getElementById('settings-modal-container') || modalContainer;
@@ -216,13 +225,24 @@ class VeditorApp {
   }
 
   private async handleStoreUpdate() {
+    const floatingToolbar = document.getElementById('app-floating-toolbar');
+    const viewControls = document.getElementById('app-view-controls');
+    const propertiesPanel = document.getElementById('app-properties-panel');
+
     if (!store.activeDocument) {
+      if (floatingToolbar) floatingToolbar.style.display = 'none';
+      if (viewControls) viewControls.style.display = 'none';
+      if (propertiesPanel) propertiesPanel.style.display = 'none';
       this.clearRenderedPages();
       this.renderEmptyState();
       this._lastDocId = null;
       history.switchDocument(null);
       return;
     }
+
+    if (floatingToolbar) floatingToolbar.style.display = '';
+    if (viewControls) viewControls.style.display = '';
+    if (propertiesPanel) propertiesPanel.style.display = '';
 
     this._emptyStateView.style.display = 'none';
 
@@ -255,6 +275,9 @@ class VeditorApp {
       viewportManager.updateLayout(true);
       return;
     }
+
+    // Update drawing cursors
+    this.updateCanvasCursors();
 
     // Repaint all visible canvases
     for (const [pageIndex, p] of this._renderedPages) {
@@ -357,6 +380,9 @@ class VeditorApp {
 
         const pdfCanvas = document.createElement('canvas');
         pdfCanvas.className = 'pdf-page-canvas';
+        pdfCanvas.dataset.pageIndex = String(pageIndex);
+        pdfCanvas.style.width = `${layout.width}px`;
+        pdfCanvas.style.height = `${layout.height}px`;
 
         const patternCanvas = document.createElement('canvas');
         patternCanvas.className = 'pattern-canvas';
@@ -365,7 +391,11 @@ class VeditorApp {
         annotCanvas.className = 'annotation-canvas';
 
         const scratchCanvas = document.createElement('canvas');
-        scratchCanvas.className = 'scratchpad-canvas';
+        const cursor = store.toolSettings.drawingCursor || 'pen';
+        const cursorClass = (store.activeTool === 'pen' || store.activeTool === 'highlighter') 
+          ? `cursor-${cursor}` 
+          : (store.activeTool === 'select' ? '' : 'cursor-crosshair');
+        scratchCanvas.className = `scratchpad-canvas ${cursorClass}`.trim();
 
         container.appendChild(pdfCanvas);
         container.appendChild(patternCanvas);
@@ -386,6 +416,10 @@ class VeditorApp {
       pageElements.container.style.left = `${layout.left}px`;
       pageElements.container.style.width = `${layout.width}px`;
       pageElements.container.style.height = `${layout.height}px`;
+
+      pageElements.pdfCanvas.dataset.pageIndex = String(pageIndex);
+      pageElements.pdfCanvas.style.width = `${layout.width}px`;
+      pageElements.pdfCanvas.style.height = `${layout.height}px`;
 
       const dpr = window.devicePixelRatio || 1;
       const w = layout.width * dpr;
@@ -482,6 +516,22 @@ class VeditorApp {
       } catch (_) {}
       pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint);
     });
+
+    canvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
+    });
+  }
+
+  public updateCanvasCursors(): void {
+    const cursor = store.toolSettings.drawingCursor || 'pen';
+    const tool = store.activeTool;
+    const cursorClass = (tool === 'pen' || tool === 'highlighter') 
+      ? `cursor-${cursor}` 
+      : (tool === 'select' ? '' : 'cursor-crosshair');
+    for (const [, p] of this._renderedPages) {
+      p.scratchCanvas.className = `scratchpad-canvas ${cursorClass}`.trim();
+    }
   }
 
   public repaintAllRenderedAnnotations(): void {
@@ -494,6 +544,19 @@ class VeditorApp {
     window.addEventListener('keydown', (e) => {
       // Don't trigger tool shortcuts when typing in inputs
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+
+      if (e.key === 'Enter') {
+        const handled = pointerHandler.finishPolygon(store.activePageIndex, 'layer-default', () => {
+          this.repaintAllRenderedAnnotations();
+        });
+        if (handled) {
+          e.preventDefault();
+          return;
+        }
+      } else if (e.key === 'Escape') {
+        pointerHandler.cancelPolygon();
+        return;
+      }
 
       // Handle Ctrl / Cmd modifier shortcuts
       if (e.ctrlKey || e.metaKey) {
@@ -536,6 +599,7 @@ class VeditorApp {
       else if (key === 'o') store.setActiveTool('ellipse');
       else if (key === 'l') store.setActiveTool('line');
       else if (key === 'a') store.setActiveTool('arrow');
+      else if (key === 'g') store.setActiveTool('polygon');
       else if (key === 't') store.setActiveTool('text');
       else if (key === 'm') store.setActiveTool('stamp');
       else if (key === 'c') store.setActiveTool('callout');

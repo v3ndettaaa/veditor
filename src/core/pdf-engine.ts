@@ -132,6 +132,29 @@ export class PDFEngine {
       });
     }
 
+    // Pre-extract individual page dimensions for pages up to 50 pages so mixed-orientation/size PDFs never scramble
+    const fetchLimit = Math.min(pageCount, 50);
+    const pagePromises: Promise<any>[] = [];
+    for (let i = 2; i <= fetchLimit; i++) {
+      pagePromises.push(this._pdfDoc.getPage(i).catch(() => null));
+    }
+    const fetchedPages = await Promise.all(pagePromises);
+    for (let idx = 0; idx < fetchedPages.length; idx++) {
+      const p = fetchedPages[idx];
+      if (p) {
+        const pageIdx = idx + 1;
+        this._pageCache.set(pageIdx, p);
+        const vp = p.getViewport({ scale: 1.0 });
+        if (pages[pageIdx]) {
+          pages[pageIdx].width = vp.width;
+          pages[pageIdx].height = vp.height;
+          pages[pageIdx].originalWidth = vp.width;
+          pages[pageIdx].originalHeight = vp.height;
+          pages[pageIdx].rotation = vp.rotation;
+        }
+      }
+    }
+
     // Extract bookmarks / outline cleanly
     let bookmarks: PDFBookmarkItem[] = [];
     try {
@@ -215,9 +238,10 @@ export class PDFEngine {
     const targetWidth = Math.floor(viewport.width);
     const targetHeight = Math.floor(viewport.height);
 
-    // Instant replay from warm bitmap cache if dimensions, scale and rotation match
+    // Zero-blank frame double buffering: If a cached bitmap exists (even at a different zoom),
+    // display it immediately scaled to fit so the user never sees white canvas space while re-rendering
     const cached = this._renderedBitmaps.get(pageIndex);
-    if (cached && cached.scale === scale && cached.rotation === totalRotation && cached.width === targetWidth && cached.height === targetHeight) {
+    if (cached) {
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth;
         canvas.height = targetHeight;
@@ -225,8 +249,11 @@ export class PDFEngine {
         canvas.style.height = `${Math.floor(targetHeight / dpr)}px`;
       }
       const ctx = canvas.getContext('2d', { alpha: false });
-      ctx?.drawImage(cached.canvas, 0, 0);
-      return;
+      ctx?.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
+
+      if (cached.scale === scale && cached.rotation === totalRotation && cached.width === targetWidth && cached.height === targetHeight) {
+        return;
+      }
     }
 
     // Cancel existing render on this page if running
@@ -254,8 +281,13 @@ export class PDFEngine {
     try {
       await task.promise;
 
+      // Verify canvas is still mounted and bound to this pageIndex before committing blit
+      if (canvas.dataset.pageIndex && canvas.dataset.pageIndex !== String(pageIndex)) {
+        return;
+      }
+
       // Keep recent bitmaps in memory for instant scroll navigation
-      if (this._renderedBitmaps.size >= 20) {
+      if (this._renderedBitmaps.size >= 25) {
         const oldestKey = this._renderedBitmaps.keys().next().value;
         if (oldestKey !== undefined) this._renderedBitmaps.delete(oldestKey);
       }

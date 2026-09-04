@@ -7,7 +7,7 @@
 ### **Ultra-Fast, World-Class Offline PDF Editor & Annotation Suite**
 *Engineered for Chrome (Manifest V3) & Firefox (WebExtensions)*
 
-[![Tests](https://img.shields.io/badge/tests-25%20passed-brightgreen.svg)](#-automated-testing)
+[![Tests](https://img.shields.io/badge/tests-39%20passed-brightgreen.svg)](#-automated-testing)
 [![Target](https://img.shields.io/badge/target-Chrome%20MV3%20%7C%20Firefox-blue.svg)](#-installation)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 [![Offline](https://img.shields.io/badge/offline-100%25%20Private%20(Zero%20Telemetry)-emerald.svg)](#-privacy--offline-guarantee)
@@ -24,6 +24,31 @@
 ---
 
 ## ✨ Key Features
+
+### 📐 Custom Multi-Point Polygon & Shapes
+- **Interactive Multi-Point Polygon (`G`)**: Click consecutive points on the page to build complex custom vector shapes with live rubber-band preview line and interactive vertex indicators.
+- **Auto-Closing Detection**: Hovering within 14px of the start point illuminates a green target ring; clicking or double-clicking snaps the polygon closed.
+- **Geometric Vector Library**: Rectangles (`R`), Ellipses (`O`), Lines (`L`), Arrows (`A`), and Polygons (`G`) with customizable stroke width, fill color, and styles (Solid, Dashed, Dotted).
+
+### 🖍️ Advanced Highlighter with Straight-Line Auto-Snap
+- **Straight-Line Snapping**: Hold the **`Shift`** key while dragging or toggle "Straight Snap" in the highlighter popover to draw crisp, level horizontal or vertical highlights over lines of text.
+- **Chisel Tip vs. Round Tip**: Choose between classic stationery flat chisel marker tips or rounded brush caps.
+- **Vibrant Pastel Multiplying**: Calibrated fluorescent tints (Yellow, Green, Pink, Blue, Orange, Purple) that preserve underlying text legibility without darkening or muddying.
+
+### 🎯 Configurable Drawing Cursors
+- **Tailored Pointer Styles**: Switch between **Pen** (sleek vector fountain pen nib with hotspot at tip), **Dot** (minimalist 4px precision center dot), **Circle** (dynamic stroke width target ring), and **Crosshair** (classic drafting reticle).
+- Easily toggle cursors directly from the Settings modal or from the Pen & Highlighter hover card.
+
+### 🖼️ Zero-Blank Frame Rendering & Anti-Scramble Stability
+- **Zero-Blank Frame Double-Buffering**: Eliminates white canvas flashing during fast scrolling or zooming by maintaining warm bitmap cache placeholders scaled to fit while high-res renders compute.
+- **Multi-Size PDF Geometry Synchronization**: Automatically inspects viewports for varied page sizes/rotations and dynamically updates layouts so pages never scramble or distort.
+- **Stale Render Collision Prevention**: Verifies canvas page bindings before blitting offscreen bitmaps, ensuring high-speed scrolling never renders mismatched page contents.
+
+### 📁 Distraction-Free Landing Page & Folder Categories
+- **Clean Focus State**: The floating drawing toolbar, view control pill, and sidebar remain cleanly hidden on the landing page, appearing only when a document is opened.
+- **Custom Category Folders**: Organize opened PDFs into custom folders with personalized color swatches (Indigo, Emerald, Rose, Amber, Purple, Cyan, Blue, Crimson) and vector icons (📁 Folder, 📖 Book, 💼 Work, ⭐ Star, 🏷️ Tag, 💻 Code).
+- **One-Click Re-categorization**: Move PDFs into any folder directly from recent document cards via an instant dropdown, with document count badges on folder filter pills.
+- **Safe Folder Management**: Deleting a folder unassigns its files back to Uncategorized so no document history is ever lost.
 
 ### 📑 Multi-Tab Workspace
 - **Simultaneous Document Tabs**: Open multiple PDFs concurrently in the upper tab strip with dedicated tabs for each file.
@@ -50,9 +75,10 @@
 | :--- | :---: | :--- |
 | **Selection & Transform** | `V` | 8-point bounding box resize, drag reposition, multi-select, and alignment |
 | **Freehand Pen** | `P` | Dynamic ink with custom colors, opacity, stroke widths, and pressure dynamics |
-| **Highlighter** | `H` | Non-destructive highlighting with natural `Multiply` blend mode |
+| **Highlighter** | `H` | Non-destructive highlighting with chisel/round tips, straight snap & multiply blend |
 | **Eraser** | `E` | 3 modes: Stroke Eraser, Object Eraser, and Pixel/Mask Eraser |
-| **Geometric Shapes** | `R`, `O`, `L`, `A` | Rectangles, Ellipses, Lines, Arrows, and Polygons with solid/dashed borders |
+| **Polygon Shape** | `G` | Multi-point custom polygon shape with click-to-place vertices and close detection |
+| **Geometric Shapes** | `R`, `O`, `L`, `A` | Rectangles, Ellipses, Lines, and Arrows with solid/dashed/dotted borders and fills |
 | **Rich Text Boxes** | `T` | Multi-line text boxes with font sizing, colors, borders, and background fills |
 | **Vector Stamps** | `S` | High-res vector presets (`APPROVED`, `CONFIDENTIAL`, `DRAFT`, etc.) & image imports |
 | **Technical Measure** | `M` | Calibrated distance, angle, and area calculations with real-world units |
@@ -136,10 +162,11 @@ All core mathematical algorithms, spline generation, pressure mappings, multi-ta
 ✓ tests/export.test.ts (2 tests)
 ✓ tests/geometry.test.ts (3 tests)
 ✓ tests/history.test.ts (4 tests)
+✓ tests/folders.test.ts (4 tests)
 ✓ tests/spline.test.ts (12 tests)
 
-Test Files  5 passed (5)
-     Tests  25 passed (25)
+Test Files  6 passed (6)
+     Tests  29 passed (29)
 ```
 
 ---
@@ -212,6 +239,7 @@ veditor/
 | `O` | Ellipse Shape |
 | `L` | Line Tool |
 | `A` | Arrow Tool |
+| `G` | Multi-Point Polygon Shape |
 | `S` | Vector Stamp Tool |
 | `M` | Technical Measurement Tool |
 | `C` | Callout Bubble Tool |

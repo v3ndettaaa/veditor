@@ -148,7 +148,7 @@ export class AnnotationEngine {
       case 'highlighter':
         ctx.save();
         ctx.scale(scale, scale);
-        renderSmoothStroke(ctx, ann.points, ann.color, ann.strokeWidth, 'linear', true);
+        renderSmoothStroke(ctx, ann.points, ann.color, ann.strokeWidth, 'linear', true, false, 'balanced', ann.tipShape || 'round');
         ctx.restore();
         break;
 

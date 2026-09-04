@@ -11,6 +11,7 @@ import { t } from '../i18n';
 import { ThemeMode, LanguageMode, BackgroundPattern } from '../../core/types';
 import { pdfEngine } from '../../core/pdf-engine';
 import { viewportManager } from '../../core/viewport';
+import { clearAllStorage } from '../../io/storage';
 
 type SettingsTab = 'appearance' | 'input' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
 
@@ -135,8 +136,10 @@ export class SettingsModalComponent {
                 <div class="color-swatch ${(app.accentColor || '#6366f1').toLowerCase() === a.color.toLowerCase() ? 'active' : ''}" 
                      style="background-color:${a.color}; width:28px; height:28px; border-radius:6px; cursor:pointer;" data-set-accent="${a.color}" title="${a.name}"></div>
               `).join('')}
-              <div style="display:flex; align-items:center; gap:6px; margin-left:6px;">
-                <input type="color" id="custom-accent-picker" value="${app.accentColor || '#6366f1'}" style="width:28px; height:28px; border:none; padding:0; background:none; cursor:pointer; border-radius:6px;" title="Custom Color">
+              <div style="display:flex; align-items:center; gap:8px; margin-left:6px;">
+                <div class="color-picker-wrapper" style="width:28px; height:28px;" title="Custom Accent Color">
+                  <input type="color" id="custom-accent-picker" class="color-picker-input" value="${app.accentColor || '#6366f1'}">
+                </div>
                 <span style="font-size:11px; color:var(--text-tertiary);">Custom</span>
               </div>
             </div>
@@ -269,6 +272,25 @@ export class SettingsModalComponent {
               <input type="checkbox" id="inverted-eraser-toggle" ${tools.stylusInvertedEraserEnabled !== false ? 'checked' : ''}>
               <span class="setting-slider"></span>
             </label>
+          </div>
+
+          <!-- Drawing Cursor Style -->
+          <div class="prop-group">
+            <span class="prop-label">Drawing Cursor Style</span>
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+              <button class="secondary-btn ${(tools.drawingCursor || 'pen') === 'pen' ? 'primary-btn' : ''}" data-set-cursor="pen">
+                Pen
+              </button>
+              <button class="secondary-btn ${tools.drawingCursor === 'dot' ? 'primary-btn' : ''}" data-set-cursor="dot">
+                Dot
+              </button>
+              <button class="secondary-btn ${tools.drawingCursor === 'circle' ? 'primary-btn' : ''}" data-set-cursor="circle">
+                Circle
+              </button>
+              <button class="secondary-btn ${tools.drawingCursor === 'crosshair' ? 'primary-btn' : ''}" data-set-cursor="crosshair">
+                Crosshair
+              </button>
+            </div>
           </div>
         </div>
       `;
@@ -506,6 +528,7 @@ export class SettingsModalComponent {
         const theme = btn.getAttribute('data-set-theme') as ThemeMode;
         store.updateAppSettings({ theme });
         document.body.className = `theme-${theme}`;
+        this.render();
       });
     });
 
@@ -517,6 +540,7 @@ export class SettingsModalComponent {
           store.updateAppSettings({ accentColor: accent });
           document.documentElement.style.setProperty('--accent', accent);
           document.documentElement.style.setProperty('--accent-hover', accent);
+          this.render();
         }
       });
     });
@@ -542,6 +566,7 @@ export class SettingsModalComponent {
         const density = btn.getAttribute('data-set-density') as 'comfortable' | 'compact';
         store.updateAppSettings({ uiDensity: density });
         document.body.classList.toggle('density-compact', density === 'compact');
+        this.render();
       });
     });
 
@@ -585,6 +610,18 @@ export class SettingsModalComponent {
     const invertedEraserToggle = this._container.querySelector<HTMLInputElement>('#inverted-eraser-toggle');
     invertedEraserToggle?.addEventListener('change', () => {
       store.updateToolSettings({ stylusInvertedEraserEnabled: invertedEraserToggle.checked });
+    });
+
+    // Drawing cursor style buttons
+    this._container.querySelectorAll('[data-set-cursor]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cursor = btn.getAttribute('data-set-cursor') as any;
+        if (cursor) {
+          store.updateToolSettings({ drawingCursor: cursor });
+          store.updateAppSettings({ drawingCursor: cursor });
+          this.render();
+        }
+      });
     });
 
     // View mode select
@@ -643,7 +680,21 @@ export class SettingsModalComponent {
     this._container.querySelector('#reset-settings-btn')?.addEventListener('click', () => {
       if (confirm('Reset all application preferences to default values?')) {
         store.resetSettingsToDefault();
+        document.body.className = 'theme-dark';
+        document.documentElement.style.setProperty('--accent', '#6366f1');
+        document.documentElement.style.setProperty('--accent-hover', '#6366f1');
+        document.body.classList.remove('density-compact');
         this.render();
+      }
+    });
+
+    // Clear local db & caches button
+    this._container.querySelector('#clear-local-db-btn')?.addEventListener('click', async () => {
+      if (confirm('Clear all recent documents, cached annotations, and offline database storage? This cannot be undone.')) {
+        await clearAllStorage();
+        store.resetSettingsToDefault();
+        alert('All offline document caches and settings have been cleared!');
+        window.location.reload();
       }
     });
 
@@ -654,6 +705,7 @@ export class SettingsModalComponent {
         store.updateAppSettings({ language: lang });
         document.documentElement.setAttribute('dir', lang === 'fa' ? 'rtl' : 'ltr');
         document.documentElement.setAttribute('lang', lang);
+        this.render();
       });
     });
 

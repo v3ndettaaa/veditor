@@ -39,6 +39,8 @@ class StateStore {
     highlighterColor: 'rgba(250, 204, 21, 0.45)',
     highlighterWidth: 20,
     highlighterBlendMode: 'multiply',
+    highlighterStraightLine: false,
+    highlighterTipShape: 'round',
     eraserMode: 'stroke',
     eraserWidth: 24,
     shapeColor: '#ef4444',
@@ -58,7 +60,10 @@ class StateStore {
     pressureStrength: 'balanced',
     strokeSmoothing: 'medium',
     palmRejectionEnabled: true,
-    stylusInvertedEraserEnabled: true
+    stylusInvertedEraserEnabled: true,
+    drawingCursor: 'pen',
+    stampPreset: 'APPROVED',
+    redactionColor: '#000000'
   };
 
   // App Settings
@@ -79,7 +84,8 @@ class StateStore {
     uiDensity: 'comfortable',
     smoothScroll: true,
     invertDocumentOled: false,
-    retinaRendering: true
+    retinaRendering: true,
+    drawingCursor: 'pen'
   };
 
   // Selection & Clipboard State
@@ -337,7 +343,12 @@ class StateStore {
       pressureStrength: 'balanced',
       strokeSmoothing: 'medium',
       palmRejectionEnabled: true,
-      stylusInvertedEraserEnabled: true
+      stylusInvertedEraserEnabled: true,
+      drawingCursor: 'pen',
+      highlighterStraightLine: false,
+      highlighterTipShape: 'round',
+      stampPreset: 'APPROVED',
+      redactionColor: '#000000'
     };
     this._appSettings = {
       theme: 'dark',

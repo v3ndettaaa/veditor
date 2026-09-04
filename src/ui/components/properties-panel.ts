@@ -49,6 +49,8 @@ export class PropertiesPanelComponent {
     }
 
     const firstAnn = selectedAnnotations[0];
+    const hasShape = selectedAnnotations.some(ann => 'fillColor' in ann || ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' || ann.type === 'freeform-shape');
+    const firstFillColor = (firstAnn as any).fillColor || 'transparent';
 
     this._container.innerHTML = `
       <div class="panel-header">
@@ -59,18 +61,36 @@ export class PropertiesPanelComponent {
       </div>
 
       <div class="panel-body">
-        <!-- Color Picker -->
+        <!-- Stroke Color Picker -->
         <div class="prop-group">
-          <span class="prop-label">${t('properties.color')}</span>
+          <span class="prop-label">${hasShape ? 'Stroke Color' : t('properties.color')}</span>
           <div style="display:flex; align-items:center; gap:8px;">
-            <input type="color" id="prop-color-picker" value="${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}" style="
-              width:36px; height:32px; border:none; border-radius:4px; cursor:pointer; background:none;
-            ">
+            <div class="color-picker-wrapper" style="width:26px; height:26px;" title="Color">
+              <input type="color" id="prop-color-picker" class="color-picker-input" value="${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}">
+            </div>
             <span style="font-size:12px; font-family:monospace; color:var(--text-secondary);" id="prop-color-val">
               ${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}
             </span>
           </div>
         </div>
+
+        <!-- Fill Color (if shape selected) -->
+        ${hasShape ? `
+          <div class="prop-group">
+            <span class="prop-label">Fill Color</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <button id="prop-no-fill-btn" class="header-btn ${firstFillColor === 'transparent' ? 'active' : ''}" style="padding:4px 8px; font-size:11px;">
+                No Fill
+              </button>
+              <div class="color-picker-wrapper" style="width:26px; height:26px;" title="Fill Color">
+                <input type="color" id="prop-fill-picker" class="color-picker-input" value="${firstFillColor === 'transparent' ? '#ffffff' : firstFillColor}">
+              </div>
+              <span style="font-size:12px; font-family:monospace; color:var(--text-secondary);" id="prop-fill-val">
+                ${firstFillColor === 'transparent' ? 'None' : firstFillColor}
+              </span>
+            </div>
+          </div>
+        ` : ''}
 
         <!-- Stroke Width -->
         <div class="prop-group">
@@ -130,6 +150,31 @@ export class PropertiesPanelComponent {
         history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
       });
       store.setActivePageIndex(store.activePageIndex);
+    });
+
+    // Fill picker & No-Fill button
+    const fillPicker = this._container.querySelector('#prop-fill-picker') as HTMLInputElement;
+    const onFillChange = (val: string) => {
+      const fillValEl = this._container.querySelector('#prop-fill-val');
+      if (fillValEl) fillValEl.textContent = val === 'transparent' ? 'None' : val;
+      const noFillBtn = this._container.querySelector('#prop-no-fill-btn');
+      noFillBtn?.classList.toggle('active', val === 'transparent');
+
+      selectedAnnotations.forEach(ann => {
+        if ('fillColor' in ann) {
+          const prev = { ...ann };
+          const next = { ...ann, fillColor: val };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+        }
+      });
+      store.setActivePageIndex(store.activePageIndex);
+    };
+
+    fillPicker?.addEventListener('input', () => onFillChange(fillPicker.value));
+    fillPicker?.addEventListener('change', () => onFillChange(fillPicker.value));
+
+    this._container.querySelector('#prop-no-fill-btn')?.addEventListener('click', () => {
+      onFillChange('transparent');
     });
 
     // Width slider change

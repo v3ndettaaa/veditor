@@ -95,6 +95,8 @@ export interface HighlighterAnnotation extends BaseAnnotation {
   color: string;
   strokeWidth: number;
   blendMode: 'multiply' | 'source-over';
+  straightLine?: boolean;
+  tipShape?: 'chisel' | 'round';
 }
 
 export interface ShapeAnnotation extends BaseAnnotation {
@@ -210,12 +212,16 @@ export interface DocumentSession {
   lastModifiedAt: number;
 }
 
+export type DrawingCursorType = 'pen' | 'dot' | 'circle' | 'crosshair';
+
 export interface ToolSettings {
   penColor: string;
   penWidth: number;
   highlighterColor: string;
   highlighterWidth: number;
   highlighterBlendMode: 'multiply' | 'source-over';
+  highlighterStraightLine: boolean;
+  highlighterTipShape: 'chisel' | 'round';
   eraserMode: EraserMode;
   eraserWidth: number;
   shapeColor: string;
@@ -236,6 +242,9 @@ export interface ToolSettings {
   strokeSmoothing: 'none' | 'subtle' | 'medium' | 'high';
   palmRejectionEnabled: boolean;
   stylusInvertedEraserEnabled: boolean;
+  drawingCursor: DrawingCursorType;
+  stampPreset: string;
+  redactionColor: string;
 }
 
 export interface AppSettings {
@@ -256,4 +265,21 @@ export interface AppSettings {
   smoothScroll: boolean;
   invertDocumentOled: boolean;
   retinaRendering: boolean;
+  drawingCursor: DrawingCursorType;
+}
+
+export interface PDFFolder {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+  createdAt: number;
+}
+
+export interface RecentDocItem {
+  id: string;
+  name: string;
+  pageCount: number;
+  lastOpenedAt: number;
+  folderId?: string | null;
 }

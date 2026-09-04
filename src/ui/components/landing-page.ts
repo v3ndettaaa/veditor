@@ -1,11 +1,20 @@
 /**
  * World-Class Landing Page Component for veditor
- * Renders an Obsidian OLED hero view with instant sample loader, recent files, and feature guide.
+ * Features Obsidian OLED aesthetic, interactive dropzone, folder categorization,
+ * custom color/icon folders, and recent file management.
  */
 
-import { getRecentDocuments, getDocumentSession } from '../../io/storage';
+import {
+  getRecentDocuments,
+  getFolders,
+  saveFolder,
+  deleteFolder,
+  assignDocToFolder,
+  deleteRecentDocument
+} from '../../io/storage';
 import { generateSamplePDF, createBlankNotebook } from '../../io/sample-pdf';
 import { getIconSvg } from '../../utils/icons';
+import { PDFFolder, RecentDocItem } from '../../core/types';
 
 export interface LandingPageCallbacks {
   onOpenFile: () => void;
@@ -16,6 +25,12 @@ export interface LandingPageCallbacks {
 export class LandingPageComponent {
   private _container: HTMLElement;
   private _callbacks: LandingPageCallbacks;
+  private _activeFolderId: string = 'all'; // 'all', 'uncategorized', or folder.id
+  private _folders: PDFFolder[] = [];
+  private _recentDocs: RecentDocItem[] = [];
+  private _showCreateFolderModal: boolean = false;
+  private _selectedFolderColor: string = '#6366f1';
+  private _selectedFolderIcon: string = 'folder';
 
   constructor(container: HTMLElement, callbacks: LandingPageCallbacks) {
     this._container = container;
@@ -23,10 +38,31 @@ export class LandingPageComponent {
   }
 
   public async render(): Promise<void> {
-    let recentDocs: Array<{ id: string; name: string; pageCount: number; lastOpenedAt: number }> = [];
     try {
-      recentDocs = await getRecentDocuments();
+      this._folders = await getFolders();
+      this._recentDocs = await getRecentDocuments();
     } catch (_) {}
+
+    // Calculate document counts per folder
+    const allCount = this._recentDocs.length;
+    const uncategorizedCount = this._recentDocs.filter(d => !d.folderId).length;
+
+    // Filter documents by active folder
+    let filteredDocs = this._recentDocs;
+    if (this._activeFolderId === 'uncategorized') {
+      filteredDocs = this._recentDocs.filter(d => !d.folderId);
+    } else if (this._activeFolderId !== 'all') {
+      filteredDocs = this._recentDocs.filter(d => d.folderId === this._activeFolderId);
+    }
+
+    const activeFolder = this._folders.find(f => f.id === this._activeFolderId);
+
+    const folderColors = [
+      '#6366f1', '#10b981', '#f43f5e', '#f59e0b',
+      '#8b5cf6', '#06b6d4', '#2563eb', '#dc2626'
+    ];
+
+    const folderIcons = ['folder', 'book', 'briefcase', 'star', 'tag', 'code'];
 
     this._container.innerHTML = `
       <div class="landing-container">
@@ -45,55 +81,177 @@ export class LandingPageComponent {
         <!-- Interactive Dropzone & Action Center -->
         <div class="landing-dropzone" id="landing-dropzone">
           <div class="dropzone-icon-wrapper">
-            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="12" y1="18" x2="12" y2="12"></line>
-              <line x1="9" y1="15" x2="15" y2="15"></line>
-            </svg>
+            ${getIconSvg('upload', 32)}
           </div>
           <div class="dropzone-prompt">Drop your PDF file here, or click to browse</div>
           <div class="dropzone-hint">Supports all standard PDF documents, textbooks, and forms • 100% Client-Side</div>
           
           <div class="dropzone-actions" id="dropzone-actions-group">
             <button class="landing-btn-primary" id="landing-open-btn">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              ${getIconSvg('folder', 16)}
               Open Local PDF
             </button>
 
             <button class="landing-btn-secondary" id="landing-sample-btn" title="Try veditor immediately with an interactive sample PDF">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              ${getIconSvg('eye', 16)}
               Try Sample PDF
             </button>
 
             <button class="landing-btn-secondary" id="landing-notebook-btn" title="Create a fresh lined notebook">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              ${getIconSvg('pen', 16)}
               New Notebook
             </button>
           </div>
         </div>
 
-        <!-- Recent Documents Shelf -->
-        ${recentDocs.length > 0 ? `
-          <div class="landing-section">
-            <div class="landing-section-header">
-              <div class="landing-section-title">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                Recent Documents
-              </div>
+        <!-- Recent Documents & Category Shelf -->
+        <div class="landing-section">
+          <div class="landing-section-header">
+            <div class="landing-section-title">
+              ${getIconSvg('folder', 18)}
+              <span>My PDF Documents & Categories</span>
             </div>
-            <div class="recent-grid">
-              ${recentDocs.slice(0, 6).map(doc => `
+          </div>
+
+          <!-- Folder Filter Tabs Bar -->
+          <div class="folder-tabs-bar">
+            <button class="folder-tab-pill ${this._activeFolderId === 'all' ? 'active' : ''}" data-folder-pill="all">
+              <span>All Files</span>
+              <span class="folder-count">${allCount}</span>
+            </button>
+
+            <button class="folder-tab-pill ${this._activeFolderId === 'uncategorized' ? 'active' : ''}" data-folder-pill="uncategorized">
+              <span>Uncategorized</span>
+              <span class="folder-count">${uncategorizedCount}</span>
+            </button>
+
+            ${this._folders.map(folder => {
+              const count = this._recentDocs.filter(d => d.folderId === folder.id).length;
+              const isActive = this._activeFolderId === folder.id;
+              return `
+                <button class="folder-tab-pill ${isActive ? 'active' : ''}" data-folder-pill="${folder.id}" 
+                        style="${isActive ? `border-color:${folder.color}; box-shadow:0 0 12px ${folder.color}40;` : ''}">
+                  <span style="color:${folder.color};">${getIconSvg(folder.icon, 13)}</span>
+                  <span>${folder.name}</span>
+                  <span class="folder-count" style="${isActive ? `background:${folder.color};` : ''}">${count}</span>
+                </button>
+              `;
+            }).join('')}
+
+            <button class="folder-new-btn" id="open-new-folder-modal-btn" title="Create a new folder category">
+              ${getIconSvg('folderPlus', 14)}
+              <span>New Folder</span>
+            </button>
+          </div>
+
+          <!-- Active Folder Actions Bar -->
+          ${activeFolder ? `
+            <div class="folder-action-bar">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="color:${activeFolder.color};">${getIconSvg(activeFolder.icon, 15)}</span>
+                <span>Category: <strong>${activeFolder.name}</strong> • ${filteredDocs.length} ${filteredDocs.length === 1 ? 'file' : 'files'}</span>
+              </div>
+              <button class="folder-danger-btn" id="delete-current-folder-btn" data-del-folder="${activeFolder.id}" title="Delete this folder">
+                ${getIconSvg('trash', 13)}
+                <span>Delete Folder</span>
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- Documents Grid -->
+          <div class="recent-grid">
+            ${filteredDocs.length === 0 ? `
+              <div class="folder-empty-state">
+                No documents in this category. Open a PDF to add it here, or move an existing PDF using the category selector below.
+              </div>
+            ` : filteredDocs.map(doc => {
+              const docFolder = this._folders.find(f => f.id === doc.folderId);
+              return `
                 <div class="recent-card" data-recent-id="${doc.id}">
-                  <div class="recent-card-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  <div class="recent-card-icon" style="${docFolder ? `background:${docFolder.color}22; color:${docFolder.color};` : ''}">
+                    ${getIconSvg(docFolder ? docFolder.icon : 'folder', 20)}
                   </div>
                   <div class="recent-card-info">
                     <div class="recent-card-name" title="${doc.name}">${doc.name}</div>
-                    <div class="recent-card-meta">${doc.pageCount ? doc.pageCount + ' pages • ' : ''}${this.formatRelativeTime(doc.lastOpenedAt)}</div>
+                    <div class="recent-card-meta">
+                      <span>${doc.pageCount ? doc.pageCount + ' pages • ' : ''}${this.formatRelativeTime(doc.lastOpenedAt)}</span>
+                      ${docFolder ? `
+                        <span class="doc-folder-tag" style="background:${docFolder.color}20; color:${docFolder.color}; border:1px solid ${docFolder.color}40;">
+                          ${getIconSvg(docFolder.icon, 11)}
+                          <span>${docFolder.name}</span>
+                        </span>
+                      ` : ''}
+                    </div>
+                  </div>
+                  <div class="recent-card-actions">
+                    <select class="recent-folder-select" data-doc-assign="${doc.id}" title="Change Folder Category">
+                      <option value="">Move to...</option>
+                      <option value="none" ${!doc.folderId ? 'selected' : ''}>Uncategorized</option>
+                      ${this._folders.map(f => `
+                        <option value="${f.id}" ${doc.folderId === f.id ? 'selected' : ''}>${f.name}</option>
+                      `).join('')}
+                    </select>
+                    <button class="recent-remove-btn" data-remove-recent="${doc.id}" title="Remove from list">
+                      ${getIconSvg('close', 13)}
+                    </button>
                   </div>
                 </div>
-              `).join('')}
+              `;
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- Create Folder Modal -->
+        ${this._showCreateFolderModal ? `
+          <div class="modal-overlay" id="new-folder-modal-overlay">
+            <div class="modal-dialog" style="max-width:440px; padding:20px; display:flex; flex-direction:column; gap:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div style="font-weight:700; font-size:16px; display:flex; align-items:center; gap:8px;">
+                  ${getIconSvg('folderPlus', 18)}
+                  <span>Create Category Folder</span>
+                </div>
+                <button id="close-folder-modal-btn" class="header-btn" style="padding:4px;">
+                  ${getIconSvg('close', 14)}
+                </button>
+              </div>
+
+              <div>
+                <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Folder Name</label>
+                <input type="text" id="folder-name-input" placeholder="e.g. Mathematics, Contracts, Research" style="
+                  width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
+                  border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px; outline:none;
+                " autofocus />
+              </div>
+
+              <div>
+                <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Folder Color</label>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  ${folderColors.map(color => `
+                    <div class="color-swatch ${this._selectedFolderColor === color ? 'active' : ''}" 
+                         data-pick-folder-color="${color}"
+                         style="background-color:${color}; width:28px; height:28px; border-radius:6px; cursor:pointer;" title="${color}"></div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div>
+                <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Folder Icon</label>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  ${folderIcons.map(icon => `
+                    <button class="secondary-btn ${this._selectedFolderIcon === icon ? 'primary-btn' : ''}" 
+                            data-pick-folder-icon="${icon}"
+                            style="padding:8px 12px; display:flex; align-items:center; gap:6px;">
+                      ${getIconSvg(icon, 15)}
+                      <span style="text-transform:capitalize;">${icon}</span>
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px;">
+                <button id="cancel-folder-btn" class="secondary-btn" style="padding:8px 16px;">Cancel</button>
+                <button id="submit-folder-btn" class="primary-btn" style="padding:8px 18px;">Create Folder</button>
+              </div>
             </div>
           </div>
         ` : ''}
@@ -102,7 +260,7 @@ export class LandingPageComponent {
         <div class="features-grid">
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(99,102,241,0.15); color:#818cf8;">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/></svg>
+              ${getIconSvg('pen', 22)}
             </div>
             <div class="feature-box-title">Apple Pencil & Stylus Support</div>
             <p class="feature-box-desc">Sub-pixel coalesced pointer events, natural tilt sensitivity, cubic Hermite spline smoothing, and adjustable pressure response curves.</p>
@@ -110,7 +268,7 @@ export class LandingPageComponent {
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(16,185,129,0.15); color:#34d399;">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              ${getIconSvg('zap', 22)}
             </div>
             <div class="feature-box-title">Zero-Flicker Double Buffering</div>
             <p class="feature-box-desc">Offscreen canvas rendering pipeline delivers silky-smooth continuous scrolling and instant page switching across 500+ page books.</p>
@@ -118,7 +276,7 @@ export class LandingPageComponent {
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(244,114,182,0.15); color:#f472b6;">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+              ${getIconSvg('eraser', 22)}
             </div>
             <div class="feature-box-title">Pixel & Segment Eraser</div>
             <p class="feature-box-desc">Choose between whole Stroke Erasing, Object Erasing, or surgical Pixel Slicing that divides ink strokes at exact contact points.</p>
@@ -126,7 +284,7 @@ export class LandingPageComponent {
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(59,130,246,0.15); color:#60a5fa;">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              ${getIconSvg('folder', 22)}
             </div>
             <div class="feature-box-title">100% Private & Offline</div>
             <p class="feature-box-desc">Runs entirely inside your browser sandbox. No server uploads, no analytics, no external tracking. Your documents never leave your machine.</p>
@@ -134,7 +292,7 @@ export class LandingPageComponent {
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              ${getIconSvg('stamp', 22)}
             </div>
             <div class="feature-box-title">Vector-Perfect Export</div>
             <p class="feature-box-desc">Export annotated PDFs with native vector streams. Your notes and drawings stay razor-sharp when printed or zoomed on high-resolution screens.</p>
@@ -142,7 +300,7 @@ export class LandingPageComponent {
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(139,92,246,0.15); color:#a78bfa;">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.001"/><path d="M10 8h.001"/><path d="M14 8h.001"/><path d="M18 8h.001"/><path d="M8 12h8"/><path d="M6 16h.001"/></svg>
+              ${getIconSvg('command', 22)}
             </div>
             <div class="feature-box-title">Keyboard-First Flow</div>
             <p class="feature-box-desc">Blazing-fast single-key shortcuts for all tools, quick zoom presets, full Undo/Redo history, and instant command palette.</p>
@@ -186,7 +344,6 @@ export class LandingPageComponent {
     });
 
     dropzone?.addEventListener('click', (e) => {
-      // If clicked inside the buttons group, let button handlers run
       if ((e.target as HTMLElement).closest('#dropzone-actions-group')) return;
       this._callbacks.onOpenFile();
     });
@@ -235,9 +392,124 @@ export class LandingPageComponent {
       }
     });
 
-    // Recent cards clicks
+    // Folder Pill switching
+    this._container.querySelectorAll('[data-folder-pill]').forEach(pill => {
+      pill.addEventListener('click', () => {
+        const folderId = pill.getAttribute('data-folder-pill');
+        if (folderId) {
+          this._activeFolderId = folderId;
+          this.render();
+        }
+      });
+    });
+
+    // Open New Folder Modal
+    this._container.querySelector('#open-new-folder-modal-btn')?.addEventListener('click', () => {
+      this._showCreateFolderModal = true;
+      this.render();
+    });
+
+    // Close Folder Modal
+    this._container.querySelector('#close-folder-modal-btn')?.addEventListener('click', () => {
+      this._showCreateFolderModal = false;
+      this.render();
+    });
+    this._container.querySelector('#cancel-folder-btn')?.addEventListener('click', () => {
+      this._showCreateFolderModal = false;
+      this.render();
+    });
+
+    // Pick Folder Color
+    this._container.querySelectorAll('[data-pick-folder-color]').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        const color = swatch.getAttribute('data-pick-folder-color');
+        if (color) {
+          this._selectedFolderColor = color;
+          this._container.querySelectorAll('[data-pick-folder-color]').forEach(s => {
+            s.classList.toggle('active', s.getAttribute('data-pick-folder-color') === color);
+          });
+        }
+      });
+    });
+
+    // Pick Folder Icon
+    this._container.querySelectorAll('[data-pick-folder-icon]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const icon = btn.getAttribute('data-pick-folder-icon');
+        if (icon) {
+          this._selectedFolderIcon = icon;
+          this._container.querySelectorAll('[data-pick-folder-icon]').forEach(b => {
+            b.classList.toggle('active', b.getAttribute('data-pick-folder-icon') === icon);
+          });
+        }
+      });
+    });
+
+    // Submit Folder Creation
+    this._container.querySelector('#submit-folder-btn')?.addEventListener('click', async () => {
+      const input = this._container.querySelector<HTMLInputElement>('#folder-name-input');
+      const name = input?.value.trim();
+      if (!name) {
+        input?.focus();
+        return;
+      }
+
+      const newFolder: PDFFolder = {
+        id: `folder-${Date.now()}`,
+        name,
+        color: this._selectedFolderColor,
+        icon: this._selectedFolderIcon,
+        createdAt: Date.now()
+      };
+
+      await saveFolder(newFolder);
+      this._showCreateFolderModal = false;
+      this._activeFolderId = newFolder.id;
+      await this.render();
+    });
+
+    // Delete Current Folder
+    this._container.querySelector('#delete-current-folder-btn')?.addEventListener('click', async () => {
+      if (this._activeFolderId !== 'all' && this._activeFolderId !== 'uncategorized') {
+        if (confirm('Delete this folder category? The documents will be kept in Uncategorized.')) {
+          await deleteFolder(this._activeFolderId);
+          this._activeFolderId = 'all';
+          await this.render();
+        }
+      }
+    });
+
+    // Assign Document to Folder
+    this._container.querySelectorAll<HTMLSelectElement>('[data-doc-assign]').forEach(sel => {
+      sel.addEventListener('click', (e) => e.stopPropagation());
+      sel.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const docId = sel.getAttribute('data-doc-assign');
+        const val = sel.value;
+        if (docId) {
+          await assignDocToFolder(docId, val === 'none' || !val ? null : val);
+          await this.render();
+        }
+      });
+    });
+
+    // Remove Document from Recents
+    this._container.querySelectorAll('[data-remove-recent]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const docId = btn.getAttribute('data-remove-recent');
+        if (docId) {
+          await deleteRecentDocument(docId);
+          await this.render();
+        }
+      });
+    });
+
+    // Recent card click to open PDF
     this._container.querySelectorAll('[data-recent-id]').forEach(el => {
-      el.addEventListener('click', async () => {
+      el.addEventListener('click', async (e) => {
+        // If clicked actions dropdown or remove button, do not open
+        if ((e.target as HTMLElement).closest('.recent-card-actions')) return;
         const id = el.getAttribute('data-recent-id');
         if (id) {
           await this._callbacks.onOpenRecent(id);

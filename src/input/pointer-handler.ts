@@ -80,7 +80,9 @@ export class PointerHandler {
           pageIndex,
           tSettings.highlighterColor,
           tSettings.highlighterWidth,
-          tSettings.highlighterBlendMode
+          tSettings.highlighterBlendMode,
+          tSettings.highlighterStraightLine,
+          tSettings.highlighterTipShape
         );
         break;
 
@@ -89,11 +91,43 @@ export class PointerHandler {
         this.processEraser(pt, pageIndex, onNeedRepaint);
         break;
 
+      case 'polygon': {
+        if (shapesTool.isPolygonActive()) {
+          const closed = shapesTool.addPolygonVertex(pt);
+          if (closed) {
+            const polyAnn = shapesTool.finish(defaultLayerId);
+            if (polyAnn) {
+              history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
+            }
+            if (this._pageScratchCtx) {
+              this._pageScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+            onNeedRepaint();
+            return;
+          }
+          if (this._pageScratchCtx) {
+            this._pageScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
+            shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (window.devicePixelRatio || 1));
+          }
+          return;
+        }
+
+        shapesTool.start(
+          pt,
+          pageIndex,
+          'polygon',
+          tSettings.shapeColor,
+          tSettings.shapeFillColor,
+          tSettings.shapeWidth,
+          tSettings.shapeStyle
+        );
+        break;
+      }
+
       case 'rectangle':
       case 'ellipse':
       case 'line':
       case 'arrow':
-      case 'polygon':
       case 'freeform-shape':
         shapesTool.start(
           pt,
@@ -125,7 +159,7 @@ export class PointerHandler {
         break;
 
       case 'stamp':
-        const stampAnn = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, 'APPROVED');
+        const stampAnn = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
         history.execute(new AddAnnotationCommand(pageIndex, stampAnn));
         store.setActiveTool('select');
         store.selectAnnotation(stampAnn.id);
@@ -150,7 +184,7 @@ export class PointerHandler {
         break;
 
       case 'redaction':
-        redactionTool.start(pt, pageIndex);
+        redactionTool.start(pt, pageIndex, tSettings.redactionColor || '#000000');
         break;
 
       case 'select':
@@ -198,7 +232,7 @@ export class PointerHandler {
           break;
 
         case 'highlighter':
-          highlighterTool.move(pt);
+          highlighterTool.move(pt, (_e as MouseEvent).shiftKey || (e as MouseEvent).shiftKey);
           highlighterTool.renderScratchpad(ctx, renderScale);
           break;
 
@@ -249,6 +283,15 @@ export class PointerHandler {
     const tool = store.activeTool;
     const defaultLayerId = 'layer-default';
 
+    if (tool === 'polygon') {
+      this._isPointerDown = false;
+      // Polygons remain active across clicks until closed or completed
+      if (this._pageScratchCtx && shapesTool.isPolygonActive()) {
+        shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (window.devicePixelRatio || 1));
+      }
+      return;
+    }
+
     // Clear scratchpad canvas
     if (this._pageScratchCtx) {
       this._pageScratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
@@ -277,7 +320,6 @@ export class PointerHandler {
       case 'ellipse':
       case 'line':
       case 'arrow':
-      case 'polygon':
       case 'freeform-shape':
         const shapeAnn = shapesTool.finish(defaultLayerId);
         if (shapeAnn) {
@@ -314,6 +356,34 @@ export class PointerHandler {
     this._pageScratchCanvas = null;
     this._pageScratchCtx = null;
     onNeedRepaint();
+  }
+
+  public finishPolygon(pageIndex: number, defaultLayerId: string = 'layer-default', onNeedRepaint?: () => void): boolean {
+    if (shapesTool.isPolygonActive()) {
+      const polyAnn = shapesTool.finish(defaultLayerId);
+      if (polyAnn) {
+        history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
+        if (this._pageScratchCtx && this._pageScratchCanvas) {
+          this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+        }
+        this._pageScratchCanvas = null;
+        this._pageScratchCtx = null;
+        onNeedRepaint?.();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public cancelPolygon(): void {
+    if (shapesTool.isPolygonActive()) {
+      shapesTool.reset();
+      if (this._pageScratchCtx && this._pageScratchCanvas) {
+        this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+      }
+      this._pageScratchCanvas = null;
+      this._pageScratchCtx = null;
+    }
   }
 
   private processEraser(point: Point, pageIndex: number, onNeedRepaint: () => void) {

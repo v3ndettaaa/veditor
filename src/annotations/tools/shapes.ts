@@ -47,9 +47,26 @@ export class ShapesTool {
     }
   }
 
-  public addPolygonVertex(point: Point): void {
+  public isPolygonActive(): boolean {
+    return this._type === 'polygon' && this._polygonPoints.length > 0;
+  }
+
+  public getPolygonPointCount(): number {
+    return this._polygonPoints.length;
+  }
+
+  public addPolygonVertex(point: Point): boolean {
+    if (this._polygonPoints.length >= 3) {
+      const p0 = this._polygonPoints[0];
+      const distToStart = Math.hypot(point.x - p0.x, point.y - p0.y);
+      if (distToStart < 14) {
+        // User clicked near start point: signal to close polygon
+        return true;
+      }
+    }
     this._polygonPoints.push(point);
     this._currentPoint = point;
+    return false;
   }
 
   public renderScratchpad(ctx: CanvasRenderingContext2D, scale: number): void {
@@ -89,16 +106,55 @@ export class ShapesTool {
       ctx.stroke();
     } else if (this._type === 'arrow') {
       this.drawArrow(ctx, sp, cp);
-    } else if (this._type === 'polygon' || this._type === 'freeform-shape') {
+    } else if (this._type === 'polygon') {
+      if (this._polygonPoints.length > 0) {
+        ctx.beginPath();
+        ctx.moveTo(this._polygonPoints[0].x, this._polygonPoints[0].y);
+        for (let i = 1; i < this._polygonPoints.length; i++) {
+          ctx.lineTo(this._polygonPoints[i].x, this._polygonPoints[i].y);
+        }
+        if (cp) {
+          ctx.lineTo(cp.x, cp.y);
+        }
+        if (this._fillColor && this._fillColor !== 'transparent') {
+          ctx.fill();
+        }
+        ctx.stroke();
+
+        // Draw vertex points
+        for (let i = 0; i < this._polygonPoints.length; i++) {
+          const pt = this._polygonPoints[i];
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+          ctx.strokeStyle = this._strokeColor;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // If hovering near start point (closing threshold), highlight start point
+        if (cp && this._polygonPoints.length >= 3) {
+          const p0 = this._polygonPoints[0];
+          if (Math.hypot(cp.x - p0.x, cp.y - p0.y) < 14) {
+            ctx.beginPath();
+            ctx.arc(p0.x, p0.y, 8, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.4)';
+            ctx.fill();
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        }
+      }
+    } else if (this._type === 'freeform-shape') {
       if (this._polygonPoints.length > 1) {
         ctx.beginPath();
         ctx.moveTo(this._polygonPoints[0].x, this._polygonPoints[0].y);
         for (let i = 1; i < this._polygonPoints.length; i++) {
           ctx.lineTo(this._polygonPoints[i].x, this._polygonPoints[i].y);
         }
-        if (this._type === 'freeform-shape') {
-          ctx.closePath();
-        }
+        ctx.closePath();
         if (this._fillColor && this._fillColor !== 'transparent') {
           ctx.fill();
         }
@@ -110,19 +166,26 @@ export class ShapesTool {
   }
 
   public finish(layerId: string): ShapeAnnotation | null {
-    if (!this._startPoint || !this._currentPoint) return null;
+    if (this._type === 'polygon') {
+      if (this._polygonPoints.length < 3) {
+        this.reset();
+        return null;
+      }
+    } else if (!this._startPoint || !this._currentPoint) {
+      return null;
+    }
 
     let box: BoundingBox;
     let points: Point[] | undefined;
 
     if (this._type === 'rectangle' || this._type === 'ellipse') {
-      const x = Math.min(this._startPoint.x, this._currentPoint.x);
-      const y = Math.min(this._startPoint.y, this._currentPoint.y);
-      const w = Math.max(4, Math.abs(this._currentPoint.x - this._startPoint.x));
-      const h = Math.max(4, Math.abs(this._currentPoint.y - this._startPoint.y));
+      const x = Math.min(this._startPoint!.x, this._currentPoint!.x);
+      const y = Math.min(this._startPoint!.y, this._currentPoint!.y);
+      const w = Math.max(4, Math.abs(this._currentPoint!.x - this._startPoint!.x));
+      const h = Math.max(4, Math.abs(this._currentPoint!.y - this._startPoint!.y));
       box = { x, y, width: w, height: h };
     } else if (this._type === 'line' || this._type === 'arrow') {
-      points = [this._startPoint, this._currentPoint];
+      points = [this._startPoint!, this._currentPoint!];
       box = computePointsBoundingBox(points, this._strokeWidth);
     } else {
       points = [...this._polygonPoints];

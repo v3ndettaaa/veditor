@@ -129,13 +129,14 @@ export function renderSmoothStroke(
   pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
   isHighlighter = false,
   pressureEnabled = true,
-  strength: 'light' | 'balanced' | 'strong' = 'balanced'
+  strength: 'light' | 'balanced' | 'strong' = 'balanced',
+  tipShape: 'chisel' | 'round' = 'round'
 ): void {
   if (points.length === 0) return;
 
   ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
+  ctx.lineCap = tipShape === 'chisel' ? 'square' : 'round';
+  ctx.lineJoin = tipShape === 'chisel' ? 'miter' : 'round';
 
   if (isHighlighter) {
     ctx.globalCompositeOperation = 'multiply';
@@ -143,13 +144,17 @@ export function renderSmoothStroke(
     ctx.lineWidth = baseWidth;
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      const xc = (points[i - 1].x + points[i].x) / 2;
-      const yc = (points[i - 1].y + points[i].y) / 2;
-      ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+    if (points.length === 2) {
+      ctx.lineTo(points[1].x, points[1].y);
+    } else {
+      for (let i = 1; i < points.length; i++) {
+        const xc = (points[i - 1].x + points[i].x) / 2;
+        const yc = (points[i - 1].y + points[i].y) / 2;
+        ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
+      }
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
     }
-    const last = points[points.length - 1];
-    ctx.lineTo(last.x, last.y);
     ctx.stroke();
     ctx.restore();
     return;

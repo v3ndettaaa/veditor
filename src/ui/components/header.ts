@@ -28,7 +28,7 @@ export class HeaderComponent {
 
     this._container.innerHTML = `
       <div class="header-left">
-        <button id="header-sidebar-btn" class="header-btn" title="Toggle Sidebar">
+        <button id="header-sidebar-btn" class="header-btn" title="Toggle Sidebar" ${!activeDoc ? 'style="display:none;"' : ''}>
           ${getIconSvg('sidebar', 16)}
         </button>
 
@@ -37,7 +37,7 @@ export class HeaderComponent {
           <span>${t('appName')}</span>
         </div>
 
-        <div class="document-tabs-bar">
+        <div class="document-tabs-bar" ${tabs.length === 0 ? 'style="display:none;"' : ''}>
           ${tabs.map(tab => `
             <div class="doc-tab ${activeDoc?.id === tab.id ? 'active' : ''}" data-tab-id="${tab.id}" title="${tab.name}">
               <span class="doc-tab-title">${tab.name}</span>
@@ -56,7 +56,7 @@ export class HeaderComponent {
           <span>${t('openFile')}</span>
         </button>
 
-        <button id="header-export-btn" class="header-btn primary" ${!activeDoc ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''}>
+        <button id="header-export-btn" class="header-btn primary" ${!activeDoc ? 'style="display:none;"' : ''}>
           ${getIconSvg('download', 14)}
           <span>${t('export')}</span>
         </button>

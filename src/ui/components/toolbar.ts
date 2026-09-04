@@ -5,7 +5,7 @@
  */
 
 import { store } from '../../core/store';
-import { history, DeleteAnnotationsCommand } from '../../core/history';
+import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
 import { ToolType, EraserMode } from '../../core/types';
@@ -16,6 +16,7 @@ export class ToolbarComponent {
   private _lastCanUndo: boolean = false;
   private _lastCanRedo: boolean = false;
   private _lastSelectedCount: number = 0;
+  private _lastHasDoc: boolean = false;
   private _pinnedTool: string | null = null;
 
   constructor(container: HTMLElement) {
@@ -32,17 +33,20 @@ export class ToolbarComponent {
   }
 
   private onStoreUpdate(): void {
+    const hasDoc = store.activeDocument !== null;
     const activeTool = store.activeTool;
     const canUndo = history.canUndo;
     const canRedo = history.canRedo;
     const selectedCount = store.selectedAnnotationIds.size;
 
     if (
+      hasDoc !== this._lastHasDoc ||
       activeTool !== this._lastActiveTool ||
       canUndo !== this._lastCanUndo ||
       canRedo !== this._lastCanRedo ||
       selectedCount !== this._lastSelectedCount
     ) {
+      this._lastHasDoc = hasDoc;
       this.render();
     } else {
       this.updateIndicators();
@@ -59,6 +63,12 @@ export class ToolbarComponent {
   }
 
   public render(): void {
+    if (!store.activeDocument) {
+      this._container.style.display = 'none';
+      return;
+    }
+    this._container.style.display = '';
+
     const activeTool = store.activeTool;
     const canUndo = history.canUndo;
     const canRedo = history.canRedo;
@@ -150,6 +160,16 @@ export class ToolbarComponent {
                 <button class="mode-toggle-btn curve-btn ${s.pressureCurve === 'soft' ? 'active' : ''}" data-curve="soft">Soft</button>
                 <button class="mode-toggle-btn curve-btn ${s.pressureCurve === 'firm' ? 'active' : ''}" data-curve="firm">Firm</button>
               </div>
+
+              <div class="sub-row-separator"></div>
+
+              <div class="sub-row-section">
+                <span class="sub-row-label">Cursor</span>
+                <button class="mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'pen' ? 'active' : ''}" data-drawing-cursor="pen">Pen</button>
+                <button class="mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'dot' ? 'active' : ''}" data-drawing-cursor="dot">Dot</button>
+                <button class="mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'circle' ? 'active' : ''}" data-drawing-cursor="circle">Circle</button>
+                <button class="mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'crosshair' ? 'active' : ''}" data-drawing-cursor="crosshair">Crosshair</button>
+              </div>
             </div>
           </div>
 
@@ -186,6 +206,22 @@ export class ToolbarComponent {
                   <input type="range" id="hover-hl-slider" class="size-slider" min="6" max="60" value="${s.highlighterWidth}">
                   <span class="size-readout hl-readout">${s.highlighterWidth}px</span>
                 </div>
+              </div>
+
+              <div class="sub-row-separator"></div>
+
+              <div class="sub-row-section">
+                <span class="sub-row-label">Snap</span>
+                <button class="mode-toggle-btn hl-line-btn ${!s.highlighterStraightLine ? 'active' : ''}" data-hl-straight="false">Freehand</button>
+                <button class="mode-toggle-btn hl-line-btn ${s.highlighterStraightLine ? 'active' : ''}" data-hl-straight="true">Straight (Shift)</button>
+              </div>
+
+              <div class="sub-row-separator"></div>
+
+              <div class="sub-row-section">
+                <span class="sub-row-label">Tip</span>
+                <button class="mode-toggle-btn hl-tip-btn ${s.highlighterTipShape === 'round' ? 'active' : ''}" data-hl-tip="round">Round</button>
+                <button class="mode-toggle-btn hl-tip-btn ${s.highlighterTipShape === 'chisel' ? 'active' : ''}" data-hl-tip="chisel">Chisel</button>
               </div>
             </div>
           </div>
@@ -263,6 +299,17 @@ export class ToolbarComponent {
               ${this.renderShapeHoverCard(s, 'arrow')}
             </div>
           </div>
+
+          <!-- Polygon with Hover Card -->
+          <div class="tool-btn-wrapper ${this._pinnedTool === 'polygon' ? 'is-pinned' : ''}" data-wrapper-tool="polygon">
+            <button class="tool-btn ${activeTool === 'polygon' ? 'active' : ''}" data-tool="polygon" title="Custom Multi-Point Polygon (G)">
+              ${getIconSvg('polygon')}
+              <span class="tool-color-dot shape-dot" style="background-color:${s.shapeColor};"></span>
+            </button>
+            <div class="tool-hover-card">
+              ${this.renderShapeHoverCard(s, 'polygon')}
+            </div>
+          </div>
         </div>
 
         <div class="toolbar-separator"></div>
@@ -303,8 +350,8 @@ export class ToolbarComponent {
 
               <div class="sub-row-section">
                 <span class="sub-row-label">Font</span>
-                <button class="mode-toggle-btn font-fam-btn ${s.fontFamily === 'Inter, sans-serif' ? 'active' : ''}" data-font-fam="Inter, sans-serif">Inter</button>
-                <button class="mode-toggle-btn font-fam-btn ${s.fontFamily === 'Vazirmatn, sans-serif' ? 'active' : ''}" data-font-fam="Vazirmatn, sans-serif">وزیرمتن</button>
+                <button class="mode-toggle-btn font-fam-btn ${(s.fontFamily || 'Inter').includes('Inter') ? 'active' : ''}" data-font-fam="Inter">Inter</button>
+                <button class="mode-toggle-btn font-fam-btn ${(s.fontFamily || '').includes('Vazirmatn') ? 'active' : ''}" data-font-fam="Vazirmatn">وزیرمتن</button>
               </div>
             </div>
           </div>
@@ -317,8 +364,8 @@ export class ToolbarComponent {
             <div class="tool-hover-card">
               <span class="sub-row-label">Preset Stamp</span>
               <div class="size-pills-group">
-                ${['APPROVED', 'CONFIDENTIAL', 'DRAFT', 'SIGN HERE', 'PAID', 'VOID'].map(st => `
-                  <button class="mode-toggle-btn" data-stamp-choice="${st}">${st}</button>
+                ${['APPROVED', 'CONFIDENTIAL', 'DRAFT', 'SIGN_HERE', 'PAID', 'VOID'].map(st => `
+                  <button class="mode-toggle-btn ${(s.stampPreset || 'APPROVED') === st ? 'active' : ''}" data-stamp-choice="${st}">${st.replace('_', ' ')}</button>
                 `).join('')}
               </div>
             </div>
@@ -356,8 +403,8 @@ export class ToolbarComponent {
             </button>
             <div class="tool-hover-card">
               <span class="sub-row-label">Mode</span>
-              <button class="mode-toggle-btn active" data-redact-color="#000000">Blackout</button>
-              <button class="mode-toggle-btn" data-redact-color="#ffffff">Whiteout</button>
+              <button class="mode-toggle-btn ${(s.redactionColor || '#000000') === '#000000' ? 'active' : ''}" data-redact-color="#000000">Blackout</button>
+              <button class="mode-toggle-btn ${(s.redactionColor || '#000000') === '#ffffff' ? 'active' : ''}" data-redact-color="#ffffff">Whiteout</button>
             </div>
           </div>
 
@@ -387,33 +434,21 @@ export class ToolbarComponent {
   private updateIndicators(): void {
     const s = store.toolSettings;
 
-    // Update pen dots and indicators
+    // 1. Pen Indicators
     const penDot = this._container.querySelector<HTMLElement>('.pen-dot');
     if (penDot) penDot.style.backgroundColor = s.penColor;
 
-    const hlDot = this._container.querySelector<HTMLElement>('.hl-dot');
-    if (hlDot) hlDot.style.backgroundColor = s.highlighterColor;
-
-    const shapeDot = this._container.querySelector<HTMLElement>('.shape-dot');
-    if (shapeDot) shapeDot.style.backgroundColor = s.shapeColor;
-
-    // Pen swatches & pills
     this._container.querySelectorAll('[data-pen-color]').forEach(el => {
       const c = el.getAttribute('data-pen-color');
-      if (c && c.toLowerCase() === s.penColor.toLowerCase()) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      el.classList.toggle('active', !!c && c.toLowerCase() === s.penColor.toLowerCase());
     });
+
+    const penPicker = this._container.querySelector<HTMLInputElement>('#hover-pen-color-picker');
+    if (penPicker && penPicker.value !== s.penColor) penPicker.value = s.penColor;
 
     this._container.querySelectorAll('[data-pen-width]').forEach(el => {
       const w = parseInt(el.getAttribute('data-pen-width') || '0', 10);
-      if (w === s.penWidth) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      el.classList.toggle('active', w === s.penWidth);
     });
 
     const penReadout = this._container.querySelector('.pen-readout');
@@ -424,51 +459,147 @@ export class ToolbarComponent {
       penSlider.value = String(s.penWidth);
     }
 
-    // Highlighter swatches & pills
+    this._container.querySelectorAll('[data-curve]').forEach(el => {
+      const curve = el.getAttribute('data-curve');
+      el.classList.toggle('active', curve === s.pressureCurve);
+    });
+
+    this._container.querySelectorAll('[data-drawing-cursor]').forEach(el => {
+      const cur = el.getAttribute('data-drawing-cursor');
+      el.classList.toggle('active', cur === (s.drawingCursor || 'pen'));
+    });
+
+    // 2. Highlighter Indicators
+    const hlDot = this._container.querySelector<HTMLElement>('.hl-dot');
+    if (hlDot) hlDot.style.backgroundColor = s.highlighterColor;
+
     this._container.querySelectorAll('[data-hl-color]').forEach(el => {
       const c = el.getAttribute('data-hl-color');
-      if (c && c.toLowerCase() === s.highlighterColor.toLowerCase()) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      el.classList.toggle('active', !!c && c.toLowerCase() === s.highlighterColor.toLowerCase());
     });
+
+    const hlPicker = this._container.querySelector<HTMLInputElement>('#hover-hl-color-picker');
+    if (hlPicker && hlPicker.value !== s.highlighterColor) hlPicker.value = s.highlighterColor;
 
     this._container.querySelectorAll('[data-hl-width]').forEach(el => {
       const w = parseInt(el.getAttribute('data-hl-width') || '0', 10);
-      if (w === s.highlighterWidth) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      el.classList.toggle('active', w === s.highlighterWidth);
     });
 
     const hlReadout = this._container.querySelector('.hl-readout');
     if (hlReadout) hlReadout.textContent = `${s.highlighterWidth}px`;
 
-    // Eraser
+    const hlSlider = this._container.querySelector<HTMLInputElement>('#hover-hl-slider');
+    if (hlSlider && hlSlider.value !== String(s.highlighterWidth)) {
+      hlSlider.value = String(s.highlighterWidth);
+    }
+
+    this._container.querySelectorAll('[data-hl-straight]').forEach(el => {
+      const isStr = el.getAttribute('data-hl-straight') === 'true';
+      el.classList.toggle('active', isStr === !!s.highlighterStraightLine);
+    });
+
+    this._container.querySelectorAll('[data-hl-tip]').forEach(el => {
+      const tip = el.getAttribute('data-hl-tip');
+      el.classList.toggle('active', tip === (s.highlighterTipShape || 'round'));
+    });
+
+    // 3. Eraser Indicators
     this._container.querySelectorAll('[data-eraser-mode]').forEach(el => {
       const m = el.getAttribute('data-eraser-mode');
-      if (m === s.eraserMode) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      el.classList.toggle('active', m === s.eraserMode);
     });
 
     this._container.querySelectorAll('[data-eraser-width]').forEach(el => {
       const w = parseInt(el.getAttribute('data-eraser-width') || '0', 10);
-      if (w === s.eraserWidth) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
+      el.classList.toggle('active', w === s.eraserWidth);
     });
 
     const eraserReadout = this._container.querySelector('.eraser-readout');
     if (eraserReadout) eraserReadout.textContent = `${s.eraserWidth}px`;
 
-    // Undo / Redo buttons reactive state
+    const eraserSlider = this._container.querySelector<HTMLInputElement>('#hover-eraser-slider');
+    if (eraserSlider && eraserSlider.value !== String(s.eraserWidth)) {
+      eraserSlider.value = String(s.eraserWidth);
+    }
+
+    // 4. Shape Indicators across all 5 shape cards
+    const shapeDot = this._container.querySelector<HTMLElement>('.shape-dot');
+    if (shapeDot) shapeDot.style.backgroundColor = s.shapeColor;
+
+    this._container.querySelectorAll('[data-shape-color]').forEach(el => {
+      const c = el.getAttribute('data-shape-color');
+      el.classList.toggle('active', !!c && c.toLowerCase() === s.shapeColor.toLowerCase());
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-color-picker').forEach(picker => {
+      if (picker.value !== s.shapeColor) picker.value = s.shapeColor;
+    });
+
+    this._container.querySelectorAll('[data-shape-width]').forEach(el => {
+      const w = parseInt(el.getAttribute('data-shape-width') || '0', 10);
+      el.classList.toggle('active', w === s.shapeWidth);
+    });
+
+    this._container.querySelectorAll('[data-shape-style]').forEach(el => {
+      const st = el.getAttribute('data-shape-style');
+      el.classList.toggle('active', st === s.shapeStyle);
+    });
+
+    this._container.querySelectorAll('[data-shape-fill="transparent"]').forEach(el => {
+      el.classList.toggle('active', s.shapeFillColor === 'transparent');
+    });
+
+    this._container.querySelectorAll('[data-shape-fill-color]').forEach(el => {
+      const c = el.getAttribute('data-shape-fill-color');
+      el.classList.toggle('active', !!c && c.toLowerCase() === s.shapeFillColor.toLowerCase());
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-fill-picker').forEach(picker => {
+      if (s.shapeFillColor !== 'transparent' && picker.value !== s.shapeFillColor) {
+        picker.value = s.shapeFillColor;
+      }
+    });
+
+    // 5. Text Indicators
+    this._container.querySelectorAll('[data-text-color]').forEach(el => {
+      const c = el.getAttribute('data-text-color');
+      el.classList.toggle('active', !!c && c.toLowerCase() === s.textColor.toLowerCase());
+    });
+
+    const textPicker = this._container.querySelector<HTMLInputElement>('#hover-text-color-picker');
+    if (textPicker && textPicker.value !== s.textColor) textPicker.value = s.textColor;
+
+    this._container.querySelectorAll('[data-font-size]').forEach(el => {
+      const sz = parseInt(el.getAttribute('data-font-size') || '0', 10);
+      el.classList.toggle('active', sz === s.fontSize);
+    });
+
+    this._container.querySelectorAll('[data-font-fam]').forEach(el => {
+      const fam = el.getAttribute('data-font-fam');
+      const activeFam = s.fontFamily || 'Inter';
+      el.classList.toggle('active', fam ? activeFam.includes(fam) : false);
+    });
+
+    // 6. Stamp Indicators
+    this._container.querySelectorAll('[data-stamp-choice]').forEach(el => {
+      const st = el.getAttribute('data-stamp-choice');
+      el.classList.toggle('active', st === (s.stampPreset || 'APPROVED'));
+    });
+
+    // 7. Measure Indicators
+    this._container.querySelectorAll('[data-measure-unit]').forEach(el => {
+      const u = el.getAttribute('data-measure-unit');
+      el.classList.toggle('active', u === s.measureUnit);
+    });
+
+    // 8. Redaction Indicators
+    this._container.querySelectorAll('[data-redact-color]').forEach(el => {
+      const rc = el.getAttribute('data-redact-color');
+      el.classList.toggle('active', rc === (s.redactionColor || '#000000'));
+    });
+
+    // 9. Undo / Redo buttons reactive state
     const undoBtn = this._container.querySelector<HTMLButtonElement>('#toolbar-undo-btn');
     if (undoBtn) {
       undoBtn.disabled = !history.canUndo;
@@ -522,13 +653,19 @@ export class ToolbarComponent {
         <button class="mode-toggle-btn ${s.shapeStyle === 'dotted' ? 'active' : ''}" data-shape-style="dotted">Dotted</button>
       </div>
 
-      ${shapeType === 'rectangle' || shapeType === 'ellipse' ? `
+      ${shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'polygon' ? `
         <div class="sub-row-separator"></div>
         <div class="sub-row-section">
           <span class="sub-row-label">Fill</span>
-          <button class="mode-toggle-btn ${s.shapeFillColor === 'transparent' ? 'active' : ''}" data-shape-fill="transparent">No Fill</button>
-          <div class="color-picker-wrapper" title="Fill Color">
-            <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
+          <div class="color-swatches-group">
+            <button class="mode-toggle-btn ${s.shapeFillColor === 'transparent' ? 'active' : ''}" data-shape-fill="transparent" title="No Fill">None</button>
+            ${shapeColors.map(c => `
+              <div class="color-swatch shape-fill-swatch ${s.shapeFillColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}" 
+                   style="background-color:${c};" data-shape-fill-color="${c}" title="Fill with ${c}"></div>
+            `).join('')}
+            <div class="color-picker-wrapper" title="Custom Fill Color">
+              <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
+            </div>
           </div>
         </div>
       ` : ''}
@@ -578,7 +715,10 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const color = el.getAttribute('data-pen-color');
-        if (color) store.updateToolSettings({ penColor: color });
+        if (color) {
+          store.updateToolSettings({ penColor: color });
+          this.updateIndicators();
+        }
       });
     });
 
@@ -586,6 +726,7 @@ export class ToolbarComponent {
     penPicker?.addEventListener('input', (e) => {
       const color = (e.target as HTMLInputElement).value;
       store.updateToolSettings({ penColor: color });
+      this.updateIndicators();
     });
 
     this._container.querySelectorAll('[data-pen-width]').forEach(el => {
@@ -593,6 +734,7 @@ export class ToolbarComponent {
         e.stopPropagation();
         const w = parseInt(el.getAttribute('data-pen-width') || '2', 10);
         store.updateToolSettings({ penWidth: w });
+        this.updateIndicators();
       });
     });
 
@@ -600,13 +742,30 @@ export class ToolbarComponent {
     penSlider?.addEventListener('input', (e) => {
       const w = parseInt((e.target as HTMLInputElement).value, 10);
       store.updateToolSettings({ penWidth: w });
+      this.updateIndicators();
     });
 
     this._container.querySelectorAll('[data-curve]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const curve = el.getAttribute('data-curve') as any;
-        if (curve) store.updateToolSettings({ pressureCurve: curve });
+        if (curve) {
+          store.updateToolSettings({ pressureCurve: curve });
+          this.updateIndicators();
+        }
+      });
+    });
+
+    // Drawing Cursor listener
+    this._container.querySelectorAll('[data-drawing-cursor]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cursor = el.getAttribute('data-drawing-cursor') as any;
+        if (cursor) {
+          store.updateToolSettings({ drawingCursor: cursor });
+          store.updateAppSettings({ drawingCursor: cursor });
+          this.updateIndicators();
+        }
       });
     });
 
@@ -615,7 +774,10 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const color = el.getAttribute('data-hl-color');
-        if (color) store.updateToolSettings({ highlighterColor: color });
+        if (color) {
+          store.updateToolSettings({ highlighterColor: color });
+          this.updateIndicators();
+        }
       });
     });
 
@@ -623,6 +785,7 @@ export class ToolbarComponent {
     hlPicker?.addEventListener('input', (e) => {
       const color = (e.target as HTMLInputElement).value;
       store.updateToolSettings({ highlighterColor: color });
+      this.updateIndicators();
     });
 
     this._container.querySelectorAll('[data-hl-width]').forEach(el => {
@@ -630,6 +793,7 @@ export class ToolbarComponent {
         e.stopPropagation();
         const w = parseInt(el.getAttribute('data-hl-width') || '20', 10);
         store.updateToolSettings({ highlighterWidth: w });
+        this.updateIndicators();
       });
     });
 
@@ -637,6 +801,27 @@ export class ToolbarComponent {
     hlSlider?.addEventListener('input', (e) => {
       const w = parseInt((e.target as HTMLInputElement).value, 10);
       store.updateToolSettings({ highlighterWidth: w });
+      this.updateIndicators();
+    });
+
+    this._container.querySelectorAll('[data-hl-straight]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isStraight = el.getAttribute('data-hl-straight') === 'true';
+        store.updateToolSettings({ highlighterStraightLine: isStraight });
+        this.updateIndicators();
+      });
+    });
+
+    this._container.querySelectorAll('[data-hl-tip]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tip = el.getAttribute('data-hl-tip') as any;
+        if (tip) {
+          store.updateToolSettings({ highlighterTipShape: tip });
+          this.updateIndicators();
+        }
+      });
     });
 
     // Eraser listeners
@@ -644,7 +829,10 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const mode = el.getAttribute('data-eraser-mode') as EraserMode;
-        if (mode) store.updateToolSettings({ eraserMode: mode });
+        if (mode) {
+          store.updateToolSettings({ eraserMode: mode });
+          this.updateIndicators();
+        }
       });
     });
 
@@ -653,6 +841,7 @@ export class ToolbarComponent {
         e.stopPropagation();
         const w = parseInt(el.getAttribute('data-eraser-width') || '24', 10);
         store.updateToolSettings({ eraserWidth: w });
+        this.updateIndicators();
       });
     });
 
@@ -660,29 +849,108 @@ export class ToolbarComponent {
     eraserSlider?.addEventListener('input', (e) => {
       const w = parseInt((e.target as HTMLInputElement).value, 10);
       store.updateToolSettings({ eraserWidth: w });
+      this.updateIndicators();
     });
 
     // Shapes listeners
+    const applyShapeColor = (color: string) => {
+      store.updateToolSettings({ shapeColor: color });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (store.selectedAnnotationIds.has(ann.id) && 'strokeColor' in ann) {
+              const prev = { ...ann };
+              const next = { ...ann, strokeColor: color };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
+    const applyShapeWidth = (w: number) => {
+      store.updateToolSettings({ shapeWidth: w });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (store.selectedAnnotationIds.has(ann.id) && 'strokeWidth' in ann) {
+              const prev = { ...ann };
+              const next = { ...ann, strokeWidth: w };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
+    const applyShapeStyle = (st: 'solid' | 'dashed' | 'dotted') => {
+      store.updateToolSettings({ shapeStyle: st });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (store.selectedAnnotationIds.has(ann.id) && 'strokeStyle' in ann) {
+              const prev = { ...ann };
+              const next = { ...ann, strokeStyle: st };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
+    const applyShapeFill = (color: string) => {
+      store.updateToolSettings({ shapeFillColor: color });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (store.selectedAnnotationIds.has(ann.id) && 'fillColor' in ann) {
+              const prev = { ...ann };
+              const next = { ...ann, fillColor: color };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
     this._container.querySelectorAll('[data-shape-color]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const color = el.getAttribute('data-shape-color');
-        if (color) store.updateToolSettings({ shapeColor: color });
+        if (color) applyShapeColor(color);
       });
     });
 
     this._container.querySelectorAll<HTMLInputElement>('.shape-color-picker').forEach(picker => {
-      picker.addEventListener('input', (e) => {
+      const handleColor = (e: Event) => {
         const color = (e.target as HTMLInputElement).value;
-        store.updateToolSettings({ shapeColor: color });
-      });
+        applyShapeColor(color);
+      };
+      picker.addEventListener('input', handleColor);
+      picker.addEventListener('change', handleColor);
     });
 
     this._container.querySelectorAll('[data-shape-width]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const w = parseInt(el.getAttribute('data-shape-width') || '2', 10);
-        store.updateToolSettings({ shapeWidth: w });
+        applyShapeWidth(w);
       });
     });
 
@@ -690,22 +958,32 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const st = el.getAttribute('data-shape-style') as any;
-        if (st) store.updateToolSettings({ shapeStyle: st });
+        if (st) applyShapeStyle(st);
       });
     });
 
     this._container.querySelectorAll('[data-shape-fill="transparent"]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        store.updateToolSettings({ shapeFillColor: 'transparent' });
+        applyShapeFill('transparent');
+      });
+    });
+
+    this._container.querySelectorAll('[data-shape-fill-color]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const color = el.getAttribute('data-shape-fill-color');
+        if (color) applyShapeFill(color);
       });
     });
 
     this._container.querySelectorAll<HTMLInputElement>('.shape-fill-picker').forEach(picker => {
-      picker.addEventListener('input', (e) => {
+      const handleFill = (e: Event) => {
         const color = (e.target as HTMLInputElement).value;
-        store.updateToolSettings({ shapeFillColor: color });
-      });
+        applyShapeFill(color);
+      };
+      picker.addEventListener('input', handleFill);
+      picker.addEventListener('change', handleFill);
     });
 
     // Text listeners
@@ -713,7 +991,10 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const color = el.getAttribute('data-text-color');
-        if (color) store.updateToolSettings({ textColor: color });
+        if (color) {
+          store.updateToolSettings({ textColor: color });
+          this.updateIndicators();
+        }
       });
     });
 
@@ -721,6 +1002,7 @@ export class ToolbarComponent {
     textPicker?.addEventListener('input', (e) => {
       const color = (e.target as HTMLInputElement).value;
       store.updateToolSettings({ textColor: color });
+      this.updateIndicators();
     });
 
     this._container.querySelectorAll('[data-font-size]').forEach(el => {
@@ -728,6 +1010,7 @@ export class ToolbarComponent {
         e.stopPropagation();
         const sz = parseInt(el.getAttribute('data-font-size') || '16', 10);
         store.updateToolSettings({ fontSize: sz });
+        this.updateIndicators();
       });
     });
 
@@ -735,7 +1018,10 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const fam = el.getAttribute('data-font-fam');
-        if (fam) store.updateToolSettings({ fontFamily: fam });
+        if (fam) {
+          store.updateToolSettings({ fontFamily: fam });
+          this.updateIndicators();
+        }
       });
     });
 
@@ -744,7 +1030,11 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const st = el.getAttribute('data-stamp-choice');
-        if (st) store.setActiveTool('stamp');
+        if (st) {
+          store.updateToolSettings({ stampPreset: st });
+          store.setActiveTool('stamp');
+          this.updateIndicators();
+        }
       });
     });
 
@@ -753,7 +1043,22 @@ export class ToolbarComponent {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const u = el.getAttribute('data-measure-unit') as any;
-        if (u) store.updateToolSettings({ measureUnit: u });
+        if (u) {
+          store.updateToolSettings({ measureUnit: u });
+          this.updateIndicators();
+        }
+      });
+    });
+
+    // Redaction listeners
+    this._container.querySelectorAll('[data-redact-color]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const color = el.getAttribute('data-redact-color');
+        if (color) {
+          store.updateToolSettings({ redactionColor: color });
+          this.updateIndicators();
+        }
       });
     });
 
