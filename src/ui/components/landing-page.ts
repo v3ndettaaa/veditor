@@ -12,13 +12,16 @@ import {
   assignDocToFolder,
   deleteRecentDocument
 } from '../../io/storage';
-import { generateSamplePDF, createBlankNotebook } from '../../io/sample-pdf';
+import { generateSamplePDF } from '../../io/sample-pdf';
+import { buildNotebookPdf } from '../../io/notebook';
 import { getIconSvg } from '../../utils/icons';
-import { PDFFolder, RecentDocItem } from '../../core/types';
+import { PDFFolder, RecentDocItem, NotebookSpec } from '../../core/types';
+import { NotebookDialogComponent } from './notebook-dialog';
 
 export interface LandingPageCallbacks {
   onOpenFile: () => void;
-  onOpenBytes: (name: string, bytes: Uint8Array) => Promise<void>;
+  /** `notebook` marks the bytes as a generated notebook that can be restyled. */
+  onOpenBytes: (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => Promise<void>;
   onOpenRecent: (docId: string) => Promise<void>;
 }
 
@@ -349,6 +352,31 @@ export class LandingPageComponent {
     this.bindEvents();
   }
 
+  /**
+   * The paper chooser lives in its own overlay host appended to the body, so it
+   * survives the landing page re-rendering underneath it.
+   */
+  private openNotebookDialog(): void {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const dialog = new NotebookDialogComponent(host, {
+      mode: 'create',
+      onClose: () => host.remove(),
+      onSubmit: async ({ paper, pageSize, pageCount }) => {
+        try {
+          const bytes = await buildNotebookPdf(paper, pageSize, pageCount);
+          await this._callbacks.onOpenBytes('Notebook.pdf', bytes, { paper, pageSize });
+        } catch (err) {
+          console.error('Error generating notebook:', err);
+        } finally {
+          host.remove();
+        }
+      }
+    });
+    dialog.render();
+  }
+
   private bindEvents(): void {
     const dropzone = this._container.querySelector('#landing-dropzone');
     const openBtn = this._container.querySelector('#landing-open-btn');
@@ -377,15 +405,10 @@ export class LandingPageComponent {
       }
     });
 
-    // Blank Notebook loader
-    notebookBtn?.addEventListener('click', async (e) => {
+    // New notebook: choose the paper first, then generate it
+    notebookBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      try {
-        const bytes = await createBlankNotebook('lined', 3);
-        await this._callbacks.onOpenBytes('Blank Notebook.pdf', bytes);
-      } catch (err: any) {
-        console.error('Error generating blank notebook:', err);
-      }
+      this.openNotebookDialog();
     });
 
     // Dropzone drag & drop

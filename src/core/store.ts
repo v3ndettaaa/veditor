@@ -13,7 +13,8 @@ import {
   ToolSettings,
   AppSettings,
   Annotation,
-  Layer
+  Layer,
+  SidebarTab
 } from './types';
 
 export type StoreListener = () => void;
@@ -93,7 +94,7 @@ class StateStore {
 
   // UI Panels State
   private _sidebarOpen: boolean = false;
-  private _activeSidebarTab: 'thumbnails' | 'outline' | 'layers' | 'search' | 'history' = 'thumbnails';
+  private _activeSidebarTab: SidebarTab = 'thumbnails';
   private _propertiesPanelOpen: boolean = false;
   private _focusMode: boolean = false;
   private _commandPaletteOpen: boolean = false;
@@ -412,17 +413,26 @@ class StateStore {
   }
 
   // UI Panels
-  public toggleSidebar(tab?: 'thumbnails' | 'outline' | 'layers' | 'search' | 'history') {
-    if (tab && this._sidebarOpen && this._activeSidebarTab === tab) {
+
+  /**
+   * No `tab`: plain open/close toggle, for the header button and the panel's
+   * own close button.
+   * With a `tab`: opens that tab, or closes the sidebar when that tab is
+   * already the one showing.
+   */
+  public toggleSidebar(tab?: SidebarTab) {
+    if (!tab) {
+      this._sidebarOpen = !this._sidebarOpen;
+    } else if (this._sidebarOpen && this._activeSidebarTab === tab) {
       this._sidebarOpen = false;
     } else {
       this._sidebarOpen = true;
-      if (tab) this._activeSidebarTab = tab;
+      this._activeSidebarTab = tab;
     }
     this.notify();
   }
 
-  public setSidebarTab(tab: 'thumbnails' | 'outline' | 'layers' | 'search' | 'history') {
+  public setSidebarTab(tab: SidebarTab) {
     this._activeSidebarTab = tab;
     this._sidebarOpen = true;
     this.notify();

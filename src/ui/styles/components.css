@@ -685,6 +685,120 @@ input[type="range"] {
   gap: var(--space-2);
 }
 
+/* Notebook paper chooser: preview on one side, controls on the other. */
+.modal-dialog.notebook-dialog {
+  max-width: 760px;
+}
+
+.notebook-body {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+.notebook-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The sheet is the one surface that must not be themed: it shows the paper
+   colour the user picked, at the page's real aspect ratio. */
+.paper-preview {
+  width: 100%;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.notebook-preview-caption {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.notebook-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.notebook-color-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.notebook-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.notebook-check input {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.notebook-actions {
+  padding: 0 var(--space-5) var(--space-5);
+}
+
+/* Native colour input shown as a plain swatch. */
+.swatch-input {
+  appearance: none;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
+.swatch-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.swatch-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+.swatch-input::-moz-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+.empty-note.is-inline {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: start;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .notebook-body {
+    grid-template-columns: 1fr;
+  }
+
+  .notebook-preview {
+    max-width: 220px;
+  }
+}
+
 /* Signature pad. Deliberately paper-white in both themes: the stroke is
    flattened into the PDF, so what you draw must be what you get. */
 .sig-pad {

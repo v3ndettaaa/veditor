@@ -198,6 +198,41 @@ export interface PDFBookmarkItem {
   items?: PDFBookmarkItem[];
 }
 
+export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots' | 'isometric';
+
+/** How a notebook's paper looks. Drawn into the PDF, so it exports as seen. */
+export interface PaperStyle {
+  pattern: PaperPattern;
+  /** Gap between rules, dots or grid lines, in points. */
+  spacing: number;
+  /** Colour of the rules/dots. */
+  lineColor: string;
+  /** Colour of the sheet itself. */
+  paperColor: string;
+  /** Draw a vertical margin rule near the binding edge. */
+  margin: boolean;
+}
+
+export const PAGE_SIZES = {
+  letter: { label: 'Letter', width: 612, height: 792 },
+  a4: { label: 'A4', width: 595, height: 842 },
+  a5: { label: 'A5', width: 420, height: 595 },
+  square: { label: 'Square', width: 720, height: 720 },
+  wide: { label: 'Wide', width: 1024, height: 640 }
+} as const;
+
+export type PageSizeName = keyof typeof PAGE_SIZES;
+
+/**
+ * Marks a document as an app-generated notebook rather than an imported file.
+ * Its bytes are fully derived from this spec plus its page count, so it can be
+ * re-styled or extended by rebuilding them.
+ */
+export interface NotebookSpec {
+  paper: PaperStyle;
+  pageSize: PageSizeName;
+}
+
 export interface DocumentSession {
   id: string;
   name: string;
@@ -210,9 +245,13 @@ export interface DocumentSession {
   activePageIndex: number;
   createdAt: number;
   lastModifiedAt: number;
+  /** Present only for generated notebooks; see NotebookSpec. */
+  notebook?: NotebookSpec;
 }
 
 export type DrawingCursorType = 'pen' | 'dot' | 'circle' | 'crosshair';
+
+export type SidebarTab = 'thumbnails' | 'outline' | 'layers' | 'search' | 'history';
 
 export interface ToolSettings {
   penColor: string;

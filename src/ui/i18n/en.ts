@@ -89,6 +89,42 @@ export const en = {
     lined: 'Lined Notebook',
     isometric: 'Isometric'
   },
+  notebook: {
+    new: 'New Notebook',
+    paperTitle: 'Notebook Paper',
+    paperBtn: 'Paper',
+    addPage: 'Page',
+    addPageTitle: 'Append a blank page',
+    preset: 'Preset',
+    pattern: 'Pattern',
+    spacing: 'Spacing',
+    paperColor: 'Paper',
+    ruleColor: 'Rules',
+    pageSize: 'Page size',
+    marginRule: 'Margin rule',
+    startingPages: 'Starting pages',
+    autoExtendHint: 'More pages are added automatically as you write to the bottom of the last one.',
+    restyleHint: 'Restyling keeps every page and everything you have written on them.',
+    cancel: 'Cancel',
+    apply: 'Apply Paper',
+    create: 'Create Notebook',
+    patterns: {
+      blank: 'Blank',
+      lined: 'Lined',
+      grid: 'Grid',
+      dots: 'Dots',
+      isometric: 'Isometric'
+    },
+    presets: {
+      ruled: 'Ruled',
+      legal: 'Legal pad',
+      graph: 'Graph',
+      bullet: 'Bullet journal',
+      iso: 'Isometric',
+      dark: 'Night',
+      blank: 'Blank'
+    }
+  },
   toast: {
     saved: 'All changes saved locally',
     exported: 'PDF exported successfully',

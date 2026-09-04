@@ -24,8 +24,10 @@ import { mergeBoundingBoxes } from './utils/geometry';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
+import { drawingCursorValue } from './ui/cursor';
 import { history } from './core/history';
-import { DocumentSession } from './core/types';
+import { DocumentSession, NotebookSpec } from './core/types';
+import { notebookController } from './core/notebook';
 
 class VeditorApp {
   private _scrollContainer: HTMLElement;
@@ -100,6 +102,13 @@ class VeditorApp {
       (visibleIndices) => this.renderVisiblePages(visibleIndices)
     );
 
+    // Rebuilding a notebook replaces its PDF bytes, so every mounted page has
+    // to be dropped and re-rendered from the new document.
+    notebookController.init(() => {
+      this.clearRenderedPages();
+      viewportManager.updateLayout(true);
+    });
+
     // 4. Setup Drag & Drop and File Select
     this.setupFileHandling();
 
@@ -137,8 +146,8 @@ class VeditorApp {
       onOpenFile: () => {
         this._fileInput.click();
       },
-      onOpenBytes: async (name: string, bytes: Uint8Array) => {
-        await this.loadPDF(name, bytes);
+      onOpenBytes: async (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => {
+        await this.loadPDF(name, bytes, undefined, notebook);
       },
       onOpenRecent: async (docId: string) => {
         if (store.openDocuments.has(docId)) {
@@ -147,7 +156,8 @@ class VeditorApp {
         }
         const session = await getDocumentSession(docId);
         if (session && session.fileData) {
-          await this.loadPDF(session.name, session.fileData, docId);
+          // Carry the notebook spec through so a reopened notebook stays one.
+          await this.loadPDF(session.name, session.fileData, docId, session.notebook);
         }
       }
     });
@@ -181,7 +191,12 @@ class VeditorApp {
     });
   }
 
-  public async loadPDF(name: string, bytes: Uint8Array, existingDocId?: string) {
+  public async loadPDF(
+    name: string,
+    bytes: Uint8Array,
+    existingDocId?: string,
+    notebook?: NotebookSpec
+  ) {
     showToast(`Loading ${name}…`, 'progress');
     try {
       const masterBytes = new Uint8Array(bytes);
@@ -199,7 +214,8 @@ class VeditorApp {
         layers: {},
         activePageIndex: 0,
         createdAt: Date.now(),
-        lastModifiedAt: Date.now()
+        lastModifiedAt: Date.now(),
+        notebook
       };
 
       this._lastDocId = docId;
@@ -279,6 +295,9 @@ class VeditorApp {
     if (zoomChanged || viewModeChanged) {
       this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
+      // The size-indicating cursors are drawn at the on-screen brush size, so
+      // they have to be refreshed on zoom as well as on tool changes.
+      this.updateCanvasCursors();
       viewportManager.updateLayout(true);
       return;
     }
@@ -398,11 +417,12 @@ class VeditorApp {
         annotCanvas.className = 'annotation-canvas';
 
         const scratchCanvas = document.createElement('canvas');
-        const cursor = store.toolSettings.drawingCursor || 'pen';
-        const cursorClass = (store.activeTool === 'pen' || store.activeTool === 'highlighter') 
-          ? `cursor-${cursor}` 
-          : (store.activeTool === 'select' ? '' : 'cursor-crosshair');
-        scratchCanvas.className = `scratchpad-canvas ${cursorClass}`.trim();
+        scratchCanvas.className = 'scratchpad-canvas';
+        scratchCanvas.style.cursor = drawingCursorValue(
+          store.activeTool,
+          store.toolSettings.drawingCursor || 'pen',
+          store.zoom
+        );
 
         container.appendChild(pdfCanvas);
         container.appendChild(patternCanvas);
@@ -462,12 +482,15 @@ class VeditorApp {
     const patCtx = p.patternCanvas.getContext('2d');
     if (patCtx) {
       patCtx.clearRect(0, 0, p.patternCanvas.width, p.patternCanvas.height);
+      // A notebook already has its paper drawn into the PDF, so the overlay
+      // grid is only for imported documents.
       annotationEngine.renderBackgroundPattern(
         patCtx,
         p.patternCanvas.width,
         p.patternCanvas.height,
-        store.appSettings.backgroundPattern,
-        scale
+        notebookController.isNotebook() ? 'none' : store.appSettings.backgroundPattern,
+        scale,
+        store.appSettings.gridSize
       );
     }
 
@@ -514,6 +537,9 @@ class VeditorApp {
         canvas.releasePointerCapture(e.pointerId);
       } catch (_) {}
       pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint);
+      // A notebook grows once the stroke is committed, so there is always
+      // blank paper below what you just wrote.
+      void notebookController.autoExtend(pageIndex);
     });
 
     canvas.addEventListener('pointercancel', (e) => {
@@ -531,13 +557,13 @@ class VeditorApp {
   }
 
   public updateCanvasCursors(): void {
-    const cursor = store.toolSettings.drawingCursor || 'pen';
-    const tool = store.activeTool;
-    const cursorClass = (tool === 'pen' || tool === 'highlighter') 
-      ? `cursor-${cursor}` 
-      : (tool === 'select' ? '' : 'cursor-crosshair');
+    const cursor = drawingCursorValue(
+      store.activeTool,
+      store.toolSettings.drawingCursor || 'pen',
+      store.zoom
+    );
     for (const [, p] of this._renderedPages) {
-      p.scratchCanvas.className = `scratchpad-canvas ${cursorClass}`.trim();
+      p.scratchCanvas.style.cursor = cursor;
     }
   }
 

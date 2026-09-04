@@ -795,28 +795,15 @@ body.invert-pdf-document .pdf-page-canvas {
   z-index: 3;
 }
 
+/* The cursor itself is set inline from src/ui/cursor.ts, which draws the
+   size-indicating cursors at the brush's real on-screen size. `crosshair` here
+   is the pre-paint default and the fallback for oversized brushes. */
 .scratchpad-canvas {
   position: absolute;
   top: 0;
   left: 0;
   z-index: 4;
   touch-action: none;
-  cursor: crosshair;
-}
-
-.scratchpad-canvas.cursor-pen {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='m2 22 4-1 12-12-3-3L3 18l-1 4z' fill='%23ffffff' stroke='%230f172a' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M14 7l3 3' stroke='%230f172a' stroke-width='1.5'/%3E%3Ccircle cx='2.5' cy='21.5' r='1.2' fill='%234f46e5'/%3E%3C/svg%3E") 2 22, crosshair;
-}
-
-.scratchpad-canvas.cursor-dot {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Ccircle cx='8' cy='8' r='4' fill='%234f46e5' stroke='%23ffffff' stroke-width='1.5'/%3E%3Ccircle cx='8' cy='8' r='1.5' fill='%23ffffff'/%3E%3C/svg%3E") 8 8, crosshair;
-}
-
-.scratchpad-canvas.cursor-circle {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'%3E%3Ccircle cx='12' cy='12' r='8' stroke='%234f46e5' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%23ffffff' stroke='%230f172a' stroke-width='1'/%3E%3C/svg%3E") 12 12, crosshair;
-}
-
-.scratchpad-canvas.cursor-crosshair {
   cursor: crosshair;
 }
 

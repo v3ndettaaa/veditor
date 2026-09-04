@@ -89,6 +89,42 @@ export const fa = {
     lined: 'دفترچه خط‌دار',
     isometric: 'ایزومتریک'
   },
+  notebook: {
+    new: 'دفترچه جدید',
+    paperTitle: 'کاغذ دفترچه',
+    paperBtn: 'کاغذ',
+    addPage: 'صفحه',
+    addPageTitle: 'افزودن یک صفحه خالی',
+    preset: 'الگوی آماده',
+    pattern: 'الگوی کاغذ',
+    spacing: 'فاصله خطوط',
+    paperColor: 'رنگ کاغذ',
+    ruleColor: 'رنگ خطوط',
+    pageSize: 'اندازه صفحه',
+    marginRule: 'خط حاشیه',
+    startingPages: 'تعداد صفحات آغازین',
+    autoExtendHint: 'با نوشتن در انتهای صفحه آخر، صفحات جدید به‌طور خودکار اضافه می‌شوند.',
+    restyleHint: 'تغییر کاغذ، همه صفحات و هر چیزی که نوشته‌اید را حفظ می‌کند.',
+    cancel: 'انصراف',
+    apply: 'اعمال کاغذ',
+    create: 'ساخت دفترچه',
+    patterns: {
+      blank: 'ساده',
+      lined: 'خط‌دار',
+      grid: 'شطرنجی',
+      dots: 'نقطه‌ای',
+      isometric: 'ایزومتریک'
+    },
+    presets: {
+      ruled: 'خط‌دار',
+      legal: 'کاغذ زرد',
+      graph: 'میلی‌متری',
+      bullet: 'بولت‌ژورنال',
+      iso: 'ایزومتریک',
+      dark: 'شب',
+      blank: 'ساده'
+    }
+  },
   toast: {
     saved: 'تغییرات به صورت خودکار ذخیره شد',
     exported: 'فایل PDF با موفقیت آماده شد',

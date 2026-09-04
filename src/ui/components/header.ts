@@ -8,6 +8,8 @@ import { getIconSvg } from '../../utils/icons';
 import { pdfExporter } from '../../io/export-pdf';
 import { showToast } from './toast';
 import { t } from '../i18n';
+import { notebookController } from '../../core/notebook';
+import { NotebookDialogComponent } from './notebook-dialog';
 
 export class HeaderComponent {
   private _container: HTMLElement;
@@ -25,6 +27,7 @@ export class HeaderComponent {
     const tabs = store.documentTabs;
     const lang = store.appSettings.language;
     const theme = store.appSettings.theme;
+    const isNotebook = notebookController.isNotebook(activeDoc);
 
     this._container.innerHTML = `
       <div class="header-left">
@@ -52,6 +55,18 @@ export class HeaderComponent {
       </div>
 
       <div class="header-right">
+        ${isNotebook ? `
+          <button id="header-paper-btn" class="header-btn" title="${t('notebook.paperTitle')}">
+            ${getIconSvg('paper', 14)}
+            <span>${t('notebook.paperBtn')}</span>
+          </button>
+          <button id="header-add-page-btn" class="header-btn" title="${t('notebook.addPageTitle')}">
+            ${getIconSvg('plus', 14)}
+            <span>${t('notebook.addPage')}</span>
+          </button>
+          <div class="toolbar-separator" style="height:18px;"></div>
+        ` : ''}
+
         <button id="header-open-btn" class="header-btn">
           ${getIconSvg('upload', 14)}
           <span>${t('openFile')}</span>
@@ -94,6 +109,19 @@ export class HeaderComponent {
 
     this._container.querySelector('#header-open-btn')?.addEventListener('click', () => {
       this._onOpenFileRequested();
+    });
+
+    this._container.querySelector('#header-paper-btn')?.addEventListener('click', () => {
+      this.openPaperDialog();
+    });
+
+    this._container.querySelector('#header-add-page-btn')?.addEventListener('click', async () => {
+      if (notebookController.atPageLimit()) {
+        showToast('This notebook has reached its page limit.', 'error');
+        return;
+      }
+      const added = await notebookController.addPages(1);
+      if (added) showToast(`Page ${store.activeDocument?.pageCount} added`, 'success');
     });
 
     this._container.querySelector('#header-export-btn')?.addEventListener('click', async () => {
@@ -146,5 +174,36 @@ export class HeaderComponent {
     this._container.querySelector('#header-add-tab-btn')?.addEventListener('click', () => {
       this._onOpenFileRequested();
     });
+  }
+
+  /**
+   * Hosted on the body rather than inside the header, which re-renders on every
+   * store change and would otherwise tear the dialog down mid-edit.
+   */
+  private openPaperDialog(): void {
+    const doc = store.activeDocument;
+    if (!doc?.notebook) return;
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const dialog = new NotebookDialogComponent(host, {
+      mode: 'edit',
+      paper: doc.notebook.paper,
+      pageSize: doc.notebook.pageSize,
+      onClose: () => host.remove(),
+      onSubmit: async ({ paper, pageSize }) => {
+        try {
+          showToast('Applying paper…', 'progress');
+          await notebookController.restyle(paper, pageSize);
+          showToast('Paper updated', 'success');
+        } catch (err: any) {
+          showToast(`Could not apply paper: ${err.message}`, 'error');
+        } finally {
+          host.remove();
+        }
+      }
+    });
+    dialog.render();
   }
 }
