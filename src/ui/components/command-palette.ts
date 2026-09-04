@@ -8,6 +8,8 @@ import { viewportManager } from '../../core/viewport';
 import { pdfExporter } from '../../io/export-pdf';
 import { dataExporter } from '../../io/export-data';
 import { showToast } from './toast';
+import { getIconSvg } from '../../utils/icons';
+import { escapeHtml } from '../../utils/html';
 import { t } from '../i18n';
 
 interface PaletteCommand {
@@ -70,12 +72,12 @@ export class CommandPaletteComponent {
         category: 'File',
         action: async () => {
           try {
-            showToast('Generating PDF export...');
+            showToast('Generating PDF export…', 'progress');
             const bytes = await pdfExporter.exportPDF({ flatten: true, dpi: 150, applyRedactions: true });
             await pdfExporter.saveToFile(bytes, store.activeDocument?.name || 'document.pdf');
-            showToast(t('toast.exported'));
+            showToast(t('toast.exported'), 'success');
           } catch (e: any) {
-            showToast(`Export error: ${e.message}`);
+            showToast(`Export error: ${e.message}`, 'error');
           }
         }
       },
@@ -91,7 +93,7 @@ export class CommandPaletteComponent {
           a.href = url;
           a.download = `${store.activeDocument?.name || 'document'}-annotations.json`;
           a.click();
-          showToast('Annotations JSON exported');
+          showToast('Annotations JSON exported', 'success');
         }
       },
 
@@ -100,9 +102,7 @@ export class CommandPaletteComponent {
         title: `Switch Theme to ${store.appSettings.theme === 'dark' ? 'Light' : 'Dark'} Mode`,
         category: 'Settings',
         action: () => {
-          const next = store.appSettings.theme === 'dark' ? 'light' : 'dark';
-          store.updateAppSettings({ theme: next });
-          document.body.className = `theme-${next}`;
+          store.updateAppSettings({ theme: store.appSettings.theme === 'dark' ? 'light' : 'dark' });
         }
       },
       {
@@ -110,10 +110,7 @@ export class CommandPaletteComponent {
         title: `Switch Language to ${store.appSettings.language === 'en' ? 'فارسی (Persian)' : 'English'}`,
         category: 'Settings',
         action: () => {
-          const next = store.appSettings.language === 'en' ? 'fa' : 'en';
-          store.updateAppSettings({ language: next });
-          document.documentElement.setAttribute('dir', next === 'fa' ? 'rtl' : 'ltr');
-          document.documentElement.setAttribute('lang', next);
+          store.updateAppSettings({ language: store.appSettings.language === 'en' ? 'fa' : 'en' });
         }
       },
       { id: 'shortcuts-modal', title: 'Keyboard Shortcuts Reference', category: 'Help', shortcut: '?', action: () => store.setShortcutsModalOpen(true) },
@@ -133,16 +130,20 @@ export class CommandPaletteComponent {
 
     this._container.innerHTML = `
       <div class="modal-overlay" id="palette-overlay">
-        <div class="modal-dialog" style="max-width:560px;">
-          <div style="padding:14px 16px; border-bottom:1px solid var(--border-subtle); display:flex; align-items:center; gap:10px;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input type="text" id="palette-input" placeholder="Type a command or search tools..." autofocus style="
-              flex:1; background:transparent; border:none; color:var(--text-primary); font-size:14px; outline:none; font-family:inherit;
-            ">
-            <span style="font-size:11px; color:var(--text-muted); background:var(--bg-surface-elevated); padding:2px 6px; border-radius:4px;">ESC</span>
+        <div class="modal-dialog palette-dialog" role="dialog" aria-modal="true" aria-label="Command palette">
+          <div class="palette-search">
+            <span class="palette-search-icon">${getIconSvg('search', 17)}</span>
+            <input type="text" id="palette-input" class="palette-input" autofocus
+                   placeholder="Search tools, views and commands…" aria-label="Search commands">
+            <span class="kbd">Esc</span>
           </div>
 
-          <div id="palette-list" style="max-height:360px; overflow-y:auto; padding:8px;"></div>
+          <div id="palette-list" class="palette-list" role="listbox"></div>
+
+          <div class="palette-footer">
+            <span><span class="kbd">↑</span><span class="kbd">↓</span> navigate</span>
+            <span><span class="kbd">↵</span> run</span>
+          </div>
         </div>
       </div>
     `;
@@ -162,21 +163,18 @@ export class CommandPaletteComponent {
       );
 
       if (this._filteredCommands.length === 0) {
-        list.innerHTML = `<div style="padding:24px; text-align:center; font-size:13px; color:var(--text-muted);">No commands found</div>`;
+        list.innerHTML = `<div class="empty-note">No commands match “${escapeHtml(input.value.trim())}”</div>`;
         return;
       }
 
       list.innerHTML = this._filteredCommands.map((c, idx) => `
-        <div class="palette-item" data-idx="${idx}" style="
-          display:flex; align-items:center; justify-content:space-between; padding:9px 12px; border-radius:6px;
-          cursor:pointer; font-size:13px; background:${idx === this._selectedIndex ? 'var(--bg-surface-active)' : 'transparent'};
-          color:${idx === this._selectedIndex ? 'var(--text-primary)' : 'var(--text-secondary)'};
-        ">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-size:10px; text-transform:uppercase; color:var(--text-muted); font-weight:600;">${c.category}</span>
-            <span style="font-weight:500;">${c.title}</span>
-          </div>
-          ${c.shortcut ? `<span style="font-size:11px; background:var(--bg-surface-hover); color:var(--text-muted); padding:2px 6px; border-radius:4px; font-family:monospace;">${c.shortcut}</span>` : ''}
+        <div class="palette-item ${idx === this._selectedIndex ? 'is-selected' : ''}" data-idx="${idx}"
+             role="option" aria-selected="${idx === this._selectedIndex}">
+          <span class="palette-item-label">
+            <span class="palette-item-category">${escapeHtml(c.category)}</span>
+            <span class="palette-item-title">${escapeHtml(c.title)}</span>
+          </span>
+          ${c.shortcut ? `<span class="kbd">${escapeHtml(c.shortcut)}</span>` : ''}
         </div>
       `).join('');
 
@@ -186,6 +184,9 @@ export class CommandPaletteComponent {
           this.executeCommand(this._filteredCommands[idx]);
         });
       });
+
+      // Keep the keyboard-selected row inside the scroll viewport.
+      list.querySelector('.palette-item.is-selected')?.scrollIntoView({ block: 'nearest' });
     };
 
     input?.addEventListener('input', () => {

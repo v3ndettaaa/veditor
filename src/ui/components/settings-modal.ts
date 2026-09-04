@@ -12,6 +12,7 @@ import { ThemeMode, LanguageMode, BackgroundPattern } from '../../core/types';
 import { pdfEngine } from '../../core/pdf-engine';
 import { viewportManager } from '../../core/viewport';
 import { clearAllStorage } from '../../io/storage';
+import { DEFAULT_ACCENT } from '../theme';
 
 type SettingsTab = 'appearance' | 'input' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
 
@@ -35,22 +36,22 @@ export class SettingsModalComponent {
 
     this._container.innerHTML = `
       <div class="modal-overlay" id="settings-overlay">
-        <div class="modal-dialog" style="max-width:760px; height:580px; display:flex; flex-direction:column; padding:0; overflow:hidden;">
+        <div class="modal-dialog settings-dialog" role="dialog" aria-modal="true" aria-label="${t('settings.title')}">
           <!-- Header -->
-          <div class="panel-header" style="padding:14px 20px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
-            <div style="display:flex; align-items:center; gap:8px;">
+          <div class="panel-header settings-header">
+            <div class="panel-header-title">
               ${getIconSvg('settings', 18)}
-              <span style="font-weight:600; font-size:15px;">${t('settings.title')}</span>
+              <span>${t('settings.title')}</span>
             </div>
-            <button id="close-settings-btn" class="header-btn" style="padding:6px;" title="Close">
+            <button id="close-settings-btn" class="icon-btn" title="Close" aria-label="Close settings">
               ${getIconSvg('close', 14)}
             </button>
           </div>
 
           <!-- Body with Tabs -->
-          <div style="display:flex; flex:1; min-height:0;">
+          <div class="settings-body">
             <!-- Left Tab Navigation -->
-            <div style="width:190px; border-right:1px solid var(--border-subtle); background:var(--bg-surface); padding:12px 8px; display:flex; flex-direction:column; gap:4px; flex-shrink:0;">
+            <nav class="settings-nav" aria-label="Settings sections">
               <button class="settings-tab-btn ${this._activeTab === 'appearance' ? 'active' : ''}" data-tab="appearance">
                 ${getIconSvg('palette', 15)}
                 <span>Appearance</span>
@@ -79,10 +80,10 @@ export class SettingsModalComponent {
                 ${getIconSvg('info', 15)}
                 <span>About</span>
               </button>
-            </div>
+            </nav>
 
             <!-- Right Content Area -->
-            <div style="flex:1; padding:22px; overflow-y:auto;">
+            <div class="settings-content">
               ${this.renderTabContent(app, tools)}
             </div>
           </div>
@@ -96,7 +97,7 @@ export class SettingsModalComponent {
   private renderTabContent(app: typeof store.appSettings, tools: typeof store.toolSettings): string {
     if (this._activeTab === 'appearance') {
       const accents = [
-        { name: 'Indigo', color: '#6366f1' },
+        { name: 'Indigo', color: DEFAULT_ACCENT },
         { name: 'Purple', color: '#8b5cf6' },
         { name: 'Emerald', color: '#10b981' },
         { name: 'Rose', color: '#f43f5e' },
@@ -107,21 +108,21 @@ export class SettingsModalComponent {
       ];
 
       return `
-        <div style="display:flex; flex-direction:column; gap:18px;">
+        <div class="settings-stack">
           <div class="settings-section-header">Theme & Visual Styling</div>
 
           <!-- Theme -->
           <div class="prop-group">
-            <span class="prop-label" style="display:flex; align-items:center; gap:6px;">
+            <span class="prop-label has-icon">
               ${getIconSvg('sun', 14)}
               <span>Theme Mode</span>
             </span>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-              <button class="secondary-btn ${app.theme === 'dark' ? 'primary-btn' : ''}" data-set-theme="dark" style="display:flex; align-items:center; justify-content:center; gap:8px;">
+            <div class="settings-grid">
+              <button class="secondary-btn ${app.theme === 'dark' ? 'is-selected' : ''}" data-set-theme="dark">
                 ${getIconSvg('moon', 15)}
                 <span>Dark Mode</span>
               </button>
-              <button class="secondary-btn ${app.theme === 'light' ? 'primary-btn' : ''}" data-set-theme="light" style="display:flex; align-items:center; justify-content:center; gap:8px;">
+              <button class="secondary-btn ${app.theme === 'light' ? 'is-selected' : ''}" data-set-theme="light">
                 ${getIconSvg('sun', 15)}
                 <span>Light Mode</span>
               </button>
@@ -131,29 +132,29 @@ export class SettingsModalComponent {
           <!-- Accent Color -->
           <div class="prop-group">
             <span class="prop-label">Accent Brand Color</span>
-            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <div class="chip-row">
               ${accents.map(a => `
-                <div class="color-swatch ${(app.accentColor || '#6366f1').toLowerCase() === a.color.toLowerCase() ? 'active' : ''}" 
-                     style="background-color:${a.color}; width:28px; height:28px; border-radius:6px; cursor:pointer;" data-set-accent="${a.color}" title="${a.name}"></div>
+                <button type="button"
+                        class="color-swatch is-square ${(app.accentColor || DEFAULT_ACCENT).toLowerCase() === a.color.toLowerCase() ? 'active' : ''}"
+                        style="background-color:${a.color};" data-set-accent="${a.color}"
+                        title="${a.name}" aria-label="${a.name}"
+                        aria-pressed="${(app.accentColor || DEFAULT_ACCENT).toLowerCase() === a.color.toLowerCase()}"></button>
               `).join('')}
-              <div style="display:flex; align-items:center; gap:8px; margin-left:6px;">
-                <div class="color-picker-wrapper" style="width:28px; height:28px;" title="Custom Accent Color">
-                  <input type="color" id="custom-accent-picker" class="color-picker-input" value="${app.accentColor || '#6366f1'}">
+              <div class="accent-custom">
+                <div class="color-picker-wrapper is-lg" title="Custom Accent Color">
+                  <input type="color" id="custom-accent-picker" class="color-picker-input" value="${app.accentColor || DEFAULT_ACCENT}">
                 </div>
-                <span style="font-size:11px; color:var(--text-tertiary);">Custom</span>
+                <span>Custom</span>
               </div>
             </div>
           </div>
 
-          <div class="settings-section-header" style="margin-top:8px;">Canvas Paper Settings</div>
+          <div class="settings-section-header">Canvas Paper Settings</div>
 
           <!-- Background Paper Pattern -->
           <div class="prop-group">
             <span class="prop-label">Paper Background Pattern</span>
-            <select id="pattern-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="pattern-select" class="field">
               <option value="none" ${app.backgroundPattern === 'none' ? 'selected' : ''}>Blank (Standard PDF Canvas)</option>
               <option value="grid" ${app.backgroundPattern === 'grid' ? 'selected' : ''}>Square Grid (Math & Technical)</option>
               <option value="dots" ${app.backgroundPattern === 'dots' ? 'selected' : ''}>Dot Grid (Bullet Journal)</option>
@@ -165,11 +166,11 @@ export class SettingsModalComponent {
           <!-- UI Density -->
           <div class="prop-group">
             <span class="prop-label">Interface Layout Density</span>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-              <button class="secondary-btn ${app.uiDensity !== 'compact' ? 'primary-btn' : ''}" data-set-density="comfortable">
+            <div class="settings-grid">
+              <button class="secondary-btn ${app.uiDensity !== 'compact' ? 'is-selected' : ''}" data-set-density="comfortable">
                 Comfortable
               </button>
-              <button class="secondary-btn ${app.uiDensity === 'compact' ? 'primary-btn' : ''}" data-set-density="compact">
+              <button class="secondary-btn ${app.uiDensity === 'compact' ? 'is-selected' : ''}" data-set-density="compact">
                 Compact
               </button>
             </div>
@@ -180,7 +181,7 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'input') {
       return `
-        <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="settings-stack">
           <div class="settings-section-header">Pressure Sensitivity & Dynamics</div>
 
           <!-- Master Pressure Sensitivity Toggle -->
@@ -210,10 +211,7 @@ export class SettingsModalComponent {
           <!-- Stylus Pressure Calibration Curve -->
           <div class="prop-group">
             <span class="prop-label">Pressure Response Curve</span>
-            <select id="curve-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="curve-select" class="field">
               <option value="linear" ${tools.pressureCurve === 'linear' ? 'selected' : ''}>Linear (Standard 1:1 Response)</option>
               <option value="soft" ${tools.pressureCurve === 'soft' ? 'selected' : ''}>Soft (High Sensitivity for Light Touch)</option>
               <option value="firm" ${tools.pressureCurve === 'firm' ? 'selected' : ''}>Firm (Calligraphy & Heavy Physical Pressure)</option>
@@ -224,25 +222,19 @@ export class SettingsModalComponent {
           <!-- Pressure Dynamic Range Factor -->
           <div class="prop-group">
             <span class="prop-label">Pressure Dynamic Thickness Range</span>
-            <select id="pressure-strength-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="pressure-strength-select" class="field">
               <option value="light" ${tools.pressureStrength === 'light' ? 'selected' : ''}>Subtle (0.6x - 1.4x Base Width)</option>
               <option value="balanced" ${tools.pressureStrength === 'balanced' || !tools.pressureStrength ? 'selected' : ''}>Balanced (0.3x - 1.8x Base Width - Recommended)</option>
               <option value="strong" ${tools.pressureStrength === 'strong' ? 'selected' : ''}>Dramatic (0.1x - 2.4x Base Width)</option>
             </select>
           </div>
 
-          <div class="settings-section-header" style="margin-top:8px;">Stroke Smoothing & Hardware Handling</div>
+          <div class="settings-section-header">Stroke Smoothing & Hardware Handling</div>
 
           <!-- Stroke Smoothing -->
           <div class="prop-group">
             <span class="prop-label">Stroke Smoothing & Stabilization</span>
-            <select id="smoothing-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="smoothing-select" class="field">
               <option value="none" ${tools.strokeSmoothing === 'none' ? 'selected' : ''}>None (Direct Hardware Input)</option>
               <option value="subtle" ${tools.strokeSmoothing === 'subtle' ? 'selected' : ''}>Subtle (Low Latency)</option>
               <option value="medium" ${tools.strokeSmoothing === 'medium' || !tools.strokeSmoothing ? 'selected' : ''}>Medium (Catmull-Rom Centripetal Spline)</option>
@@ -277,17 +269,17 @@ export class SettingsModalComponent {
           <!-- Drawing Cursor Style -->
           <div class="prop-group">
             <span class="prop-label">Drawing Cursor Style</span>
-            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
-              <button class="secondary-btn ${(tools.drawingCursor || 'pen') === 'pen' ? 'primary-btn' : ''}" data-set-cursor="pen">
+            <div class="settings-grid is-quad">
+              <button class="secondary-btn ${(tools.drawingCursor || 'pen') === 'pen' ? 'is-selected' : ''}" data-set-cursor="pen">
                 Pen
               </button>
-              <button class="secondary-btn ${tools.drawingCursor === 'dot' ? 'primary-btn' : ''}" data-set-cursor="dot">
+              <button class="secondary-btn ${tools.drawingCursor === 'dot' ? 'is-selected' : ''}" data-set-cursor="dot">
                 Dot
               </button>
-              <button class="secondary-btn ${tools.drawingCursor === 'circle' ? 'primary-btn' : ''}" data-set-cursor="circle">
+              <button class="secondary-btn ${tools.drawingCursor === 'circle' ? 'is-selected' : ''}" data-set-cursor="circle">
                 Circle
               </button>
-              <button class="secondary-btn ${tools.drawingCursor === 'crosshair' ? 'primary-btn' : ''}" data-set-cursor="crosshair">
+              <button class="secondary-btn ${tools.drawingCursor === 'crosshair' ? 'is-selected' : ''}" data-set-cursor="crosshair">
                 Crosshair
               </button>
             </div>
@@ -298,16 +290,13 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'viewer') {
       return `
-        <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="settings-stack">
           <div class="settings-section-header">Default Document View & Navigation</div>
 
           <!-- Default View Mode -->
           <div class="prop-group">
             <span class="prop-label">Default Page View Layout</span>
-            <select id="view-mode-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="view-mode-select" class="field">
               <option value="continuous" ${app.defaultViewMode === 'continuous' ? 'selected' : ''}>Continuous Vertical Scroll (Seamless)</option>
               <option value="single" ${app.defaultViewMode === 'single' ? 'selected' : ''}>Single Page View</option>
               <option value="two-page" ${app.defaultViewMode === 'two-page' ? 'selected' : ''}>Two-Page Facing Spread (Book Mode)</option>
@@ -317,10 +306,7 @@ export class SettingsModalComponent {
           <!-- Default Zoom Preset -->
           <div class="prop-group">
             <span class="prop-label">Default Zoom Level</span>
-            <select id="zoom-preset-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="zoom-preset-select" class="field">
               <option value="fitWidth" ${app.defaultZoomMode === 'fitWidth' ? 'selected' : ''}>Fit to Width (Recommended for Laptops & Desktops)</option>
               <option value="fitPage" ${app.defaultZoomMode === 'fitPage' ? 'selected' : ''}>Fit Whole Page (Recommended for Tablets)</option>
               <option value="100%" ${app.defaultZoomMode === '100%' ? 'selected' : ''}>100% Native Resolution</option>
@@ -329,7 +315,7 @@ export class SettingsModalComponent {
             </select>
           </div>
 
-          <div class="settings-section-header" style="margin-top:8px;">Reading Comfort & Visuals</div>
+          <div class="settings-section-header">Reading Comfort & Visuals</div>
 
           <!-- Page Shadows Toggle -->
           <div class="setting-card">
@@ -360,9 +346,10 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'performance') {
       return `
-        <div style="display:flex; flex-direction:column; gap:16px;">
-          <div style="padding:14px; background:var(--accent-subtle); border-radius:8px; border:1px solid var(--border-subtle); font-size:12px; line-height:1.6;">
-            ⚡ <strong>Extreme Efficiency Engine Active</strong>: Canvases outside the active viewport are automatically recycled and sized to 1x1, reclaiming gigabytes of uncompressed GPU memory when viewing 100+ page books.
+        <div class="settings-stack">
+          <div class="settings-callout is-accent">
+            <span class="settings-callout-icon">${getIconSvg('zap', 15)}</span>
+            <span><strong>Extreme efficiency engine active.</strong> Canvases outside the active viewport are automatically recycled and sized to 1x1, reclaiming gigabytes of uncompressed GPU memory when viewing 100+ page books.</span>
           </div>
 
           <div class="setting-card">
@@ -379,18 +366,15 @@ export class SettingsModalComponent {
           <!-- Preload buffer -->
           <div class="prop-group">
             <span class="prop-label">Off-screen Page Preload Buffer</span>
-            <select id="preload-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="preload-select" class="field">
               <option value="1" ${app.maxRenderBufferPages === 1 ? 'selected' : ''}>1 Page Ahead (Ultra-Low Memory Usage)</option>
               <option value="3" ${app.maxRenderBufferPages === 3 || !app.maxRenderBufferPages ? 'selected' : ''}>3 Pages Ahead (Balanced - Recommended)</option>
               <option value="5" ${app.maxRenderBufferPages === 5 ? 'selected' : ''}>5 Pages Ahead (Aggressive Preloading for Fast Flipping)</option>
             </select>
           </div>
 
-          <div class="prop-group" style="margin-top:10px;">
-            <button id="flush-cache-btn" class="secondary-btn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; padding:10px;">
+          <div class="prop-group">
+            <button id="flush-cache-btn" class="secondary-btn is-block">
               ${getIconSvg('trash', 14)}
               <span>Flush Render Cache & Force VRAM Reclaim</span>
             </button>
@@ -401,16 +385,13 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'storage') {
       return `
-        <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="settings-stack">
           <div class="settings-section-header">IndexedDB Local Persistence</div>
 
           <!-- Auto-Save Frequency -->
           <div class="prop-group">
             <span class="prop-label">Auto-Save Annotations Frequency</span>
-            <select id="autosave-select" style="
-              width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-              border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px;
-            ">
+            <select id="autosave-select" class="field">
               <option value="5000" ${app.autoSaveIntervalMs === 5000 ? 'selected' : ''}>Every 5 seconds</option>
               <option value="15000" ${app.autoSaveIntervalMs === 15000 || !app.autoSaveIntervalMs ? 'selected' : ''}>Every 15 seconds (Recommended)</option>
               <option value="30000" ${app.autoSaveIntervalMs === 30000 ? 'selected' : ''}>Every 30 seconds</option>
@@ -418,19 +399,20 @@ export class SettingsModalComponent {
             </select>
           </div>
 
-          <div style="padding:12px; background:var(--bg-surface-elevated); border:1px solid var(--border-subtle); border-radius:6px; font-size:12px; color:var(--text-secondary); line-height:1.5;">
-            📁 <strong>Offline Storage Guarantee</strong>: All PDF documents, markups, layers, signatures, and preferences are stored exclusively on your local machine in browser IndexedDB. Zero cloud uploads, zero tracking.
+          <div class="settings-callout">
+            <span class="settings-callout-icon">${getIconSvg('shieldCheck', 15)}</span>
+            <span><strong>Offline storage guarantee.</strong> All PDF documents, markups, layers, signatures, and preferences are stored exclusively on your local machine in browser IndexedDB. Zero cloud uploads, zero tracking.</span>
           </div>
 
-          <div class="settings-section-header" style="margin-top:8px;">Reset & Recovery</div>
+          <div class="settings-section-header">Reset & Recovery</div>
 
-          <div style="display:flex; flex-direction:column; gap:8px;">
-            <button id="reset-settings-btn" class="secondary-btn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; padding:10px;">
+          <div class="panel-stack">
+            <button id="reset-settings-btn" class="secondary-btn is-block">
               ${getIconSvg('rotate', 14)}
               <span>Reset All Settings to Defaults</span>
             </button>
 
-            <button id="clear-local-db-btn" class="secondary-btn" style="color:var(--danger); width:100%; display:flex; align-items:center; justify-content:center; gap:8px; padding:10px;">
+            <button id="clear-local-db-btn" class="danger-btn is-block">
               ${getIconSvg('trash', 14)}
               <span>Clear Recent Documents & Annotation Cache</span>
             </button>
@@ -441,17 +423,17 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'language') {
       return `
-        <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="settings-stack">
           <div class="settings-section-header">Interface Language & Directionality</div>
 
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-            <button class="secondary-btn ${app.language === 'en' ? 'primary-btn' : ''}" data-set-lang="en" style="padding:16px; text-align:center;">
-              <div style="font-weight:700; font-size:15px;">English</div>
-              <div style="font-size:12px; opacity:0.8; margin-top:4px;">Left-to-Right (LTR) • Inter Font</div>
+          <div class="settings-grid">
+            <button class="secondary-btn lang-card ${app.language === 'en' ? 'is-selected' : ''}" data-set-lang="en">
+              <span class="lang-card-name">English</span>
+              <span class="lang-card-desc">Left-to-Right (LTR) • Inter</span>
             </button>
-            <button class="secondary-btn ${app.language === 'fa' ? 'primary-btn' : ''}" data-set-lang="fa" style="padding:16px; text-align:center; font-family:'Vazirmatn', sans-serif;">
-              <div style="font-weight:700; font-size:15px;">فارسی</div>
-              <div style="font-size:12px; opacity:0.8; margin-top:4px;">راست‌چین کامل (RTL) • قلم وزیرمتن</div>
+            <button class="secondary-btn lang-card is-fa ${app.language === 'fa' ? 'is-selected' : ''}" data-set-lang="fa">
+              <span class="lang-card-name">فارسی</span>
+              <span class="lang-card-desc">راست‌چین کامل (RTL) • وزیرمتن</span>
             </button>
           </div>
         </div>
@@ -460,38 +442,37 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'about') {
       return `
-        <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap:14px; padding:16px 0;">
-          <div style="width:58px; height:58px; border-radius:16px; background:var(--accent); display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 8px 24px var(--accent-glow);">
+        <div class="about-pane">
+          <div class="about-mark">
             ${getIconSvg('pen', 28)}
           </div>
           <div>
-            <div style="font-size:20px; font-weight:700; letter-spacing:-0.02em;">veditor</div>
-            <div style="font-size:12px; color:var(--text-tertiary); margin-top:2px;">Version 1.0.0 • Manifest V3 & WebExtensions</div>
+            <div class="about-name">veditor</div>
+            <div class="about-version">Version 1.0.0 • Manifest V3 &amp; WebExtensions</div>
           </div>
 
-          <div style="max-width:440px; font-size:13px; line-height:1.6; color:var(--text-secondary);">
-            Ultra-fast, professional offline PDF annotator and document editor. Engineered for high performance, sub-millisecond drawing latency, and complete local privacy.
-          </div>
+          <p class="about-blurb">
+            Ultra-fast, professional offline PDF annotator and document editor. Engineered for high
+            performance, sub-millisecond drawing latency, and complete local privacy.
+          </p>
 
           <!-- Official GitHub Link -->
-          <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" 
-             style="text-decoration:none; display:inline-flex; align-items:center; gap:8px; padding:10px 22px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium); border-radius:8px; color:var(--text-primary); font-size:13px; font-weight:600; transition:all 0.15s ease; box-shadow:var(--shadow-sm); margin-top:6px;">
+          <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" class="secondary-btn about-repo-link">
             ${getIconSvg('github', 18)}
             <span>View Source on GitHub</span>
             ${getIconSvg('externalLink', 13)}
           </a>
 
-          <div style="display:flex; gap:16px; align-items:center; margin-top:6px;">
-            <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" 
-               style="font-size:12px; color:var(--text-secondary); text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
+          <div class="about-links">
+            <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" class="about-link">
               ${getIconSvg('info', 13)}
               <span>Report Issue</span>
             </a>
-            <span style="color:var(--border-medium);">•</span>
-            <span style="font-size:12px; color:var(--text-tertiary);">MIT Licensed</span>
+            <span class="about-link-divider">•</span>
+            <span class="about-license">MIT Licensed</span>
           </div>
 
-          <button id="about-shortcuts-btn" class="primary-btn" style="margin-top:12px; padding:8px 18px;">
+          <button id="about-shortcuts-btn" class="primary-btn">
             View Keyboard Shortcuts (?)
           </button>
         </div>
@@ -527,7 +508,6 @@ export class SettingsModalComponent {
       btn.addEventListener('click', () => {
         const theme = btn.getAttribute('data-set-theme') as ThemeMode;
         store.updateAppSettings({ theme });
-        document.body.className = `theme-${theme}`;
         this.render();
       });
     });
@@ -538,8 +518,6 @@ export class SettingsModalComponent {
         const accent = btn.getAttribute('data-set-accent');
         if (accent) {
           store.updateAppSettings({ accentColor: accent });
-          document.documentElement.style.setProperty('--accent', accent);
-          document.documentElement.style.setProperty('--accent-hover', accent);
           this.render();
         }
       });
@@ -549,8 +527,6 @@ export class SettingsModalComponent {
     const customAccent = this._container.querySelector<HTMLInputElement>('#custom-accent-picker');
     customAccent?.addEventListener('input', () => {
       store.updateAppSettings({ accentColor: customAccent.value });
-      document.documentElement.style.setProperty('--accent', customAccent.value);
-      document.documentElement.style.setProperty('--accent-hover', customAccent.value);
     });
 
     // Pattern select
@@ -565,7 +541,6 @@ export class SettingsModalComponent {
       btn.addEventListener('click', () => {
         const density = btn.getAttribute('data-set-density') as 'comfortable' | 'compact';
         store.updateAppSettings({ uiDensity: density });
-        document.body.classList.toggle('density-compact', density === 'compact');
         this.render();
       });
     });
@@ -618,7 +593,6 @@ export class SettingsModalComponent {
         const cursor = btn.getAttribute('data-set-cursor') as any;
         if (cursor) {
           store.updateToolSettings({ drawingCursor: cursor });
-          store.updateAppSettings({ drawingCursor: cursor });
           this.render();
         }
       });
@@ -648,7 +622,6 @@ export class SettingsModalComponent {
     const shadowsToggle = this._container.querySelector<HTMLInputElement>('#shadows-toggle');
     shadowsToggle?.addEventListener('change', () => {
       store.updateAppSettings({ showPageShadows: shadowsToggle.checked });
-      document.body.classList.toggle('no-page-shadows', !shadowsToggle.checked);
     });
 
     // Smooth scroll toggle
@@ -680,10 +653,6 @@ export class SettingsModalComponent {
     this._container.querySelector('#reset-settings-btn')?.addEventListener('click', () => {
       if (confirm('Reset all application preferences to default values?')) {
         store.resetSettingsToDefault();
-        document.body.className = 'theme-dark';
-        document.documentElement.style.setProperty('--accent', '#6366f1');
-        document.documentElement.style.setProperty('--accent-hover', '#6366f1');
-        document.body.classList.remove('density-compact');
         this.render();
       }
     });
@@ -701,10 +670,7 @@ export class SettingsModalComponent {
     // Language toggle
     this._container.querySelectorAll('[data-set-lang]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const lang = btn.getAttribute('data-set-lang') as LanguageMode;
-        store.updateAppSettings({ language: lang });
-        document.documentElement.setAttribute('dir', lang === 'fa' ? 'rtl' : 'ltr');
-        document.documentElement.setAttribute('lang', lang);
+        store.updateAppSettings({ language: btn.getAttribute('data-set-lang') as LanguageMode });
         this.render();
       });
     });

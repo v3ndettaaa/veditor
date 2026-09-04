@@ -29,31 +29,27 @@ export class SignatureDialogComponent {
 
     this._container.innerHTML = `
       <div class="modal-overlay" id="sig-overlay">
-        <div class="modal-dialog" style="max-width:480px;">
+        <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="Create digital signature">
           <div class="panel-header">
-            <span>Create Digital Signature</span>
-            <button id="close-sig-btn" class="header-btn" style="padding:4px;">
+            <span class="panel-header-title">
+              ${getIconSvg('signature', 16)}
+              Create Digital Signature
+            </span>
+            <button id="close-sig-btn" class="icon-btn is-small" title="Close" aria-label="Close">
               ${getIconSvg('close', 14)}
             </button>
           </div>
 
-          <div class="panel-body" style="padding:20px; display:flex; flex-direction:column; gap:16px;">
-            <div style="
-              width:100%; height:180px; background:#ffffff; border:1px solid var(--border-medium);
-              border-radius:8px; position:relative; overflow:hidden; touch-action:none;
-            ">
-              <canvas id="sig-canvas" width="440" height="180" style="width:100%; height:100%; cursor:crosshair;"></canvas>
-              <div style="position:absolute; bottom:28px; left:20px; right:20px; border-bottom:1px dashed #cbd5e1; pointer-events:none;"></div>
-              <span style="position:absolute; bottom:8px; left:20px; font-size:11px; color:#94a3b8; pointer-events:none;">Sign above the line</span>
+          <div class="form-dialog-body">
+            <div class="sig-pad">
+              <canvas id="sig-canvas" width="440" height="180" class="sig-pad-canvas"></canvas>
+              <div class="sig-pad-baseline"></div>
+              <span class="sig-pad-hint">Sign above the line</span>
             </div>
 
-            <div style="display:flex; justify-content:space-between; gap:10px;">
-              <button id="clear-sig-btn" class="secondary-btn" style="margin-bottom:0; flex:1;">
-                Clear Pad
-              </button>
-              <button id="insert-sig-btn" class="primary-btn" style="margin-bottom:0; flex:2;">
-                Insert Signature
-              </button>
+            <div class="sig-pad-actions">
+              <button id="clear-sig-btn" class="secondary-btn">Clear Pad</button>
+              <button id="insert-sig-btn" class="primary-btn">Insert Signature</button>
             </div>
           </div>
         </div>

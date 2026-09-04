@@ -54,8 +54,8 @@ export class PropertiesPanelComponent {
 
     this._container.innerHTML = `
       <div class="panel-header">
-        <span>${t('properties.title')} (${selectedAnnotations.length})</span>
-        <button id="close-props-btn" class="header-btn" style="padding:4px;">
+        <span>${t('properties.title')} <span class="badge">${selectedAnnotations.length}</span></span>
+        <button id="close-props-btn" class="icon-btn" title="Clear selection" aria-label="Clear selection">
           ${getIconSvg('close', 14)}
         </button>
       </div>
@@ -64,11 +64,11 @@ export class PropertiesPanelComponent {
         <!-- Stroke Color Picker -->
         <div class="prop-group">
           <span class="prop-label">${hasShape ? 'Stroke Color' : t('properties.color')}</span>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div class="color-picker-wrapper" style="width:26px; height:26px;" title="Color">
+          <div class="prop-color-row">
+            <div class="color-picker-wrapper is-lg" title="Color">
               <input type="color" id="prop-color-picker" class="color-picker-input" value="${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}">
             </div>
-            <span style="font-size:12px; font-family:monospace; color:var(--text-secondary);" id="prop-color-val">
+            <span class="prop-color-value" id="prop-color-val">
               ${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}
             </span>
           </div>
@@ -78,14 +78,14 @@ export class PropertiesPanelComponent {
         ${hasShape ? `
           <div class="prop-group">
             <span class="prop-label">Fill Color</span>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <button id="prop-no-fill-btn" class="header-btn ${firstFillColor === 'transparent' ? 'active' : ''}" style="padding:4px 8px; font-size:11px;">
-                No Fill
+            <div class="prop-color-row">
+              <button id="prop-no-fill-btn" class="secondary-btn is-compact ${firstFillColor === 'transparent' ? 'is-selected' : ''}">
+                No fill
               </button>
-              <div class="color-picker-wrapper" style="width:26px; height:26px;" title="Fill Color">
+              <div class="color-picker-wrapper is-lg" title="Fill Color">
                 <input type="color" id="prop-fill-picker" class="color-picker-input" value="${firstFillColor === 'transparent' ? '#ffffff' : firstFillColor}">
               </div>
-              <span style="font-size:12px; font-family:monospace; color:var(--text-secondary);" id="prop-fill-val">
+              <span class="prop-color-value" id="prop-fill-val">
                 ${firstFillColor === 'transparent' ? 'None' : firstFillColor}
               </span>
             </div>
@@ -94,37 +94,39 @@ export class PropertiesPanelComponent {
 
         <!-- Stroke Width -->
         <div class="prop-group">
-          <div style="display:flex; justify-content:space-between;">
+          <div class="prop-label-row">
             <span class="prop-label">${t('properties.strokeWidth')}</span>
-            <span style="font-size:12px; font-weight:600;" id="prop-width-val">${(firstAnn as any).strokeWidth || 3}px</span>
+            <span class="prop-value" id="prop-width-val">${(firstAnn as any).strokeWidth || 3}px</span>
           </div>
-          <input type="range" id="prop-width-slider" min="1" max="48" value="${(firstAnn as any).strokeWidth || 3}" style="width:100%; cursor:pointer;">
+          <input type="range" id="prop-width-slider" class="prop-slider" min="1" max="48"
+                 value="${(firstAnn as any).strokeWidth || 3}" aria-label="${t('properties.strokeWidth')}">
         </div>
 
         <!-- Opacity -->
         <div class="prop-group">
-          <div style="display:flex; justify-content:space-between;">
+          <div class="prop-label-row">
             <span class="prop-label">${t('properties.opacity')}</span>
-            <span style="font-size:12px; font-weight:600;" id="prop-opacity-val">${Math.round((firstAnn.opacity || 1) * 100)}%</span>
+            <span class="prop-value" id="prop-opacity-val">${Math.round((firstAnn.opacity || 1) * 100)}%</span>
           </div>
-          <input type="range" id="prop-opacity-slider" min="10" max="100" value="${Math.round((firstAnn.opacity || 1) * 100)}" style="width:100%; cursor:pointer;">
+          <input type="range" id="prop-opacity-slider" class="prop-slider" min="10" max="100"
+                 value="${Math.round((firstAnn.opacity || 1) * 100)}" aria-label="${t('properties.opacity')}">
         </div>
 
         <!-- Alignment (if multi-select) -->
         ${selectedAnnotations.length > 1 ? `
           <div class="prop-group">
             <span class="prop-label">Alignment</span>
-            <div style="display:flex; gap:4px;">
-              <button class="header-btn" data-align="left" style="flex:1;">Left</button>
-              <button class="header-btn" data-align="center" style="flex:1;">Center</button>
-              <button class="header-btn" data-align="right" style="flex:1;">Right</button>
+            <div class="prop-btn-row">
+              <button class="secondary-btn" data-align="left">Left</button>
+              <button class="secondary-btn" data-align="center">Center</button>
+              <button class="secondary-btn" data-align="right">Right</button>
             </div>
           </div>
         ` : ''}
 
         <!-- Actions -->
-        <div class="prop-group" style="margin-top:auto; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; gap:8px;">
-          <button id="prop-delete-btn" class="header-btn" style="flex:1; color:#ef4444; border-color:rgba(239, 68, 68, 0.3);">
+        <div class="prop-group prop-actions">
+          <button id="prop-delete-btn" class="danger-btn" style="width:100%;">
             ${getIconSvg('trash', 14)} ${t('properties.delete')}
           </button>
         </div>
@@ -158,7 +160,7 @@ export class PropertiesPanelComponent {
       const fillValEl = this._container.querySelector('#prop-fill-val');
       if (fillValEl) fillValEl.textContent = val === 'transparent' ? 'None' : val;
       const noFillBtn = this._container.querySelector('#prop-no-fill-btn');
-      noFillBtn?.classList.toggle('active', val === 'transparent');
+      noFillBtn?.classList.toggle('is-selected', val === 'transparent');
 
       selectedAnnotations.forEach(ann => {
         if ('fillColor' in ann) {

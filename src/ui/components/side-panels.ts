@@ -9,10 +9,18 @@ import { viewportManager } from '../../core/viewport';
 import { layerManager } from '../../annotations/layers';
 import { pdfEngine } from '../../core/pdf-engine';
 import { getIconSvg } from '../../utils/icons';
+import { escapeHtml } from '../../utils/html';
 import { t } from '../i18n';
 
 export class SidePanelsComponent {
   private _container: HTMLElement;
+  /**
+   * Rendered page previews as data URLs, keyed by `${docId}:${pageIndex}`.
+   * Stored as images rather than canvases so a cached preview can be inserted
+   * into the panel repeatedly - cloning a canvas element does not copy its
+   * bitmap, and a canvas can only be attached at one place in the document.
+   */
+  private _thumbnailCache: Map<string, string> = new Map();
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -50,7 +58,7 @@ export class SidePanelsComponent {
             ${t('sidebar.history')}
           </button>
         </div>
-        <button id="sidebar-close-btn" class="header-btn" style="padding:4px;">
+        <button id="sidebar-close-btn" class="icon-btn" title="Close sidebar" aria-label="Close sidebar">
           ${getIconSvg('close', 14)}
         </button>
       </div>
@@ -79,36 +87,28 @@ export class SidePanelsComponent {
   private renderTabContent(el: HTMLElement, tab: string) {
     const doc = store.activeDocument;
     if (!doc) {
-      el.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:20px;">No document active</div>`;
+      el.innerHTML = `<div class="empty-note">No document active</div>`;
       return;
     }
 
     if (tab === 'thumbnails') {
-      let html = `<div style="display:flex; flex-direction:column; gap:12px;">`;
-      doc.pages.forEach((p, idx) => {
-        const isActive = idx === store.activePageIndex;
-        const annotCount = doc.annotations[idx]?.length || 0;
-        html += `
-          <div class="thumbnail-card" data-page="${idx}" style="
-            display:flex; flex-direction:column; align-items:center; padding:8px;
-            background:${isActive ? 'var(--bg-surface-elevated)' : 'transparent'};
-            border:1px solid ${isActive ? 'var(--accent)' : 'var(--border-subtle)'};
-            border-radius:8px; cursor:pointer;
-          ">
-            <div style="
-              width:120px; height:160px; background:#ffffff; border-radius:4px;
-              box-shadow:var(--shadow-sm); display:flex; align-items:center; justify-content:center;
-              position:relative; margin-bottom:6px;
-            ">
-              <span style="color:#94a3b8; font-size:11px; font-weight:600;">Page ${idx + 1}</span>
-              ${annotCount > 0 ? `<span style="position:absolute; top:4px; right:4px; background:var(--accent); color:#fff; border-radius:10px; font-size:9px; padding:1px 5px; font-weight:700;">${annotCount}</span>` : ''}
-            </div>
-            <span style="font-size:11px; color:var(--text-secondary); font-weight:500;">Page ${idx + 1}</span>
-          </div>
-        `;
-      });
-      html += `</div>`;
-      el.innerHTML = html;
+      el.innerHTML = `
+        <div class="thumbnail-list">
+          ${doc.pages.map((_p, idx) => {
+            const isActive = idx === store.activePageIndex;
+            const annotCount = doc.annotations[idx]?.length || 0;
+            return `
+              <button class="thumbnail-card ${isActive ? 'is-active' : ''}" data-page="${idx}"
+                      aria-current="${isActive ? 'true' : 'false'}" title="Go to page ${idx + 1}">
+                <span class="thumbnail-frame is-loading" data-thumb-frame="${idx}">
+                  ${annotCount > 0 ? `<span class="thumbnail-badge">${annotCount}</span>` : ''}
+                </span>
+                <span class="thumbnail-label">${idx + 1}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+      `;
 
       el.querySelectorAll('[data-page]').forEach(card => {
         card.addEventListener('click', () => {
@@ -116,51 +116,52 @@ export class SidePanelsComponent {
           viewportManager.scrollToPage(pIdx);
         });
       });
+
+      this.fillThumbnails(el, doc.id, doc.pages.length);
     } else if (tab === 'outline') {
       if (doc.bookmarks.length === 0) {
-        el.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:20px;">No outline/bookmarks found in this document</div>`;
+        el.innerHTML = `<div class="empty-note">No outline or bookmarks found in this document</div>`;
       } else {
-        let html = `<ul style="list-style:none; display:flex; flex-direction:column; gap:6px;">`;
-        doc.bookmarks.forEach(b => {
-          html += `
-            <li style="padding:6px 8px; border-radius:6px; font-size:12px; cursor:pointer; background:var(--bg-surface-hover);" class="bookmark-item">
-              📑 ${b.title}
-            </li>
-          `;
-        });
-        html += `</ul>`;
-        el.innerHTML = html;
+        el.innerHTML = `
+          <div class="panel-stack">
+            ${doc.bookmarks.map(b => `
+              <div class="list-card is-interactive bookmark-item">
+                <span class="list-card-icon">${getIconSvg('book', 13)}</span>
+                <span class="list-card-title">${escapeHtml(b.title)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
       }
     } else if (tab === 'layers') {
       const pIdx = store.activePageIndex;
       const layers = layerManager.getOrCreateDefaultLayers(pIdx);
-      let html = `
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-          <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">Page ${pIdx + 1} Layers</span>
-          <button id="add-layer-btn" class="header-btn" style="font-size:11px; padding:3px 8px;">
-            ${getIconSvg('plus', 12)} Add Layer
+
+      el.innerHTML = `
+        <div class="panel-subhead">
+          <span>Page ${pIdx + 1} layers</span>
+          <button id="add-layer-btn" class="secondary-btn is-compact">
+            ${getIconSvg('plus', 12)} Add layer
           </button>
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px;">
-      `;
-
-      layers.forEach(l => {
-        html += `
-          <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:var(--bg-surface-elevated); border-radius:6px; border:1px solid var(--border-subtle); font-size:12px;">
-            <span style="font-weight:500;">${l.name}</span>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <button class="layer-toggle-btn" data-layer-id="${l.id}" title="Toggle Visibility" style="background:none; border:none; color:var(--text-secondary); cursor:pointer;">
-                ${l.visible ? '👁️' : '🙈'}
+        <div class="panel-stack">
+          ${layers.map(l => `
+            <div class="list-card">
+              <span class="list-card-title" style="flex:1; min-width:0;">${escapeHtml(l.name)}</span>
+              <button class="icon-btn is-small layer-toggle-btn" data-layer-id="${l.id}"
+                      title="${l.visible ? 'Hide layer' : 'Show layer'}"
+                      aria-pressed="${l.visible ? 'true' : 'false'}">
+                ${getIconSvg(l.visible ? 'eye' : 'eyeOff', 14)}
               </button>
-              <button class="layer-lock-btn" data-layer-id="${l.id}" title="Lock Layer" style="background:none; border:none; color:var(--text-secondary); cursor:pointer;">
-                ${l.locked ? '🔒' : '🔓'}
+              <button class="icon-btn is-small layer-lock-btn" data-layer-id="${l.id}"
+                      title="${l.locked ? 'Unlock layer' : 'Lock layer'}"
+                      aria-pressed="${l.locked ? 'true' : 'false'}">
+                ${getIconSvg(l.locked ? 'lock' : 'unlock', 14)}
               </button>
             </div>
-          </div>
-        `;
-      });
-      html += `</div>`;
-      el.innerHTML = html;
+          `).join('')}
+        </div>
+      `;
 
       el.querySelector('#add-layer-btn')?.addEventListener('click', () => {
         layerManager.addLayer(pIdx);
@@ -176,12 +177,10 @@ export class SidePanelsComponent {
       });
     } else if (tab === 'search') {
       el.innerHTML = `
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          <input type="text" id="pdf-search-input" placeholder="Search text in document..." style="
-            width:100%; padding:8px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-            border-radius:6px; color:var(--text-primary); font-size:12px; outline:none;
-          ">
-          <div id="search-results-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+        <div class="panel-stack">
+          <input type="search" id="pdf-search-input" class="field"
+                 placeholder="Search text, then press Enter" aria-label="Search text in document">
+          <div id="search-results-list" class="panel-stack"></div>
         </div>
       `;
 
@@ -191,7 +190,7 @@ export class SidePanelsComponent {
       searchInput?.addEventListener('keydown', async (e) => {
         if (e.key === 'Enter' && searchInput.value.trim().length > 1) {
           const query = searchInput.value.trim().toLowerCase();
-          resultsList.innerHTML = `<div style="font-size:11px; color:var(--text-muted);">Searching...</div>`;
+          resultsList.innerHTML = `<div class="empty-note">Searching…</div>`;
 
           const matches: Array<{ pageIndex: number; snippet: string }> = [];
 
@@ -206,12 +205,13 @@ export class SidePanelsComponent {
           }
 
           if (matches.length === 0) {
-            resultsList.innerHTML = `<div style="font-size:11px; color:var(--text-muted); padding:10px 0;">No matches found</div>`;
+            resultsList.innerHTML = `<div class="empty-note">No matches found</div>`;
           } else {
             resultsList.innerHTML = matches.map(m => `
-              <div class="search-result-card" data-page="${m.pageIndex}" style="padding:8px; background:var(--bg-surface-elevated); border-radius:6px; border:1px solid var(--border-subtle); cursor:pointer; font-size:11px;">
-                <strong style="color:var(--accent);">Page ${m.pageIndex + 1}</strong>
-                <p style="color:var(--text-secondary); margin-top:2px;">${m.snippet}</p>
+              <div class="list-card is-interactive search-result-card" data-page="${m.pageIndex}"
+                   style="flex-direction:column; align-items:stretch;">
+                <strong class="search-result-page">Page ${m.pageIndex + 1}</strong>
+                <span class="search-result-snippet">${escapeHtml(m.snippet)}</span>
               </div>
             `).join('');
 
@@ -227,20 +227,49 @@ export class SidePanelsComponent {
     } else if (tab === 'history') {
       const historyItems = history.historyList;
       if (historyItems.length === 0) {
-        el.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:20px;">No actions recorded yet</div>`;
+        el.innerHTML = `<div class="empty-note">No actions recorded yet</div>`;
       } else {
-        let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
-        historyItems.reverse().forEach(h => {
-          html += `
-            <div style="padding:8px 10px; background:${h.isCurrent ? 'var(--bg-surface-active)' : 'var(--bg-surface-elevated)'}; border-radius:6px; border:1px solid var(--border-subtle); font-size:12px;">
-              <span style="font-weight:500;">${h.description}</span>
-              <span style="display:block; font-size:10px; color:var(--text-muted); margin-top:2px;">${new Date(h.timestamp).toLocaleTimeString()}</span>
-            </div>
-          `;
-        });
-        html += `</div>`;
-        el.innerHTML = html;
+        el.innerHTML = `
+          <div class="panel-stack">
+            ${historyItems.slice().reverse().map(h => `
+              <div class="list-card ${h.isCurrent ? 'is-current' : ''}" style="flex-direction:column; align-items:stretch;">
+                <span class="list-card-title">${escapeHtml(h.description)}</span>
+                <span class="list-card-meta">${new Date(h.timestamp).toLocaleTimeString()}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
       }
+    }
+  }
+
+  /**
+   * Renders each page preview once and reuses it afterwards, so switching tabs
+   * or moving between pages does not re-rasterise the whole document.
+   */
+  private async fillThumbnails(el: HTMLElement, docId: string, pageCount: number): Promise<void> {
+    for (let idx = 0; idx < pageCount; idx++) {
+      const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
+      if (!frame) continue;
+
+      const key = `${docId}:${idx}`;
+      let src = this._thumbnailCache.get(key);
+
+      if (!src) {
+        const rendered = await pdfEngine.renderThumbnail(idx);
+        if (!rendered) continue;
+        src = rendered.toDataURL('image/png');
+        this._thumbnailCache.set(key, src);
+      }
+
+      // The panel may have been re-rendered while this page was rasterising.
+      if (!frame.isConnected) return;
+
+      const img = document.createElement('img');
+      img.src = src;
+      img.alt = `Page ${idx + 1} preview`;
+      frame.classList.remove('is-loading');
+      frame.prepend(img);
     }
   }
 }

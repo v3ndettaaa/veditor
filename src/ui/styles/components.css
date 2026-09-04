@@ -1,0 +1,937 @@
+/**
+ * Shared control layer.
+ *
+ * Reusable primitives referenced from component markup across the editor and
+ * the browser-action popup, plus the variants that refine the base chrome in
+ * main.css (for example `.settings-dialog` on top of `.modal-dialog`).
+ *
+ * Those variants are written as two-class selectors - `.modal-dialog.settings-dialog`
+ * rather than `.settings-dialog` - so they outrank the single-class base by
+ * specificity. The bundler decides the final order of the emitted stylesheets,
+ * so source order alone cannot be relied on to resolve the conflict.
+ */
+
+/* ---------------------------------------------------------------- Focus ring */
+
+/* One consistent keyboard affordance for every interactive element. */
+.primary-btn:focus-visible,
+.secondary-btn:focus-visible,
+.danger-btn:focus-visible,
+.icon-btn:focus-visible,
+.header-btn:focus-visible,
+.tool-btn:focus-visible,
+.view-btn:focus-visible,
+.doc-tab:focus-visible,
+.doc-tab-add:focus-visible,
+.sidebar-tab-btn:focus-visible,
+.settings-tab-btn:focus-visible,
+.field:focus-visible,
+.field:focus,
+.color-swatch:focus-visible,
+.palette-item:focus-visible,
+.list-card:focus-visible,
+.thumbnail-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* -------------------------------------------------------------- Button family */
+
+.primary-btn,
+.secondary-btn,
+.danger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast),
+              color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.primary-btn {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: 1px solid transparent;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+.primary-btn:hover {
+  background: var(--accent-hover);
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+
+.secondary-btn {
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-medium);
+}
+
+.secondary-btn:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-strong);
+}
+
+/*
+ * Chosen option within a group of secondary buttons (theme, density, cursor,
+ * language, folder icon). A distinct modifier rather than stacking
+ * `.primary-btn`, so the two button skins never fight over the cascade.
+ */
+.secondary-btn.is-selected {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.secondary-btn.is-selected:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+
+.danger-btn {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--accent-border);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.danger-btn:hover {
+  background: var(--danger-subtle);
+  border-color: var(--danger);
+}
+
+.primary-btn:active,
+.secondary-btn:active,
+.danger-btn:active {
+  transform: translateY(1px);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.danger-btn:disabled,
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Square icon-only button, used for close affordances and panel actions. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.icon-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.icon-btn.is-danger:hover {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.icon-btn.is-small {
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  flex-shrink: 0;
+}
+
+.icon-btn[aria-pressed="false"] {
+  color: var(--text-muted);
+}
+
+/* Denser button for panel headers where vertical space is scarce. */
+.secondary-btn.is-compact,
+.primary-btn.is-compact {
+  min-height: var(--control-h-sm);
+  padding: 0 9px;
+  font-size: 11.5px;
+}
+
+/* Prominent call to action, used on the landing dropzone. */
+.primary-btn.is-lg,
+.secondary-btn.is-lg {
+  min-height: 42px;
+  padding: 0 20px;
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+}
+
+.primary-btn.is-lg {
+  font-size: 14px;
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+
+.primary-btn.is-lg:hover,
+.secondary-btn.is-lg:hover {
+  transform: translateY(-1px);
+}
+
+.primary-btn.is-lg:active,
+.secondary-btn.is-lg:active {
+  transform: translateY(0);
+}
+
+/* --------------------------------------------------------------- Form fields */
+
+.field {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 10px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.field::placeholder {
+  color: var(--text-muted);
+}
+
+.field:hover {
+  border-color: var(--border-strong);
+}
+
+/* Native select needs its own arrow once the platform appearance is removed. */
+select.field {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-inline-end: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) calc(50% + 2px), calc(100% - 10px) calc(50% + 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+[dir="rtl"] select.field {
+  background-position: 10px calc(50% + 2px), 15px calc(50% + 2px);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ Keycaps */
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 2px 6px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------- Badges */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.badge.is-accent {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* ------------------------------------------------- Selectable list surfaces */
+
+/*
+ * Shared skin for the rows rendered by the command palette, sidebar search
+ * results, outline entries, layer rows and history entries.
+ */
+.list-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: start;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast),
+              color var(--transition-fast);
+}
+
+.list-card.is-interactive {
+  cursor: pointer;
+}
+
+.list-card.is-interactive:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.list-card.is-current {
+  border-color: var(--accent-border);
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+.list-card-title {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.list-card-meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+/* Centered "nothing here yet" message for empty panels and grids. */
+.empty-note {
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.list-card-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.list-card.is-interactive:hover .list-card-icon {
+  color: var(--accent);
+}
+
+/* Vertical rhythm for stacked panel content. */
+.panel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.search-result-page {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.search-result-snippet {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------- Command palette */
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.palette-item:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.palette-item.is-selected {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.palette-item-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.palette-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.palette-item-category {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.palette-item.is-selected .palette-item-category {
+  color: var(--accent);
+}
+
+.modal-dialog.palette-dialog {
+  max-width: 580px;
+}
+
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.palette-search-icon {
+  display: flex;
+  color: var(--text-muted);
+}
+
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14.5px;
+}
+
+.palette-input::placeholder {
+  color: var(--text-muted);
+}
+
+.palette-list {
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.palette-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.palette-footer .kbd {
+  margin-inline-end: 3px;
+}
+
+/* ------------------------------------------------------- Shortcuts reference */
+
+.modal-dialog.shortcuts-dialog {
+  max-width: 680px;
+}
+
+.panel-body.shortcuts-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-5) var(--space-6);
+  align-content: start;
+}
+
+.shortcuts-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.shortcuts-group-icon {
+  display: flex;
+  color: var(--accent);
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 5px 2px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+/* ------------------------------------------------------------ Settings modal */
+
+.modal-dialog.settings-dialog {
+  max-width: 800px;
+  height: min(620px, 88vh);
+  max-height: 88vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel-header.settings-header {
+  padding: 0 var(--space-5);
+}
+
+/* Panel/dialog header title that pairs an icon with a label. Plain
+   text-only headers just use `.panel-header > span`. */
+.panel-header-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+  width: 196px;
+  padding: var(--space-3) var(--space-2);
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border-inline-end: 1px solid var(--border-subtle);
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-5) var(--space-6);
+  overflow-y: auto;
+}
+
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Section headings space themselves apart from preceding content. */
+.settings-stack > .settings-section-header:not(:first-child) {
+  margin-top: var(--space-2);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.settings-grid.is-quad {
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+}
+
+.secondary-btn.is-block,
+.primary-btn.is-block,
+.danger-btn.is-block {
+  width: 100%;
+  min-height: 38px;
+  /* Long action labels wrap rather than overflowing the button. */
+  white-space: normal;
+  text-align: center;
+}
+
+/* Informational panel inside a settings tab. */
+.settings-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 14px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-callout.is-accent {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+}
+
+.settings-callout-icon {
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.settings-callout strong {
+  color: var(--text-primary);
+}
+
+/* A wrapping row of small choice controls (swatches, icon buttons, chips). */
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.accent-custom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+/* Compact form dialog: header, labelled fields, trailing action row.
+   `.modal-dialog.form-dialog` keeps the two-class specificity described
+   in the header comment so the narrower width wins over the base dialog. */
+.modal-dialog.form-dialog {
+  max-width: 440px;
+}
+
+.form-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Signature pad. Deliberately paper-white in both themes: the stroke is
+   flattened into the PDF, so what you draw must be what you get. */
+.sig-pad {
+  position: relative;
+  width: 100%;
+  height: 180px;
+  overflow: hidden;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  touch-action: none;
+}
+
+.sig-pad-canvas {
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.sig-pad-baseline,
+.sig-pad-hint {
+  position: absolute;
+  pointer-events: none;
+}
+
+.sig-pad-baseline {
+  inset-inline: 20px;
+  bottom: 28px;
+  border-bottom: 1px dashed #cbd5e1;
+}
+
+.sig-pad-hint {
+  inset-inline-start: 20px;
+  bottom: 8px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.sig-pad-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.sig-pad-actions .secondary-btn {
+  flex: 1;
+}
+
+.sig-pad-actions .primary-btn {
+  flex: 2;
+}
+
+/* Button label rendered from a raw identifier (e.g. an icon name). */
+.is-capitalized {
+  text-transform: capitalize;
+}
+
+.prop-label.has-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Language chooser cards */
+.lang-card {
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-4);
+  min-height: 76px;
+}
+
+.lang-card.is-fa {
+  font-family: var(--font-fa);
+}
+
+.lang-card-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.lang-card-desc {
+  font-size: 11.5px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+/* About tab */
+.about-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  text-align: center;
+}
+
+.about-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+  background: var(--accent-gradient);
+  color: var(--accent-contrast);
+  box-shadow: 0 8px 24px var(--accent-glow);
+}
+
+.about-name {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.about-version {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.about-blurb {
+  max-width: 440px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.about-repo-link {
+  padding: 0 22px;
+  min-height: 38px;
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.about-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: 12px;
+}
+
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.about-link:hover {
+  color: var(--accent);
+}
+
+.about-link-divider {
+  color: var(--border-medium);
+}
+
+.about-license {
+  color: var(--text-tertiary);
+}
+
+/* --------------------------------------------------------- Page thumbnails */
+
+/* Two columns keep long documents scannable without a wide sidebar. */
+.thumbnail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: var(--space-2);
+}
+
+.thumbnail-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.thumbnail-card:hover {
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-medium);
+}
+
+.thumbnail-card.is-active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+
+/* Fixed frame so the list does not reflow as pages finish rendering. */
+.thumbnail-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 122 / 158;
+  overflow: hidden;
+  background: #ffffff;
+  border-radius: 4px;
+  box-shadow: var(--shadow-sm);
+}
+
+.thumbnail-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.thumbnail-frame.is-loading::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, #eef1f6 30%, #f8fafc 50%, #eef1f6 70%);
+  background-size: 220% 100%;
+  animation: thumbShimmer 1.1s ease-in-out infinite;
+}
+
+@keyframes thumbShimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.thumbnail-badge {
+  position: absolute;
+  top: 4px;
+  inset-inline-end: 4px;
+  z-index: 1;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.thumbnail-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.thumbnail-card.is-active .thumbnail-label {
+  color: var(--text-primary);
+}

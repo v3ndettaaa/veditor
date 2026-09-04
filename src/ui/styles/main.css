@@ -42,20 +42,29 @@ body {
 
 /* App Header */
 .app-header {
-  height: 48px;
-  background-color: var(--bg-surface);
+  height: var(--header-h);
+  flex-shrink: 0;
+  background: var(--bg-glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
   padding: 0 var(--space-4);
   z-index: 40;
+  transition: opacity var(--transition-normal), transform var(--transition-normal);
 }
 
 .header-left, .header-right {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+.header-left {
+  min-width: 0;
 }
 
 .header-logo {
@@ -66,6 +75,7 @@ body {
   font-size: 15px;
   letter-spacing: -0.02em;
   cursor: pointer;
+  padding-right: var(--space-2);
 }
 
 .header-logo-icon {
@@ -89,17 +99,28 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  min-height: var(--control-h);
+  padding: 0 10px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--control-font);
   font-weight: 500;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
-  max-width: 180px;
+  max-width: 190px;
+}
+
+.doc-tab-icon {
+  display: flex;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.doc-tab.active .doc-tab-icon {
+  color: var(--accent);
 }
 
 .doc-tab:hover {
@@ -123,11 +144,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
   border-radius: var(--radius-full);
   color: var(--text-muted);
   opacity: 0.6;
+  transition: background-color var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .doc-tab-close:hover {
@@ -140,8 +163,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   border-radius: var(--radius-sm);
   background: transparent;
   border: 1px dashed var(--border-medium);
@@ -167,12 +190,20 @@ body {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-secondary);
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
+  min-height: var(--control-h);
+  padding: 0 var(--control-px);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: var(--control-font);
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+.header-language-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .header-btn:hover {
@@ -182,7 +213,7 @@ body {
 
 .header-btn.primary {
   background: var(--accent-gradient);
-  color: #ffffff;
+  color: var(--accent-contrast);
   font-weight: 600;
   box-shadow: 0 2px 8px var(--accent-glow);
 }
@@ -192,13 +223,57 @@ body {
   transform: translateY(-1px);
 }
 
+.header-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Workspace Layout */
 .app-workspace {
   display: flex;
   flex: 1;
-  height: calc(100% - 48px);
+  min-height: 0;
   position: relative;
   overflow: hidden;
+}
+
+/*
+ * Focus mode (F): hides every piece of chrome so only the document remains.
+ * The elements stay in the layout tree - collapsing them would reset the
+ * scroll position - so they are faded out and made non-interactive instead.
+ */
+body.focus-mode .app-header,
+body.focus-mode .floating-toolbar,
+body.focus-mode .app-sidebar,
+body.focus-mode .app-properties-panel {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.focus-mode .app-header {
+  height: 0;
+  overflow: hidden;
+  border-bottom-color: transparent;
+}
+
+body.focus-mode .floating-toolbar {
+  transform: translateX(-50%) translateY(-12px);
+}
+
+/* The view pill stays reachable, but recedes until hovered. */
+body.focus-mode .floating-view-controls {
+  opacity: 0.25;
+}
+
+body.focus-mode .floating-view-controls:hover,
+body.focus-mode .floating-view-controls:focus-within {
+  opacity: 1;
+}
+
+/* "Realistic page shadows" setting, off state */
+body.no-page-shadows .pdf-page-container {
+  box-shadow: none;
+  border: 1px solid var(--border-medium);
 }
 
 /* Left Sidebar */
@@ -220,10 +295,12 @@ body {
 }
 
 .sidebar-header {
-  height: 44px;
+  min-height: calc(var(--header-h) - 10px);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
   padding: 0 var(--space-3);
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -238,11 +315,13 @@ body {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  padding: 6px 8px;
+  padding: 5px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-family: inherit;
+  font-size: 11.5px;
   font-weight: 500;
+  white-space: nowrap;
   transition: all var(--transition-fast);
 }
 
@@ -259,8 +338,9 @@ body {
 
 .sidebar-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--space-3);
+  padding: var(--panel-pad);
 }
 
 /* Viewport Container */
@@ -346,11 +426,18 @@ body {
   gap: 6px;
 }
 
+/* Colour swatches are <button>s so they are reachable by keyboard. The
+   reset below keeps them rendering as pure colour chips, and
+   `background-clip: padding-box` stops the inline background colour from
+   bleeding under the transparent selection border. */
 .color-swatch {
+  appearance: none;
+  padding: 0;
   width: 22px;
   height: 22px;
   border-radius: 50%;
   border: 2px solid transparent;
+  background-clip: padding-box;
   cursor: pointer;
   transition: transform 0.1s ease, border-color 0.1s ease;
   box-shadow: 0 1px 3px rgba(0,0,0,0.25);
@@ -366,6 +453,17 @@ body {
   border-color: #ffffff;
   outline: 2px solid var(--accent);
   transform: scale(1.12);
+}
+
+/* Larger rounded-square swatch used for the accent picker. */
+.color-swatch.is-square {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+
+.color-swatch.is-square:hover {
+  transform: scale(1.08);
 }
 
 .color-picker-wrapper {
@@ -393,6 +491,11 @@ body {
   border-radius: 50%;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
   pointer-events: none;
+}
+
+.color-picker-wrapper.is-lg {
+  width: 26px;
+  height: 26px;
 }
 
 .color-picker-wrapper:hover {
@@ -516,8 +619,14 @@ body {
 }
 
 /* Tool Button Wrapper & Hover Popover Cards */
+
+/* Deliberately NOT a containing block: the hover cards inside it are
+   absolutely positioned against `.floating-toolbar` so they centre under the
+   whole toolbar instead of under one narrow button. Anchoring them to the
+   button pushed the wide cards (the pen card is ~1200px) off-screen for every
+   tool that is not near the middle of the toolbar. `.tool-color-dot` still has
+   a positioned host because `.tool-btn` is `position: relative`. */
 .tool-btn-wrapper {
-  position: relative;
   display: inline-flex;
 }
 
@@ -532,11 +641,33 @@ body {
   pointer-events: none;
 }
 
+/* The options row for the hovered/pinned tool. It reads as a second toolbar
+   row rather than a per-button tooltip: it is centred on the toolbar and never
+   wider than it, so it can't run off-screen the way a button-anchored popover
+   did (the pen card is ~1200px wide, so every tool except the middle few lost
+   controls past the viewport edge).
+
+   The containing block is `.toolbar-main-row` (its `backdrop-filter` makes it
+   one; `.tool-btn-wrapper` is deliberately left unpositioned), so `100%` is
+   the toolbar width. `inset-inline: 0` + `margin-inline: auto` rather than
+   `left: 50%` because shrink-to-fit against a 50% offset would only ever get
+   half the toolbar. Sections wrap onto further lines instead of scrolling, so
+   every control stays reachable without a swipe -- which matters most on the
+   stylus and touch devices this app targets.
+
+   No `overflow` here on purpose: it would clip the ::before hover bridge below
+   and break moving the pointer from the button down into the card. */
 .tool-hover-card {
   position: absolute;
   top: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
+  inset-inline: 0;
+  margin-inline: auto;
+  width: max-content;
+  max-width: 100%;
+  transform: translateY(4px);
+  flex-wrap: wrap;
+  row-gap: 8px;
+  justify-content: center;
   background: var(--bg-glass);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -554,7 +685,7 @@ body {
   white-space: nowrap;
 }
 
-/* Invisible bridge so moving cursor into popover doesn't drop hover */
+/* Invisible bridge so moving cursor into the card doesn't drop hover */
 .tool-hover-card::before {
   content: '';
   position: absolute;
@@ -564,27 +695,13 @@ body {
   height: 14px;
 }
 
-/* Subtle top arrow for hover card */
-.tool-hover-card::after {
-  content: '';
-  position: absolute;
-  top: -6px;
-  left: 50%;
-  transform: translateX(-50%) rotate(45deg);
-  width: 10px;
-  height: 10px;
-  background: var(--bg-glass);
-  border-top: 1px solid var(--border-medium);
-  border-left: 1px solid var(--border-medium);
-}
-
 .tool-btn-wrapper:hover .tool-hover-card,
 .tool-btn-wrapper.is-pinned .tool-hover-card,
 .tool-btn-wrapper:focus-within .tool-hover-card,
 .tool-hover-card:hover {
   opacity: 1;
   pointer-events: auto;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 .toolbar-group {
@@ -604,8 +721,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: calc(var(--control-h) + 2px);
+  height: calc(var(--control-h) + 2px);
   border-radius: var(--radius-sm);
   background: transparent;
   border: none;
@@ -622,7 +739,7 @@ body {
 
 .tool-btn.active {
   background: var(--accent);
-  color: #ffffff;
+  color: var(--accent-contrast);
   box-shadow: 0 2px 8px var(--accent-glow);
 }
 
@@ -724,8 +841,9 @@ body.invert-pdf-document .pdf-page-canvas {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  position: relative;
+  width: calc(var(--control-h) - 2px);
+  height: calc(var(--control-h) - 2px);
   border-radius: var(--radius-full);
   background: transparent;
   border: none;
@@ -734,9 +852,20 @@ body.invert-pdf-document .pdf-page-canvas {
   transition: all var(--transition-fast);
 }
 
-.view-btn:hover {
+.view-btn:hover:not(:disabled) {
   background: var(--bg-surface-hover);
   color: var(--text-primary);
+}
+
+.view-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Toggle-style view buttons (OLED inversion) */
+.view-btn.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .view-zoom-text {
@@ -760,39 +889,6 @@ body.invert-pdf-document .pdf-page-canvas {
   color: var(--text-secondary);
 }
 
-.empty-card {
-  background: var(--bg-surface);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  padding: var(--space-8);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  max-width: 420px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.empty-card:hover {
-  border-color: var(--accent);
-  background: var(--bg-surface-elevated);
-  transform: translateY(-2px);
-}
-
-.empty-card-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-top: var(--space-3);
-  margin-bottom: var(--space-1);
-}
-
-.empty-card-desc {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
 /* Properties Panel */
 .app-properties-panel {
   width: 260px;
@@ -812,10 +908,12 @@ body.invert-pdf-document .pdf-page-canvas {
 }
 
 .panel-header {
-  height: 44px;
+  min-height: calc(var(--header-h) - 10px);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
   padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border-subtle);
   font-size: 13px;
@@ -823,7 +921,9 @@ body.invert-pdf-document .pdf-page-canvas {
 }
 
 .panel-body {
-  padding: var(--space-4);
+  flex: 1;
+  min-height: 0;
+  padding: var(--panel-pad);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -842,6 +942,53 @@ body.invert-pdf-document .pdf-page-canvas {
   letter-spacing: 0.04em;
   color: var(--text-muted);
   font-weight: 600;
+}
+
+.prop-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.prop-value {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.prop-slider {
+  width: 100%;
+  cursor: pointer;
+}
+
+.prop-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.prop-color-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.prop-btn-row {
+  display: flex;
+  gap: 4px;
+}
+
+.prop-btn-row > * {
+  flex: 1;
+}
+
+/* Pin destructive actions to the bottom of the inspector. */
+.prop-actions {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* Modals & Command Palette */
@@ -1025,16 +1172,60 @@ body.invert-pdf-document .pdf-page-canvas {
 }
 
 .toast {
-  background: var(--bg-surface-elevated);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, 90vw);
+  background: var(--bg-glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--border-medium);
   color: var(--text-primary);
-  padding: 8px 16px;
+  padding: 9px 15px;
   border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 500;
   box-shadow: var(--shadow-md);
   pointer-events: auto;
-  animation: slideUp 0.2s ease;
+  animation: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity var(--transition-normal), transform var(--transition-normal);
+}
+
+.toast.is-leaving {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+
+.toast-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.toast-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast.is-info .toast-icon { color: var(--accent); }
+.toast.is-success .toast-icon { color: var(--success); }
+.toast.is-error .toast-icon { color: var(--danger); }
+
+.toast.is-success { border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+.toast.is-error { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+
+/* Indeterminate spinner for in-flight operations (export, load, fetch). */
+.toast-spinner {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: toastSpin 0.7s linear infinite;
+}
+
+@keyframes toastSpin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes slideUp {

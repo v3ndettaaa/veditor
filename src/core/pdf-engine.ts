@@ -320,6 +320,44 @@ export class PDFEngine {
   }
 
   /**
+   * Renders a small preview of a page for the sidebar thumbnail list.
+   *
+   * Deliberately independent of `renderPageToCanvas`: that method owns the
+   * shared page-render task map and the full-resolution bitmap cache, so
+   * reusing it here would let a thumbnail cancel a visible page's render and
+   * would evict high-resolution bitmaps in favour of tiny ones.
+   */
+  public async renderThumbnail(pageIndex: number, maxWidth = 120, maxHeight = 156): Promise<HTMLCanvasElement | null> {
+    if (!this._pdfDoc) return null;
+
+    const page = this._pageCache.get(pageIndex) || await this._pdfDoc.getPage(pageIndex + 1);
+    const base = page.getViewport({ scale: 1, rotation: page.rotate || 0 });
+    const scale = Math.min(maxWidth / base.width, maxHeight / base.height);
+    const viewport = page.getViewport({ scale, rotation: page.rotate || 0 });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    try {
+      await page.render({ canvas, canvasContext: ctx, viewport, intent: 'display' }).promise;
+    } catch (err: any) {
+      if (err?.name !== 'RenderingCancelledException') {
+        console.error(`Error rendering thumbnail ${pageIndex}:`, err);
+      }
+      return null;
+    }
+
+    return canvas;
+  }
+
+  /**
    * Extracts text items for search and selection.
    */
   public async getPageText(pageIndex: number): Promise<{ text: string; items: any[] }> {

@@ -265,7 +265,6 @@ export interface AppSettings {
   smoothScroll: boolean;
   invertDocumentOled: boolean;
   retinaRendering: boolean;
-  drawingCursor: DrawingCursorType;
 }
 
 export interface PDFFolder {

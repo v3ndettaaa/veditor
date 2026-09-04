@@ -40,8 +40,9 @@ export class HeaderComponent {
         <div class="document-tabs-bar" ${tabs.length === 0 ? 'style="display:none;"' : ''}>
           ${tabs.map(tab => `
             <div class="doc-tab ${activeDoc?.id === tab.id ? 'active' : ''}" data-tab-id="${tab.id}" title="${tab.name}">
+              <span class="doc-tab-icon">${getIconSvg('fileText', 13)}</span>
               <span class="doc-tab-title">${tab.name}</span>
-              <span class="doc-tab-close" data-close-tab="${tab.id}" title="Close Tab">×</span>
+              <span class="doc-tab-close" data-close-tab="${tab.id}" title="Close Tab">${getIconSvg('close', 11)}</span>
             </div>
           `).join('')}
           <button id="header-add-tab-btn" class="doc-tab-add" title="Open PDF in new tab">
@@ -68,11 +69,12 @@ export class HeaderComponent {
         </button>
 
         <button id="header-lang-btn" class="header-btn" title="Switch Language">
-          <span style="font-weight:700; font-size:12px;">${lang === 'en' ? 'FA' : 'EN'}</span>
+          ${getIconSvg('globe', 15)}
+          <span class="header-language-label">${lang === 'en' ? 'FA' : 'EN'}</span>
         </button>
 
         <button id="header-theme-btn" class="header-btn" title="Toggle Dark/Light Mode">
-          ${theme === 'dark' ? '☀️' : '🌙'}
+          ${getIconSvg(theme === 'dark' ? 'sun' : 'moon', 15)}
         </button>
 
         <button id="header-settings-btn" class="header-btn" title="${t('settings.title')}">
@@ -97,12 +99,12 @@ export class HeaderComponent {
     this._container.querySelector('#header-export-btn')?.addEventListener('click', async () => {
       if (!activeDoc) return;
       try {
-        showToast('Exporting high-resolution PDF...');
+        showToast('Exporting high-resolution PDF…', 'progress');
         const bytes = await pdfExporter.exportPDF({ flatten: true, dpi: 150, applyRedactions: true });
         await pdfExporter.saveToFile(bytes, activeDoc.name || 'annotated.pdf');
-        showToast(t('toast.exported'));
+        showToast(t('toast.exported'), 'success');
       } catch (err: any) {
-        showToast(`Export failed: ${err.message}`);
+        showToast(`Export failed: ${err.message}`, 'error');
       }
     });
 
@@ -111,16 +113,11 @@ export class HeaderComponent {
     });
 
     this._container.querySelector('#header-lang-btn')?.addEventListener('click', () => {
-      const next = lang === 'en' ? 'fa' : 'en';
-      store.updateAppSettings({ language: next });
-      document.documentElement.setAttribute('dir', next === 'fa' ? 'rtl' : 'ltr');
-      document.documentElement.setAttribute('lang', next);
+      store.updateAppSettings({ language: lang === 'en' ? 'fa' : 'en' });
     });
 
     this._container.querySelector('#header-theme-btn')?.addEventListener('click', () => {
-      const next = theme === 'dark' ? 'light' : 'dark';
-      store.updateAppSettings({ theme: next });
-      document.body.className = `theme-${next}`;
+      store.updateAppSettings({ theme: theme === 'dark' ? 'light' : 'dark' });
     });
 
     this._container.querySelector('#header-settings-btn')?.addEventListener('click', () => {

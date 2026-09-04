@@ -66,41 +66,52 @@ export class LandingPageComponent {
 
     this._container.innerHTML = `
       <div class="landing-container">
-        <!-- Hero Section -->
-        <div class="landing-hero">
-          <div class="landing-badge">
-            <span class="landing-badge-dot"></span>
-            veditor v1.0 • Offline & Private
+        <div class="landing-intro">
+          <!-- Hero Section -->
+          <div class="landing-hero">
+            <div class="landing-badge">
+              ${getIconSvg('shieldCheck', 14)}
+              Private by design • Works offline
+            </div>
+            <h1 class="landing-title">Your PDFs.<br><span>Your ideas.</span></h1>
+            <p class="landing-subtitle">
+              Read, annotate, sign, and organize documents in a focused workspace built for pen, mouse, and touch.
+            </p>
+            <div class="landing-feature-list" aria-label="Key features">
+              <span>${getIconSvg('zap', 14)} Fast local rendering</span>
+              <span>${getIconSvg('pen', 14)} Pressure-sensitive ink</span>
+              <span>${getIconSvg('shieldCheck', 14)} No uploads</span>
+            </div>
           </div>
-          <h1 class="landing-title">Precision PDF Annotation & Freehand Ink</h1>
-          <p class="landing-subtitle">
-            Zero cloud telemetry, real stylus pressure curves, vector-perfect editing, and ultra-fast double-buffered rendering designed for large documents.
-          </p>
-        </div>
 
-        <!-- Interactive Dropzone & Action Center -->
-        <div class="landing-dropzone" id="landing-dropzone">
-          <div class="dropzone-icon-wrapper">
-            ${getIconSvg('upload', 32)}
-          </div>
-          <div class="dropzone-prompt">Drop your PDF file here, or click to browse</div>
-          <div class="dropzone-hint">Supports all standard PDF documents, textbooks, and forms • 100% Client-Side</div>
-          
-          <div class="dropzone-actions" id="dropzone-actions-group">
-            <button class="landing-btn-primary" id="landing-open-btn">
-              ${getIconSvg('folder', 16)}
-              Open Local PDF
-            </button>
+          <!-- Interactive Dropzone & Action Center -->
+          <div class="landing-dropzone" id="landing-dropzone">
+            <div class="dropzone-icon-wrapper">
+              ${getIconSvg('fileText', 28)}
+              <span class="dropzone-icon-plus">${getIconSvg('plus', 12, 2.5)}</span>
+            </div>
+            <div class="dropzone-prompt">Open a PDF to get started</div>
+            <div class="dropzone-hint">Drop a file here or choose one from your device</div>
+            <div class="dropzone-actions" id="dropzone-actions-group">
+              <button class="primary-btn is-lg" id="landing-open-btn">
+                ${getIconSvg('folder', 16)}
+                Choose PDF
+              </button>
 
-            <button class="landing-btn-secondary" id="landing-sample-btn" title="Try veditor immediately with an interactive sample PDF">
-              ${getIconSvg('eye', 16)}
-              Try Sample PDF
-            </button>
+              <button class="secondary-btn is-lg" id="landing-sample-btn" title="Try veditor immediately with an interactive sample PDF">
+                ${getIconSvg('sparkles', 16)}
+                Try sample
+              </button>
 
-            <button class="landing-btn-secondary" id="landing-notebook-btn" title="Create a fresh lined notebook">
-              ${getIconSvg('pen', 16)}
-              New Notebook
-            </button>
+              <button class="secondary-btn is-lg" id="landing-notebook-btn" title="Create a fresh lined notebook">
+                ${getIconSvg('pen', 16)}
+                New notebook
+              </button>
+            </div>
+            <div class="dropzone-privacy">
+              ${getIconSvg('shieldCheck', 12)}
+              Files never leave this device
+            </div>
           </div>
         </div>
 
@@ -108,8 +119,11 @@ export class LandingPageComponent {
         <div class="landing-section">
           <div class="landing-section-header">
             <div class="landing-section-title">
-              ${getIconSvg('folder', 18)}
-              <span>My PDF Documents & Categories</span>
+              <span class="landing-section-icon">${getIconSvg('folder', 17)}</span>
+              <div>
+                <span>Your library</span>
+                <small>Pick up where you left off</small>
+              </div>
             </div>
           </div>
 
@@ -169,7 +183,7 @@ export class LandingPageComponent {
               return `
                 <div class="recent-card" data-recent-id="${doc.id}">
                   <div class="recent-card-icon" style="${docFolder ? `background:${docFolder.color}22; color:${docFolder.color};` : ''}">
-                    ${getIconSvg(docFolder ? docFolder.icon : 'folder', 20)}
+                    ${getIconSvg(docFolder ? docFolder.icon : 'fileText', 20)}
                   </div>
                   <div class="recent-card-info">
                     <div class="recent-card-name" title="${doc.name}">${doc.name}</div>
@@ -204,53 +218,57 @@ export class LandingPageComponent {
         <!-- Create Folder Modal -->
         ${this._showCreateFolderModal ? `
           <div class="modal-overlay" id="new-folder-modal-overlay">
-            <div class="modal-dialog" style="max-width:440px; padding:20px; display:flex; flex-direction:column; gap:16px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div style="font-weight:700; font-size:16px; display:flex; align-items:center; gap:8px;">
-                  ${getIconSvg('folderPlus', 18)}
-                  <span>Create Category Folder</span>
-                </div>
-                <button id="close-folder-modal-btn" class="header-btn" style="padding:4px;">
+            <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="Create category folder">
+              <div class="panel-header">
+                <span class="panel-header-title">
+                  ${getIconSvg('folderPlus', 16)}
+                  Create Category Folder
+                </span>
+                <button id="close-folder-modal-btn" class="icon-btn is-small" title="Close" aria-label="Close">
                   ${getIconSvg('close', 14)}
                 </button>
               </div>
 
-              <div>
-                <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Folder Name</label>
-                <input type="text" id="folder-name-input" placeholder="e.g. Mathematics, Contracts, Research" style="
-                  width:100%; padding:9px 12px; background:var(--bg-surface-elevated); border:1px solid var(--border-medium);
-                  border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:13px; outline:none;
-                " autofocus />
-              </div>
-
-              <div>
-                <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Folder Color</label>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  ${folderColors.map(color => `
-                    <div class="color-swatch ${this._selectedFolderColor === color ? 'active' : ''}" 
-                         data-pick-folder-color="${color}"
-                         style="background-color:${color}; width:28px; height:28px; border-radius:6px; cursor:pointer;" title="${color}"></div>
-                  `).join('')}
+              <div class="form-dialog-body">
+                <div class="form-field">
+                  <label class="form-label" for="folder-name-input">Folder Name</label>
+                  <input type="text" id="folder-name-input" class="field"
+                         placeholder="e.g. Mathematics, Contracts, Research" autofocus />
                 </div>
-              </div>
 
-              <div>
-                <label style="display:block; font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:6px;">Folder Icon</label>
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  ${folderIcons.map(icon => `
-                    <button class="secondary-btn ${this._selectedFolderIcon === icon ? 'primary-btn' : ''}" 
-                            data-pick-folder-icon="${icon}"
-                            style="padding:8px 12px; display:flex; align-items:center; gap:6px;">
-                      ${getIconSvg(icon, 15)}
-                      <span style="text-transform:capitalize;">${icon}</span>
-                    </button>
-                  `).join('')}
+                <div class="form-field">
+                  <span class="form-label">Folder Color</span>
+                  <div class="chip-row">
+                    ${folderColors.map(color => `
+                      <button type="button"
+                              class="color-swatch is-square ${this._selectedFolderColor === color ? 'active' : ''}"
+                              data-pick-folder-color="${color}"
+                              style="background-color:${color};"
+                              title="${color}" aria-label="Colour ${color}"
+                              aria-pressed="${this._selectedFolderColor === color}"></button>
+                    `).join('')}
+                  </div>
                 </div>
-              </div>
 
-              <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px;">
-                <button id="cancel-folder-btn" class="secondary-btn" style="padding:8px 16px;">Cancel</button>
-                <button id="submit-folder-btn" class="primary-btn" style="padding:8px 18px;">Create Folder</button>
+                <div class="form-field">
+                  <span class="form-label">Folder Icon</span>
+                  <div class="chip-row">
+                    ${folderIcons.map(icon => `
+                      <button type="button"
+                              class="secondary-btn is-compact is-capitalized ${this._selectedFolderIcon === icon ? 'is-selected' : ''}"
+                              data-pick-folder-icon="${icon}"
+                              aria-pressed="${this._selectedFolderIcon === icon}">
+                        ${getIconSvg(icon, 15)}
+                        ${icon}
+                      </button>
+                    `).join('')}
+                  </div>
+                </div>
+
+                <div class="form-actions">
+                  <button id="cancel-folder-btn" class="secondary-btn">Cancel</button>
+                  <button id="submit-folder-btn" class="primary-btn">Create Folder</button>
+                </div>
               </div>
             </div>
           </div>

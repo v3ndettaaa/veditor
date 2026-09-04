@@ -2,11 +2,26 @@
 @import "@fontsource/inter/index.css";
 @import "@fontsource/vazirmatn/index.css";
 
+/**
+ * Design tokens - the single source of truth for veditor's visual language.
+ *
+ * Layers, outermost first:
+ *   1. :root          - theme-independent primitives (type, space, radii, motion)
+ *                       and --accent, the one place the brand hue is stored.
+ *   2. body.theme-*   - neutral palette, shadows and accent mixes per theme.
+ *   3. body.density-* - control sizing.
+ *
+ * --accent is deliberately NOT redeclared by the theme blocks: `applyAppearance`
+ * in src/ui/theme.ts overrides it on the document element from the user's saved
+ * preference, and every accent-derived token below mixes from it. Redeclaring it
+ * on `body` would shadow that override for the whole subtree.
+ */
 :root {
   /* Fonts */
   --font-en: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-fa: "Vazirmatn", -apple-system, BlinkMacSystemFont, Tahoma, sans-serif;
   --font-family: var(--font-en);
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   /* Spacing */
   --space-1: 4px;
@@ -21,11 +36,23 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --radius-xl: 20px;
   --radius-full: 9999px;
 
   /* Transitions */
   --transition-fast: 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   --transition-normal: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Brand hue. Overridden at runtime from AppSettings.accentColor. */
+  --accent: #6366f1;
+
+  /* Control sizing (comfortable default; see body.density-compact) */
+  --control-h: 32px;
+  --control-h-sm: 26px;
+  --control-px: 10px;
+  --control-font: 12px;
+  --header-h: 54px;
+  --panel-pad: var(--space-4);
 }
 
 /* Dark Theme (Default) - Pure Obsidian / Pitch Black */
@@ -44,12 +71,21 @@ body.theme-dark, :root {
   --text-primary: #f5f5f7;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
+  --text-tertiary: #71717a;
   --text-inverse: #09090b;
 
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
-  --accent-glow: rgba(59, 130, 246, 0.25);
-  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  --danger: #f87171;
+  --danger-subtle: rgba(248, 113, 113, 0.14);
+  --success: #34d399;
+  --warning: #fbbf24;
+
+  /* Accent mixes - all derived from --accent so a new hue restyles the whole UI */
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, white);
+  --accent-subtle: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 28%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent) 45%, transparent);
+  --accent-contrast: #ffffff;
+  --accent-gradient: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 62%, #a855f7) 100%);
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.6);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.7);
@@ -58,6 +94,8 @@ body.theme-dark, :root {
 
   --pdf-canvas-bg: #09090b;
   --canvas-page-shadow: 0 12px 36px rgba(0, 0, 0, 0.9);
+
+  color-scheme: dark;
 }
 
 /* Light Theme */
@@ -76,12 +114,21 @@ body.theme-light {
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #94a3b8;
+  --text-tertiary: #64748b;
   --text-inverse: #ffffff;
 
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-glow: rgba(79, 70, 229, 0.25);
-  --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  --danger: #dc2626;
+  --danger-subtle: rgba(220, 38, 38, 0.1);
+  --success: #059669;
+  --warning: #d97706;
+
+  /* Light theme darkens rather than lightens on hover, and needs weaker tints */
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, black);
+  --accent-subtle: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent) 38%, transparent);
+  --accent-contrast: #ffffff;
+  --accent-gradient: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 55%, #7c3aed) 100%);
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.1);
@@ -90,9 +137,38 @@ body.theme-light {
 
   --pdf-canvas-bg: #e2e8f0;
   --canvas-page-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  color-scheme: light;
+}
+
+/* Compact density - drives every control through the sizing tokens above */
+body.density-compact {
+  --control-h: 27px;
+  --control-h-sm: 22px;
+  --control-px: 8px;
+  --control-font: 11.5px;
+  --header-h: 44px;
+  --panel-pad: var(--space-3);
 }
 
 /* RTL Language Token Override */
 [dir="rtl"] {
   --font-family: var(--font-fa);
+}
+
+/* Respect the OS "reduce motion" preference across the whole UI */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0.01ms linear;
+    --transition-normal: 0.01ms linear;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

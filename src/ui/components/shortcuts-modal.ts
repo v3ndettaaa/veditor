@@ -20,45 +20,83 @@ export class ShortcutsModalComponent {
       return;
     }
 
-    const shortcuts = [
-      { key: 'V', desc: 'Select & Transform Tool' },
-      { key: 'P', desc: 'Freehand Pen Tool' },
-      { key: 'H', desc: 'Highlighter Tool' },
-      { key: 'E', desc: 'Eraser Tool' },
-      { key: 'R', desc: 'Rectangle Shape' },
-      { key: 'O', desc: 'Ellipse Shape' },
-      { key: 'L', desc: 'Line Tool' },
-      { key: 'A', desc: 'Arrow Tool' },
-      { key: 'T', desc: 'Text Box' },
-      { key: 'M', desc: 'Stamp / Image' },
-      { key: 'C', desc: 'Callout Bubble' },
-      { key: 'K', desc: 'Signature Tool' },
-      { key: 'X', desc: 'Redaction Tool' },
-      { key: 'Z', desc: 'Laser Pointer' },
-      { key: 'Ctrl + K / Cmd + K', desc: 'Command Palette' },
-      { key: 'Ctrl + Z / Cmd + Z', desc: 'Undo' },
-      { key: 'Ctrl + Shift + Z', desc: 'Redo' },
-      { key: 'Ctrl + + / -', desc: 'Zoom In / Out' },
-      { key: '0', desc: 'Fit to Width' },
-      { key: 'F', desc: 'Toggle Focus Mode' },
-      { key: '?', desc: 'Show Shortcuts Modal' }
+    // Grouped so the reference scans by purpose rather than as one long list.
+    const groups: Array<{ title: string; icon: string; items: Array<{ key: string; desc: string }> }> = [
+      {
+        title: 'Tools',
+        icon: 'pen',
+        items: [
+          { key: 'V', desc: 'Select & transform' },
+          { key: 'P', desc: 'Freehand pen' },
+          { key: 'H', desc: 'Highlighter' },
+          { key: 'E', desc: 'Eraser' },
+          { key: 'T', desc: 'Text box' },
+          { key: 'M', desc: 'Stamp / image' },
+          { key: 'C', desc: 'Callout bubble' },
+          { key: 'K', desc: 'Signature' },
+          { key: 'X', desc: 'Redaction' },
+          { key: 'Z', desc: 'Laser pointer' }
+        ]
+      },
+      {
+        title: 'Shapes',
+        icon: 'rectangle',
+        items: [
+          { key: 'R', desc: 'Rectangle' },
+          { key: 'O', desc: 'Ellipse' },
+          { key: 'L', desc: 'Line' },
+          { key: 'A', desc: 'Arrow' },
+          { key: 'G', desc: 'Polygon' }
+        ]
+      },
+      {
+        title: 'View & navigation',
+        icon: 'eye',
+        items: [
+          { key: 'Ctrl / Cmd  +', desc: 'Zoom in' },
+          { key: 'Ctrl / Cmd  −', desc: 'Zoom out' },
+          { key: '0', desc: 'Fit to width' },
+          { key: 'F', desc: 'Toggle focus mode' }
+        ]
+      },
+      {
+        title: 'Editing & app',
+        icon: 'command',
+        items: [
+          { key: 'Ctrl / Cmd  Z', desc: 'Undo' },
+          { key: 'Ctrl / Cmd  ⇧ Z', desc: 'Redo' },
+          { key: 'Ctrl / Cmd  K', desc: 'Command palette' },
+          { key: '?', desc: 'This reference' },
+          { key: 'Esc', desc: 'Dismiss / deselect' }
+        ]
+      }
     ];
 
     this._container.innerHTML = `
       <div class="modal-overlay" id="shortcuts-overlay">
-        <div class="modal-dialog" style="max-width:540px;">
+        <div class="modal-dialog shortcuts-dialog" role="dialog" aria-modal="true" aria-label="${t('shortcuts.title')}">
           <div class="panel-header">
             <span>${t('shortcuts.title')}</span>
-            <button id="close-shortcuts-btn" class="header-btn" style="padding:4px;">
+            <button id="close-shortcuts-btn" class="icon-btn" title="Close" aria-label="Close">
               ${getIconSvg('close', 14)}
             </button>
           </div>
-          <div class="panel-body" style="display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:16px;">
-            ${shortcuts.map(s => `
-              <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; background:var(--bg-surface-elevated); border-radius:6px; border:1px solid var(--border-subtle); font-size:12px;">
-                <span style="color:var(--text-secondary);">${s.desc}</span>
-                <span style="font-family:monospace; background:var(--bg-surface-hover); color:var(--text-primary); padding:2px 6px; border-radius:4px; font-weight:600; font-size:11px;">${s.key}</span>
-              </div>
+          <div class="panel-body shortcuts-body">
+            ${groups.map(g => `
+              <section class="shortcuts-group">
+                <h3 class="shortcuts-group-title">
+                  <span class="shortcuts-group-icon">${getIconSvg(g.icon, 13)}</span>
+                  ${g.title}
+                </h3>
+                <div class="panel-stack">
+                  ${g.items.map(s => `
+                    <div class="shortcut-row">
+                      <span>${s.desc}</span>
+                      <span class="kbd">${s.key}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </section>
             `).join('')}
           </div>
         </div>
@@ -69,6 +107,8 @@ export class ShortcutsModalComponent {
     overlay?.addEventListener('click', (e) => {
       if (e.target === overlay) store.setShortcutsModalOpen(false);
     });
+
+    this._container.querySelector<HTMLElement>('#close-shortcuts-btn')?.focus();
 
     this._container.querySelector('#close-shortcuts-btn')?.addEventListener('click', () => {
       store.setShortcutsModalOpen(false);

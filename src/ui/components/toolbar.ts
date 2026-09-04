@@ -125,8 +125,10 @@ export class ToolbarComponent {
                 <span class="sub-row-label">Ink</span>
                 <div class="color-swatches-group">
                   ${penColors.map(c => `
-                    <div class="color-swatch pen-swatch ${s.penColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}" 
-                         style="background-color:${c};" data-pen-color="${c}"></div>
+                    <button type="button" class="color-swatch pen-swatch ${s.penColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+                            style="background-color:${c};" data-pen-color="${c}"
+                            title="Ink ${c}" aria-label="Ink ${c}"
+                            aria-pressed="${s.penColor.toLowerCase() === c.toLowerCase()}"></button>
                   `).join('')}
                   <div class="color-picker-wrapper" title="Custom color picker">
                     <input type="color" id="hover-pen-color-picker" class="color-picker-input" value="${s.penColor}">
@@ -184,8 +186,10 @@ export class ToolbarComponent {
                 <span class="sub-row-label">Tint</span>
                 <div class="color-swatches-group">
                   ${hlColors.map(c => `
-                    <div class="color-swatch hl-swatch ${s.highlighterColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}" 
-                         style="background-color:${c}; opacity:0.85;" data-hl-color="${c}"></div>
+                    <button type="button" class="color-swatch hl-swatch ${s.highlighterColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+                            style="background-color:${c}; opacity:0.85;" data-hl-color="${c}"
+                            title="Highlighter ${c}" aria-label="Highlighter ${c}"
+                            aria-pressed="${s.highlighterColor.toLowerCase() === c.toLowerCase()}"></button>
                   `).join('')}
                   <div class="color-picker-wrapper" title="Custom highlighter color">
                     <input type="color" id="hover-hl-color-picker" class="color-picker-input" value="${s.highlighterColor}">
@@ -326,8 +330,10 @@ export class ToolbarComponent {
                 <span class="sub-row-label">Color</span>
                 <div class="color-swatches-group">
                   ${textColors.map(c => `
-                    <div class="color-swatch text-swatch ${s.textColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}" 
-                         style="background-color:${c};" data-text-color="${c}"></div>
+                    <button type="button" class="color-swatch text-swatch ${s.textColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+                            style="background-color:${c};" data-text-color="${c}"
+                            title="Text ${c}" aria-label="Text ${c}"
+                            aria-pressed="${s.textColor.toLowerCase() === c.toLowerCase()}"></button>
                   `).join('')}
                   <div class="color-picker-wrapper" title="Custom text color">
                     <input type="color" id="hover-text-color-picker" class="color-picker-input" value="${s.textColor}">
@@ -624,8 +630,10 @@ export class ToolbarComponent {
         <span class="sub-row-label">Stroke</span>
         <div class="color-swatches-group">
           ${shapeColors.map(c => `
-            <div class="color-swatch shape-swatch ${s.shapeColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}" 
-                 style="background-color:${c};" data-shape-color="${c}"></div>
+            <button type="button" class="color-swatch shape-swatch ${s.shapeColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+                    style="background-color:${c};" data-shape-color="${c}"
+                    title="Stroke ${c}" aria-label="Stroke ${c}"
+                    aria-pressed="${s.shapeColor.toLowerCase() === c.toLowerCase()}"></button>
           `).join('')}
           <div class="color-picker-wrapper" title="Custom stroke color">
             <input type="color" class="color-picker-input shape-color-picker" value="${s.shapeColor}">
@@ -660,8 +668,10 @@ export class ToolbarComponent {
           <div class="color-swatches-group">
             <button class="mode-toggle-btn ${s.shapeFillColor === 'transparent' ? 'active' : ''}" data-shape-fill="transparent" title="No Fill">None</button>
             ${shapeColors.map(c => `
-              <div class="color-swatch shape-fill-swatch ${s.shapeFillColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}" 
-                   style="background-color:${c};" data-shape-fill-color="${c}" title="Fill with ${c}"></div>
+              <button type="button" class="color-swatch shape-fill-swatch ${s.shapeFillColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+                      style="background-color:${c};" data-shape-fill-color="${c}"
+                      title="Fill with ${c}" aria-label="Fill with ${c}"
+                      aria-pressed="${s.shapeFillColor.toLowerCase() === c.toLowerCase()}"></button>
             `).join('')}
             <div class="color-picker-wrapper" title="Custom Fill Color">
               <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
@@ -763,7 +773,6 @@ export class ToolbarComponent {
         const cursor = el.getAttribute('data-drawing-cursor') as any;
         if (cursor) {
           store.updateToolSettings({ drawingCursor: cursor });
-          store.updateAppSettings({ drawingCursor: cursor });
           this.updateIndicators();
         }
       });

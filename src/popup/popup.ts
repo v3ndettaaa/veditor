@@ -1,6 +1,12 @@
 import { extensionApi } from '../utils/browser-compat';
+import { getIconSvg } from '../utils/icons';
+import { escapeHtml } from '../utils/html';
+import { applySavedAppearance } from '../ui/theme';
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Match the editor's saved theme and accent (same origin, same localStorage).
+  applySavedAppearance();
+
   const openAppBtn = document.getElementById('open-app-btn');
   const openFileBtn = document.getElementById('open-file-btn');
   const fileInput = document.getElementById('file-input') as HTMLInputElement;
@@ -30,10 +36,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  shortcutsLink?.addEventListener('click', () => {
+  const openShortcuts = () => {
     const url = extensionApi.runtime.getURL('index.html?showShortcuts=true');
     extensionApi.tabs.create({ url });
     window.close();
+  };
+
+  shortcutsLink?.addEventListener('click', openShortcuts);
+  shortcutsLink?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openShortcuts();
+    }
   });
 
   // Load recent files list
@@ -49,8 +63,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           const li = document.createElement('li');
           li.className = 'recent-item';
           li.innerHTML = `
-            <span class="recent-name" title="${doc.name}">${doc.name}</span>
-            <span style="font-size:11px; color:var(--text-secondary);">${doc.pageCount ? doc.pageCount + 'p' : ''}</span>
+            <span class="recent-item-icon">${getIconSvg('fileText', 14)}</span>
+            <span class="recent-name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</span>
+            <span class="recent-pages">${doc.pageCount ? doc.pageCount + 'p' : ''}</span>
           `;
           li.addEventListener('click', () => {
             const url = extensionApi.runtime.getURL(`index.html?docId=${doc.id}`);

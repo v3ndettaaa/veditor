@@ -23,6 +23,7 @@ import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
+import { initAppearanceSync } from './ui/theme';
 import { history } from './core/history';
 import { DocumentSession } from './core/types';
 
@@ -59,10 +60,9 @@ class VeditorApp {
   }
 
   private async init() {
-    // 1. Initialize UI theme & language
-    document.body.className = `theme-${store.appSettings.theme}`;
-    document.documentElement.setAttribute('dir', store.appSettings.language === 'fa' ? 'rtl' : 'ltr');
-    document.documentElement.setAttribute('lang', store.appSettings.language);
+    // 1. Reflect saved theme, accent, density, direction & focus mode onto the
+    //    document, and keep them in sync for the rest of the session.
+    initAppearanceSync();
 
     // 2. Initialize Components
     new HeaderComponent(
@@ -182,7 +182,7 @@ class VeditorApp {
   }
 
   public async loadPDF(name: string, bytes: Uint8Array, existingDocId?: string) {
-    showToast(`Loading ${name}...`);
+    showToast(`Loading ${name}…`, 'progress');
     try {
       const masterBytes = new Uint8Array(bytes);
       const docId = existingDocId || await openDocumentSession(name, masterBytes.slice(0));
@@ -208,10 +208,10 @@ class VeditorApp {
       this.clearRenderedPages();
       this.renderEmptyState();
       viewportManager.updateLayout(true);
-      showToast(`${name} loaded (${pageCount} pages)`);
+      showToast(`${name} loaded (${pageCount} pages)`, 'success');
     } catch (err: any) {
       console.error('Error opening PDF:', err);
-      showToast(`Error opening PDF: ${err.message}`);
+      showToast(`Error opening PDF: ${err.message}`, 'error');
     }
   }
 
@@ -233,10 +233,17 @@ class VeditorApp {
       if (floatingToolbar) floatingToolbar.style.display = 'none';
       if (viewControls) viewControls.style.display = 'none';
       if (propertiesPanel) propertiesPanel.style.display = 'none';
-      this.clearRenderedPages();
-      this.renderEmptyState();
-      this._lastDocId = null;
-      history.switchDocument(null);
+
+      // This listener runs on every store change, so only rebuild the landing
+      // page when a document is actually closed. Rebuilding unconditionally
+      // discarded the landing page's own state (open dialogs, folder filter)
+      // and re-queried IndexedDB on unrelated updates such as theme changes.
+      if (this._lastDocId !== null) {
+        this._lastDocId = null;
+        history.switchDocument(null);
+        this.clearRenderedPages();
+        this.renderEmptyState();
+      }
       return;
     }
 
@@ -629,13 +636,13 @@ class VeditorApp {
       }
     } else if (pdfUrl) {
       try {
-        showToast(`Fetching ${pdfUrl}...`);
+        showToast(`Fetching ${pdfUrl}…`, 'progress');
         const res = await fetch(pdfUrl);
         const bytes = new Uint8Array(await res.arrayBuffer());
         const filename = pdfUrl.split('/').pop() || 'document.pdf';
         await this.loadPDF(filename, bytes);
       } catch (err: any) {
-        showToast(`Failed to load PDF from URL: ${err.message}`);
+        showToast(`Failed to load PDF from URL: ${err.message}`, 'error');
       }
     }
   }

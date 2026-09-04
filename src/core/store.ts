@@ -84,8 +84,7 @@ class StateStore {
     uiDensity: 'comfortable',
     smoothScroll: true,
     invertDocumentOled: false,
-    retinaRendering: true,
-    drawingCursor: 'pen'
+    retinaRendering: true
   };
 
   // Selection & Clipboard State
@@ -134,7 +133,15 @@ class StateStore {
     return () => this._listeners.delete(listener);
   }
 
-  private notify() {
+  /**
+   * Broadcast to subscribers. Public because `HistoryManager` mutates
+   * document state through its own undo stack and then has to announce it;
+   * every mutator on this class calls it too.
+   *
+   * Callers reached from inside a listener must make sure their own work is
+   * idempotent, or the notification loops back on itself.
+   */
+  public notify() {
     for (const listener of this._listeners) {
       try {
         listener();

@@ -5,10 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>veditor – Professional PDF Editor & Annotator</title>
   <link rel="icon" type="image/png" href="icons/icon-32.png">
+  <!--
+    Layers, general to specific:
+      tokens     - design tokens only, no rules
+      main       - app shell and base chrome (.modal-dialog, .panel-body, ...)
+      components - reusable controls, and variants refining those bases
+      landing    - the landing view
+      rtl        - direction overrides
+    The bundler may reorder the emitted stylesheets, so rules that need to beat
+    another layer say so with specificity rather than relying on this order.
+  -->
   <link rel="stylesheet" href="src/ui/styles/tokens.css">
   <link rel="stylesheet" href="src/ui/styles/main.css">
-  <link rel="stylesheet" href="src/ui/styles/rtl.css">
+  <link rel="stylesheet" href="src/ui/styles/components.css">
   <link rel="stylesheet" href="src/ui/styles/landing.css">
+  <link rel="stylesheet" href="src/ui/styles/rtl.css">
 </head>
 <body class="theme-dark">
   <div id="app-root" class="app-container">

@@ -22,6 +22,10 @@ class HistoryManager {
   private _currentDocId: string | null = null;
 
   public switchDocument(docId: string | null) {
+    // Idempotent: this is invoked from store listeners, so notifying when the
+    // active document has not actually changed would recurse indefinitely.
+    if (this._currentDocId === docId) return;
+
     if (this._currentDocId) {
       this._docHistories.set(this._currentDocId, {
         undoStack: [...this._undoStack],
