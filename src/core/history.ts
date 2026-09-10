@@ -240,6 +240,41 @@ export class ReplaceAnnotationsCommand implements Command {
   }
 }
 
+/**
+ * Multi-annotation variant: one undo step for drag-move / handle-resize of a
+ * whole selection (per-annotation commands would need one undo per element).
+ */
+export class BulkModifyCommand implements Command {
+  id: string = Math.random().toString(36).substring(2, 9);
+  description: string;
+  timestamp: number = Date.now();
+
+  constructor(
+    private pageIndex: number,
+    private pairs: Array<{ prev: Annotation; next: Annotation }>
+  ) {
+    this.description = `Transform ${pairs.length} annotation(s) on page ${pageIndex + 1}`;
+  }
+
+  execute(): void {
+    this.applyAll(this.pairs.map(p => p.next));
+  }
+
+  undo(): void {
+    this.applyAll(this.pairs.map(p => p.prev));
+  }
+
+  private applyAll(states: Annotation[]) {
+    const doc = store.activeDocument;
+    if (!doc || !doc.annotations[this.pageIndex]) return;
+    const byId = new Map(states.map(s => [s.id, s]));
+    doc.annotations[this.pageIndex] = doc.annotations[this.pageIndex].map(
+      a => (byId.has(a.id) ? { ...byId.get(a.id)!, updatedAt: Date.now() } : a)
+    );
+    doc.lastModifiedAt = Date.now();
+  }
+}
+
 export class ModifyAnnotationCommand implements Command {
   id: string = Math.random().toString(36).substring(2, 9);
   description: string;

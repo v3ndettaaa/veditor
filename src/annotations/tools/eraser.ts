@@ -1,5 +1,6 @@
 import { Point, Annotation, EraserMode } from '../../core/types';
 import { distance, distanceToSegment, isPointInBox, computePointsBoundingBox } from '../../utils/geometry';
+import { rotatePoint, boxCenter } from '../../annotations/selection';
 
 export interface EraseResult {
   toRemove: Annotation[];
@@ -38,10 +39,12 @@ export class EraserTool {
 
     for (const ann of annotations) {
       if (ann.locked) continue;
+      // Points and boxes are stored unrotated: test in the local frame.
+      const localPt = ann.rotation ? rotatePoint(point, boxCenter(ann.box), -ann.rotation) : point;
 
       if (this._mode === 'object') {
         // Object Eraser: Delete entire element if hit
-        if (isPointInBox(point, { ...ann.box, x: ann.box.x - r, y: ann.box.y - r, width: ann.box.width + r * 2, height: ann.box.height + r * 2 })) {
+        if (isPointInBox(localPt, { ...ann.box, x: ann.box.x - r, y: ann.box.y - r, width: ann.box.width + r * 2, height: ann.box.height + r * 2 })) {
           toRemove.push(ann);
         }
       } else if (this._mode === 'stroke') {
@@ -50,11 +53,11 @@ export class EraserTool {
           let hit = false;
           const strokePadding = (ann.strokeWidth || 2) / 2;
           for (let i = 0; i < ann.points.length; i++) {
-            if (distance(point, ann.points[i]) <= r + strokePadding) {
+            if (distance(localPt, ann.points[i]) <= r + strokePadding) {
               hit = true;
               break;
             }
-            if (i > 0 && distanceToSegment(point, ann.points[i - 1], ann.points[i]) <= r + strokePadding) {
+            if (i > 0 && distanceToSegment(localPt, ann.points[i - 1], ann.points[i]) <= r + strokePadding) {
               hit = true;
               break;
             }
@@ -64,7 +67,7 @@ export class EraserTool {
           }
         } else {
           // Other shapes erased if touched
-          if (isPointInBox(point, ann.box)) {
+          if (isPointInBox(localPt, ann.box)) {
             toRemove.push(ann);
           }
         }
@@ -76,11 +79,11 @@ export class EraserTool {
 
           let anyHit = false;
           for (let i = 0; i < ann.points.length; i++) {
-            if (distance(point, ann.points[i]) <= hitRadius) {
+            if (distance(localPt, ann.points[i]) <= hitRadius) {
               anyHit = true;
               break;
             }
-            if (i > 0 && distanceToSegment(point, ann.points[i - 1], ann.points[i]) <= hitRadius) {
+            if (i > 0 && distanceToSegment(localPt, ann.points[i - 1], ann.points[i]) <= hitRadius) {
               anyHit = true;
               break;
             }
@@ -95,7 +98,7 @@ export class EraserTool {
 
             for (let i = 0; i < ann.points.length; i++) {
               const pt = ann.points[i];
-              const isInside = distance(point, pt) <= hitRadius;
+              const isInside = distance(localPt, pt) <= hitRadius;
 
               if (!isInside) {
                 currentRun.push(pt);
@@ -126,7 +129,7 @@ export class EraserTool {
           }
         } else {
           // Other non-pen elements deleted when hit by pixel eraser
-          if (isPointInBox(point, ann.box)) {
+          if (isPointInBox(localPt, ann.box)) {
             toRemove.push(ann);
           }
         }

@@ -71,9 +71,11 @@ export class CalloutTool {
 
     ctx.fillStyle = ann.fillColor;
     ctx.fill();
-    ctx.strokeStyle = ann.strokeColor;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    if (ann.outline !== false) {
+      ctx.strokeStyle = ann.strokeColor;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
 
     // Render Text
     ctx.font = `${ann.fontSize}px "${ann.fontFamily}", sans-serif`;

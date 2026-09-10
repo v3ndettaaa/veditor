@@ -77,6 +77,11 @@ export class PropertiesPanelComponent {
     const firstAnn = selectedAnnotations[0];
     const hasShape = selectedAnnotations.some(ann => 'fillColor' in ann || ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' || ann.type === 'freeform-shape');
     const firstFillColor = (firstAnn as any).fillColor || 'transparent';
+    const hasOutlineToggle = selectedAnnotations.some(ann =>
+      ann.type === 'rectangle' || ann.type === 'ellipse' ||
+      ann.type === 'polygon' || ann.type === 'freeform-shape' || ann.type === 'callout'
+    );
+    const firstOutline = (firstAnn as any).outline !== false;
 
     this._container.innerHTML = `
       <div class="panel-header">
@@ -115,6 +120,17 @@ export class PropertiesPanelComponent {
                      value="${firstFillColor === 'transparent' ? '' : firstFillColor}"
                      placeholder="None" spellcheck="false" maxlength="7"
                      title="Type any hex fill color, empty = none" aria-label="Fill color hex">
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- Outline Toggle -->
+        ${hasOutlineToggle ? `
+          <div class="prop-group">
+            <span class="prop-label">Outline</span>
+            <div class="prop-btn-row">
+              <button class="secondary-btn ${firstOutline ? 'is-selected' : ''}" data-prop-outline="on">On</button>
+              <button class="secondary-btn ${firstOutline ? '' : 'is-selected'}" data-prop-outline="off">Off</button>
             </div>
           </div>
         ` : ''}
@@ -316,6 +332,22 @@ export class PropertiesPanelComponent {
     opacityNum?.addEventListener('focus', () => opacityNum.select());
     opacityNum?.addEventListener('change', () => commitOpacityNum());
     opacityNum?.addEventListener('blur', () => commitOpacityNum());
+
+    // Outline toggle
+    this._container.querySelectorAll('[data-prop-outline]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const on = btn.getAttribute('data-prop-outline') === 'on';
+        selectedAnnotations.forEach(ann => {
+          if (ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' ||
+              ann.type === 'freeform-shape' || ann.type === 'callout') {
+            const prev = { ...ann };
+            const next = { ...ann, outline: on };
+            history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+          }
+        });
+        store.setActivePageIndex(store.activePageIndex);
+      });
+    });
 
     // Delete button
     this._container.querySelector('#prop-delete-btn')?.addEventListener('click', () => {

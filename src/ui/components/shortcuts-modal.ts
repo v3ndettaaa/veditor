@@ -69,7 +69,8 @@ export class ShortcutsModalComponent {
           { key: 'Ctrl / Cmd  ⇧ Z', desc: 'Redo' },
           { key: 'Ctrl / Cmd  K', desc: 'Command palette' },
           { key: '?', desc: 'This reference' },
-          { key: 'Esc', desc: 'Dismiss / deselect' }
+          { key: 'Esc', desc: 'Dismiss / deselect' },
+          { key: 'Del / ⌫', desc: 'Delete selection' }
         ]
       }
     ];

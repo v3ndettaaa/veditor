@@ -582,6 +582,11 @@ export class ToolbarComponent {
       el.classList.toggle('active', st === s.shapeStyle);
     });
 
+    this._container.querySelectorAll('[data-shape-outline]').forEach(el => {
+      const on = el.getAttribute('data-shape-outline') === 'on';
+      el.classList.toggle('active', on === (s.shapeOutline !== false));
+    });
+
     this._container.querySelectorAll('[data-shape-fill="transparent"]').forEach(el => {
       el.classList.toggle('active', s.shapeFillColor === 'transparent');
     });
@@ -717,6 +722,15 @@ export class ToolbarComponent {
         <button class="mode-toggle-btn ${s.shapeStyle === 'dashed' ? 'active' : ''}" data-shape-style="dashed">Dashed</button>
         <button class="mode-toggle-btn ${s.shapeStyle === 'dotted' ? 'active' : ''}" data-shape-style="dotted">Dotted</button>
       </div>
+
+      ${shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'polygon' ? `
+        <div class="sub-row-separator"></div>
+        <div class="sub-row-section">
+          <span class="sub-row-label">Outline</span>
+          <button class="mode-toggle-btn ${(s.shapeOutline ?? true) ? 'active' : ''}" data-shape-outline="on" title="Stroke the shape border">On</button>
+          <button class="mode-toggle-btn ${(s.shapeOutline ?? true) ? '' : 'active'}" data-shape-outline="off" title="Fill only, no border">Off</button>
+        </div>
+      ` : ''}
 
       ${shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'polygon' ? `
         <div class="sub-row-separator"></div>
@@ -1074,6 +1088,25 @@ export class ToolbarComponent {
       }
     };
 
+    const applyShapeOutline = (on: boolean) => {
+      store.updateToolSettings({ shapeOutline: on });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (store.selectedAnnotationIds.has(ann.id) && 'outline' in ann) {
+              const prev = { ...ann };
+              const next = { ...ann, outline: on };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
     const applyShapeFill = (color: string) => {
       store.updateToolSettings({ shapeFillColor: color });
       this.updateIndicators();
@@ -1123,6 +1156,13 @@ export class ToolbarComponent {
         e.stopPropagation();
         const st = el.getAttribute('data-shape-style') as any;
         if (st) applyShapeStyle(st);
+      });
+    });
+
+    this._container.querySelectorAll('[data-shape-outline]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyShapeOutline(el.getAttribute('data-shape-outline') === 'on');
       });
     });
 

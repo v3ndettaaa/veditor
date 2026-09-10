@@ -25,7 +25,7 @@ import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
-import { history } from './core/history';
+import { history, DeleteAnnotationsCommand } from './core/history';
 import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
 import { gestureEngine } from './input/gestures';
@@ -859,6 +859,24 @@ class VeditorApp {
       if (e.altKey) return;
 
       const key = e.key.toLowerCase();
+
+      // Delete / Backspace removes the current selection (all pages).
+      if (key === 'delete' || key === 'backspace') {
+        const selectedIds = Array.from(store.selectedAnnotationIds);
+        const doc = store.activeDocument;
+        if (doc && selectedIds.length > 0) {
+          e.preventDefault();
+          for (const pageIdx in doc.annotations) {
+            const anns = doc.annotations[pageIdx].filter(a => selectedIds.includes(a.id));
+            if (anns.length > 0) {
+              history.execute(new DeleteAnnotationsCommand(parseInt(pageIdx, 10), anns));
+            }
+          }
+          store.clearSelection();
+          this.repaintAllRenderedAnnotations();
+        }
+        return;
+      }
 
       if (key === 'v') store.setActiveTool('select');
       else if (key === 'p') store.setActiveTool('pen');

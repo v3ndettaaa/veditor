@@ -3,9 +3,10 @@
  * Handles 120/240Hz coalesced events, stylus pressure, palm rejection, and tool dispatching.
  */
 
-import { Point, StrokePoint, ToolType, Annotation } from '../core/types';
+import { Point, StrokePoint, ToolType, Annotation, BoundingBox } from '../core/types';
 import { store } from '../core/store';
-import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand } from '../core/history';
+import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand } from '../core/history';
+import { mergeBoundingBoxes } from '../utils/geometry';
 import { PressureEngine } from './pressure';
 import { palmRejection } from './palm-rejection';
 import { penTool } from '../annotations/tools/pen';
@@ -17,7 +18,16 @@ import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
 import { laserTool } from '../annotations/tools/laser';
 import { redactionTool } from '../annotations/tools/redaction';
-import { selectionManager } from '../annotations/selection';
+import {
+  selectionManager,
+  normalizeDragBox,
+  cloneAnnotation,
+  transformAnnotation,
+  rotatePoint,
+  boxCenter,
+  BoxTransform,
+  HandleType
+} from '../annotations/selection';
 
 export class PointerHandler {
   private _isPointerDown: boolean = false;
@@ -44,6 +54,20 @@ export class PointerHandler {
   /** Zoom-lens marquee drag corners, in page coordinates. */
   private _zoomMarqueeStart: Point | null = null;
   private _zoomMarqueeCurrent: Point | null = null;
+  /**
+   * Selection drag: moving the selection body or resizing via a transform
+   * handle. Mutates live (like the eraser) and commits ONE undo step.
+   */
+  private _selectDrag: {
+    mode: 'move' | 'resize' | 'rotate';
+    handle: Exclude<HandleType, null>;
+    pageIndex: number;
+    originals: Map<string, Annotation>;
+    merged: BoundingBox;
+    startPt: Point;
+  } | null = null;
+  /** Region-marquee rubber band (Shift extends the selection). */
+  private _marquee: { pageIndex: number; start: Point; current: Point; additive: boolean } | null = null;
 
   /**
    * Lens width compensation: while a zoom-lens is active, creation widths are
@@ -153,7 +177,8 @@ export class PointerHandler {
           tSettings.shapeColor,
           tSettings.shapeFillColor,
           this.lensWidth(tSettings.shapeWidth),
-          tSettings.shapeStyle
+          tSettings.shapeStyle,
+          tSettings.shapeOutline !== false
         );
         break;
       }
@@ -170,7 +195,8 @@ export class PointerHandler {
           tSettings.shapeColor,
           tSettings.shapeFillColor,
           this.lensWidth(tSettings.shapeWidth),
-          tSettings.shapeStyle
+          tSettings.shapeStyle,
+          tSettings.shapeOutline !== false
         );
         break;
 
@@ -221,18 +247,58 @@ export class PointerHandler {
         redactionTool.start(pt, pageIndex, tSettings.redactionColor || '#000000');
         break;
 
-      case 'select':
+      case 'select': {
         const doc = store.activeDocument;
-        if (doc) {
-          const ann = selectionManager.findAnnotationAtPoint(pt, doc.annotations[pageIndex] || []);
-          if (ann) {
-            store.selectAnnotation(ann.id, e.shiftKey);
-          } else if (!e.shiftKey) {
-            store.clearSelection();
+        if (!doc) break;
+        const pageAnns = doc.annotations[pageIndex] || [];
+        const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+
+        // Ctrl/Cmd-click adds to the selection exactly like Shift-click, so it
+        // must not start a drag — otherwise multi-selecting for bulk delete
+        // is impossible once something is already selected.
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        // 1. Grab a transform handle or the selection body to start a drag.
+        if (selected.length > 0 && !additive) {
+          const merged = mergeBoundingBoxes(selected.map(a => a.box));
+          // Lone rotated annotations hit-test in their rotated frame.
+          const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
+          const hit = selectionManager.hitTestHandles(
+            pt, merged, store.zoom * (window.devicePixelRatio || 1), singleRot
+          );
+          if (hit) {
+            const originals = new Map(selected.map(a => [a.id, cloneAnnotation(a)] as [string, Annotation]));
+            // Resizing a rotated annotation works in its unrotated frame.
+            const startPt = singleRot && hit !== 'body' && hit !== 'rot'
+              ? rotatePoint(pt, boxCenter(merged), -singleRot)
+              : { x: pt.x, y: pt.y };
+            this._selectDrag = {
+              mode: hit === 'body' ? 'move' : hit === 'rot' ? 'rotate' : 'resize',
+              handle: hit,
+              pageIndex,
+              originals,
+              merged: { ...merged },
+              startPt
+            };
+            break;
           }
+        }
+
+        // 2. Click an annotation to (multi-)select it.
+        const ann = selectionManager.findAnnotationAtPoint(pt, pageAnns);
+        if (ann) {
+          store.selectAnnotation(ann.id, additive);
           onNeedRepaint();
+        } else {
+          // 3. Empty press: rubber-band region select (tiny drag = click).
+          this._marquee = {
+            pageIndex,
+            start: { x: pt.x, y: pt.y },
+            current: { x: pt.x, y: pt.y },
+            additive
+          };
         }
         break;
+      }
     }
   }
 
@@ -266,6 +332,40 @@ export class PointerHandler {
     const shiftKey = (e as MouseEvent).shiftKey === true;
 
     switch (tool) {
+      case 'select': {
+        if (this._selectDrag && this._selectDrag.pageIndex === pageIndex) {
+          // Absolute transform from drag start applied to pristine originals:
+          // idempotent per frame, zero drift.
+          const drag = this._selectDrag;
+          const doc = store.activeDocument;
+          if (doc?.annotations[pageIndex]) {
+            if (drag.mode === 'rotate') {
+              this.applyRotationDrag(drag, lastPt, shiftKey, doc.annotations[pageIndex]);
+              doc.lastModifiedAt = Date.now();
+            } else {
+              // Resizing a lone rotated annotation maps the cursor back into
+              // its unrotated frame (start was stored mapped the same way).
+              let effLast = lastPt;
+              if (drag.mode === 'resize' && drag.originals.size === 1) {
+                const orig = [...drag.originals.values()][0];
+                if (orig.rotation) effLast = rotatePoint(lastPt, boxCenter(drag.merged), -orig.rotation);
+              }
+              const t = this.selectTransformFor(drag, effLast);
+              doc.annotations[pageIndex] = doc.annotations[pageIndex].map(a => {
+                const orig = drag.originals.get(a.id);
+                return orig ? (transformAnnotation(orig, t) as typeof a) : a;
+              });
+              doc.lastModifiedAt = Date.now();
+            }
+          }
+          onNeedRepaint();
+        } else if (this._marquee && this._marquee.pageIndex === pageIndex) {
+          this._marquee.current = { ...lastPt };
+          this.renderMarquee(ctx, renderScale);
+        }
+        break;
+      }
+
       case 'zoom-lens':
         this._zoomMarqueeCurrent = { ...lastPt };
         this.renderZoomMarquee(ctx, renderScale);
@@ -380,6 +480,30 @@ export class PointerHandler {
     }
 
     switch (tool) {
+      case 'select':
+        this.commitSelectDrag();
+        if (this._marquee) {
+          const mq = this._marquee;
+          this._marquee = null;
+          const w = Math.abs(mq.current.x - mq.start.x);
+          const h = Math.abs(mq.current.y - mq.start.y);
+          const doc = store.activeDocument;
+          if (w < 4 && h < 4) {
+            // Plain click on empty canvas.
+            if (!mq.additive) store.clearSelection();
+          } else if (doc?.annotations[mq.pageIndex]) {
+            const hits = selectionManager
+              .findAnnotationsInRect(normalizeDragBox(mq.start, mq.current), doc.annotations[mq.pageIndex])
+              .map(a => a.id);
+            if (mq.additive) {
+              store.setSelectedAnnotationIds([...new Set([...store.selectedAnnotationIds, ...hits])]);
+            } else {
+              store.setSelectedAnnotationIds(hits);
+            }
+          }
+        }
+        break;
+
       case 'pen':
         const penAnn = penTool.finish(defaultLayerId);
         if (penAnn) {
@@ -475,6 +599,132 @@ export class PointerHandler {
     return true;
   }
 
+  /**
+   * Builds the merged-box-relative transform for a selection drag: plain
+   * translation for body moves; per-handle scaling (opposite edge anchored,
+   * 8px minimum) for resizes.
+   */
+  private selectTransformFor(
+    drag: NonNullable<PointerHandler['_selectDrag']>,
+    cur: Point
+  ): BoxTransform {
+    const m = drag.merged;
+    if (drag.mode === 'move') {
+      return {
+        dx: cur.x - drag.startPt.x,
+        dy: cur.y - drag.startPt.y,
+        scaleX: 1,
+        scaleY: 1,
+        originX: m.x,
+        originY: m.y
+      };
+    }
+
+    const dx = cur.x - drag.startPt.x;
+    const dy = cur.y - drag.startPt.y;
+    let x1 = m.x;
+    let y1 = m.y;
+    let x2 = m.x + m.width;
+    let y2 = m.y + m.height;
+    const h = drag.handle;
+    if (h.includes('e')) x2 += dx;
+    if (h.includes('s')) y2 += dy;
+    if (h.includes('w')) x1 += dx;
+    if (h.includes('n')) y1 += dy;
+    // Enforce minimum size by clamping the dragged edge.
+    if (x2 - x1 < 8) {
+      if (h.includes('w')) x1 = x2 - 8; else x2 = x1 + 8;
+    }
+    if (y2 - y1 < 8) {
+      if (h.includes('n')) y1 = y2 - 8; else y2 = y1 + 8;
+    }
+    return {
+      dx: x1 - m.x,
+      dy: y1 - m.y,
+      scaleX: m.width > 0.5 ? (x2 - x1) / m.width : 1,
+      scaleY: m.height > 0.5 ? (y2 - y1) / m.height : 1,
+      originX: m.x,
+      originY: m.y
+    };
+  }
+
+  /**
+   * Rotates every dragged annotation around the merged-box pivot by the angle
+   * swept since drag start (Shift snaps to 15°). Single selections spin in
+   * place; groups orbit their shared center, each keeping its own rotation.
+   * Absolute from drag start: idempotent per frame, zero drift.
+   */
+  private applyRotationDrag(
+    drag: NonNullable<PointerHandler['_selectDrag']>,
+    cur: Point,
+    snap: boolean,
+    pageAnns: Annotation[]
+  ): void {
+    const center = boxCenter(drag.merged);
+    const a0 = Math.atan2(drag.startPt.y - center.y, drag.startPt.x - center.x);
+    const a1 = Math.atan2(cur.y - center.y, cur.x - center.x);
+    let delta = a1 - a0;
+    // Normalize to [-PI, PI] so crossing the -x axis doesn't spin backwards.
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    if (snap) delta = Math.round(delta / (Math.PI / 12)) * (Math.PI / 12);
+    if (delta === 0) return;
+
+    const cos = Math.cos(delta);
+    const sin = Math.sin(delta);
+    for (let i = 0; i < pageAnns.length; i++) {
+      const orig = drag.originals.get(pageAnns[i].id);
+      if (!orig) continue;
+      const oldC = boxCenter(orig.box);
+      const relX = oldC.x - center.x;
+      const relY = oldC.y - center.y;
+      const moved = transformAnnotation(orig, {
+        dx: center.x + relX * cos - relY * sin - oldC.x,
+        dy: center.y + relX * sin + relY * cos - oldC.y,
+        scaleX: 1,
+        scaleY: 1,
+        originX: oldC.x,
+        originY: oldC.y
+      });
+      moved.rotation = (orig.rotation || 0) + delta;
+      pageAnns[i] = moved;
+    }
+  }
+
+  /** Commits an in-progress selection drag as ONE undo step. No-op otherwise. */
+  private commitSelectDrag(): void {
+    const drag = this._selectDrag;
+    this._selectDrag = null;
+    if (!drag) return;
+    const doc = store.activeDocument;
+    if (!doc?.annotations[drag.pageIndex]) return;
+    const pairs: Array<{ prev: Annotation; next: Annotation }> = [];
+    for (const [id, prev] of drag.originals) {
+      const next = doc.annotations[drag.pageIndex].find(a => a.id === id);
+      if (next && JSON.stringify(next) !== JSON.stringify(prev)) {
+        pairs.push({ prev, next: { ...next } });
+      }
+    }
+    if (pairs.length > 0) {
+      history.pushCommitted(new BulkModifyCommand(drag.pageIndex, pairs));
+    }
+  }
+
+  /** Renders the dashed rubber band for region selection. */
+  private renderMarquee(ctx: CanvasRenderingContext2D, scale: number): void {
+    if (!this._marquee) return;
+    const box = normalizeDragBox(this._marquee.start, this._marquee.current);
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.fillStyle = 'rgba(79, 70, 229, 0.08)';
+    ctx.fillRect(box.x, box.y, box.width, box.height);
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.5 / scale;
+    ctx.setLineDash([5 / scale, 4 / scale]);
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    ctx.restore();
+  }
+
   /** Renders the dashed marquee rect for the zoom-lens drag. */
   private renderZoomMarquee(ctx: CanvasRenderingContext2D, scale: number): void {
     const s = this._zoomMarqueeStart;
@@ -530,6 +780,10 @@ export class PointerHandler {
     } else {
       this._zoomMarqueeStart = null;
       this._zoomMarqueeCurrent = null;
+      // A gesture takeover commits (never silently drops) a selection drag;
+      // an uncommitted marquee is just a rubber band, safe to discard.
+      this.commitSelectDrag();
+      this._marquee = null;
       penTool.cancel();
       highlighterTool.cancel();
       // Keep finished polygon vertices; a mid-click rubber band is harmless

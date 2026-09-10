@@ -36,6 +36,7 @@
 | `F` | **Focus Mode** | Hide all toolbars and side panels for distraction-free reading |
 | `?` | **Shortcuts Help** | Display keyboard shortcuts reference overlay |
 | `Esc` | **Dismiss** | Close active modals, command palette, or deselect elements |
+| `Del` / `Backspace` | **Delete Selection** | Delete all currently selected annotations |
 
 ---
 

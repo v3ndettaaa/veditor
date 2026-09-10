@@ -72,6 +72,12 @@ export interface BaseAnnotation {
   opacity: number;
   blendMode?: GlobalCompositeOperation;
   locked?: boolean;
+  /**
+   * Rotation in radians about the BOX CENTER. The stored box stays unrotated;
+   * renderers rotate at paint time, so move/resize math keeps working in the
+   * unrotated frame. Undefined/0 = unrotated.
+   */
+  rotation?: number;
 }
 
 export interface StrokePoint extends Point {
@@ -106,6 +112,8 @@ export interface ShapeAnnotation extends BaseAnnotation {
   strokeColor: string;
   fillColor?: string;
   strokeWidth: number;
+  /** False = fill-only shape with no outline stroke (ignored by line/arrow). */
+  outline?: boolean;
   strokeStyle: 'solid' | 'dashed' | 'dotted';
   points?: Point[]; // for polygon, line, arrow, freeform
   arrowStart?: boolean;
@@ -155,6 +163,8 @@ export interface CalloutAnnotation extends BaseAnnotation {
   color: string;
   fillColor: string;
   strokeColor: string;
+  /** False = borderless bubble (fill + text only). */
+  outline?: boolean;
 }
 
 export interface SignatureAnnotation extends BaseAnnotation {
@@ -272,6 +282,7 @@ export interface ToolSettings {
   shapeColor: string;
   shapeFillColor: string;
   shapeWidth: number;
+  shapeOutline: boolean;
   shapeStyle: 'solid' | 'dashed' | 'dotted';
   textColor: string;
   textBgColor: string;

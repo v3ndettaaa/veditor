@@ -57,6 +57,7 @@ export class ShapesTool {
   private _strokeColor: string = '#ef4444';
   private _fillColor: string = 'transparent';
   private _strokeWidth: number = 2;
+  private _outline: boolean = true;
   private _strokeStyle: 'solid' | 'dashed' | 'dotted' = 'solid';
   /** True while Shift is held: preview and finish a regular shape. */
   private _constrain: boolean = false;
@@ -68,7 +69,8 @@ export class ShapesTool {
     strokeColor: string,
     fillColor: string,
     strokeWidth: number,
-    strokeStyle: 'solid' | 'dashed' | 'dotted'
+    strokeStyle: 'solid' | 'dashed' | 'dotted',
+    outline: boolean = true
   ) {
     this._startPoint = point;
     this._currentPoint = point;
@@ -77,6 +79,7 @@ export class ShapesTool {
     this._strokeColor = strokeColor;
     this._fillColor = fillColor;
     this._strokeWidth = strokeWidth;
+    this._outline = outline;
     this._strokeStyle = strokeStyle;
 
     if (type === 'polygon' || type === 'freeform-shape') {
@@ -134,6 +137,9 @@ export class ShapesTool {
 
     const sp = this._startPoint;
 
+    // Lines and arrows are pure stroke; closed shapes honor the outline toggle.
+    const outline = this._outline || this._type === 'line' || this._type === 'arrow';
+
     if (this._type === 'rectangle') {
       const x = Math.min(sp.x, cp.x);
       const y = Math.min(sp.y, cp.y);
@@ -142,7 +148,7 @@ export class ShapesTool {
       if (this._fillColor && this._fillColor !== 'transparent') {
         ctx.fillRect(x, y, w, h);
       }
-      ctx.strokeRect(x, y, w, h);
+      if (outline) ctx.strokeRect(x, y, w, h);
     } else if (this._type === 'ellipse') {
       const cx = (sp.x + cp.x) / 2;
       const cy = (sp.y + cp.y) / 2;
@@ -153,7 +159,7 @@ export class ShapesTool {
       if (this._fillColor && this._fillColor !== 'transparent') {
         ctx.fill();
       }
-      ctx.stroke();
+      if (outline) ctx.stroke();
     } else if (this._type === 'line') {
       ctx.beginPath();
       ctx.moveTo(sp.x, sp.y);
@@ -174,7 +180,7 @@ export class ShapesTool {
         if (this._fillColor && this._fillColor !== 'transparent') {
           ctx.fill();
         }
-        ctx.stroke();
+        if (outline) ctx.stroke();
 
         // Draw vertex points
         for (let i = 0; i < this._polygonPoints.length; i++) {
@@ -213,7 +219,7 @@ export class ShapesTool {
         if (this._fillColor && this._fillColor !== 'transparent') {
           ctx.fill();
         }
-        ctx.stroke();
+        if (outline) ctx.stroke();
       }
     }
 
@@ -259,6 +265,7 @@ export class ShapesTool {
       strokeColor: this._strokeColor,
       fillColor: this._fillColor,
       strokeWidth: this._strokeWidth,
+      outline: this._outline,
       strokeStyle: this._strokeStyle,
       points,
       arrowEnd: this._type === 'arrow',

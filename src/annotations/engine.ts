@@ -3,7 +3,17 @@
  * Coordinates multi-layer rendering, background paper patterns, and tool dispatching.
  */
 
-import { Annotation, BackgroundPattern } from '../core/types';
+import { Annotation, BackgroundPattern, ShapeAnnotation } from '../core/types';
+
+/**
+ * Whether a shape paints its outline stroke. Lines and arrows ARE their
+ * outline, so the toggle only applies to closed shapes (fill-only mode).
+ * Pure helper, unit-tested.
+ */
+export function shapeHasOutline(ann: Pick<ShapeAnnotation, 'type' | 'outline'>): boolean {
+  if (ann.type === 'line' || ann.type === 'arrow') return true;
+  return ann.outline !== false;
+}
 import { store } from '../core/store';
 import { renderSmoothStroke } from './spline';
 import { textTool } from './tools/text';
@@ -123,9 +133,33 @@ export class AnnotationEngine {
   }
 
   /**
-   * Dispatches rendering of a single annotation to its specific renderer.
+   * Dispatches rendering of a single annotation to its specific renderer,
+   * rotating about the box center when `ann.rotation` is set. All per-type
+   * renderers (and therefore export, which reuses them) stay untouched.
    */
   public renderSingleAnnotation(
+    ctx: CanvasRenderingContext2D,
+    ann: Annotation,
+    scale: number = 1.0
+  ): void {
+    const rotation = ann.rotation || 0;
+    if (!rotation) {
+      this.renderUnrotated(ctx, ann, scale);
+      return;
+    }
+    ctx.save();
+    ctx.scale(scale, scale);
+    const cx = ann.box.x + ann.box.width / 2;
+    const cy = ann.box.y + ann.box.height / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate(rotation);
+    ctx.translate(-cx, -cy);
+    // Already in page units: inner renderers must not scale again.
+    this.renderUnrotated(ctx, ann, 1);
+    ctx.restore();
+  }
+
+  private renderUnrotated(
     ctx: CanvasRenderingContext2D,
     ann: Annotation,
     scale: number = 1.0
@@ -209,12 +243,13 @@ export class AnnotationEngine {
     }
 
     const b = ann.box;
+    const outline = shapeHasOutline(ann);
 
     if (ann.type === 'rectangle') {
       if (ann.fillColor && ann.fillColor !== 'transparent') {
         ctx.fillRect(b.x, b.y, b.width, b.height);
       }
-      ctx.strokeRect(b.x, b.y, b.width, b.height);
+      if (outline) ctx.strokeRect(b.x, b.y, b.width, b.height);
     } else if (ann.type === 'ellipse') {
       ctx.beginPath();
       ctx.ellipse(
@@ -229,7 +264,7 @@ export class AnnotationEngine {
       if (ann.fillColor && ann.fillColor !== 'transparent') {
         ctx.fill();
       }
-      ctx.stroke();
+      if (outline) ctx.stroke();
     } else if ((ann.type === 'line' || ann.type === 'arrow') && ann.points?.length >= 2) {
       const p1 = ann.points[0];
       const p2 = ann.points[1];
@@ -267,7 +302,7 @@ export class AnnotationEngine {
       if (ann.fillColor && ann.fillColor !== 'transparent') {
         ctx.fill();
       }
-      ctx.stroke();
+      if (outline) ctx.stroke();
     }
 
     ctx.restore();
