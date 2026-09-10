@@ -83,6 +83,11 @@ export class MeasureTool {
     ctx.restore();
   }
 
+  public cancel(): void {
+    this._points = [];
+    this._currentPoint = null;
+  }
+
   public finish(layerId: string): MeasurementAnnotation | null {
     if (this._points.length === 0 || !this._currentPoint) return null;
 

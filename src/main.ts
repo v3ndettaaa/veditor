@@ -28,6 +28,7 @@ import { drawingCursorValue } from './ui/cursor';
 import { history } from './core/history';
 import { DocumentSession, NotebookSpec } from './core/types';
 import { notebookController } from './core/notebook';
+import { gestureEngine } from './input/gestures';
 
 class VeditorApp {
   private _scrollContainer: HTMLElement;
@@ -45,6 +46,16 @@ class VeditorApp {
   private _lastZoom: number = 1.0;
   private _lastDocId: string | null = null;
   private _lastViewMode: string = 'continuous';
+
+  /**
+   * Lag-free zoom preview: while pinching (touch or trackpad) the pages
+   * wrapper is scaled with a compositor-only CSS transform around the focal
+   * point — zero store updates, zero re-layouts, zero PDF re-renders, zero
+   * annotation repaints. The real zoom commits once when the gesture ends.
+   */
+  private _zoomPreviewScale: number = 1;
+  private _zoomPreviewActive: boolean = false;
+  private _zoomCommitTimer: number | null = null;
 
   constructor() {
     this._scrollContainer = document.getElementById('document-scroll-container') as HTMLElement;
@@ -311,32 +322,71 @@ class VeditorApp {
     }
   }
 
+  /**
+   * Applies an incremental zoom factor as a pure visual preview: scales the
+   * whole pages wrapper with a CSS transform around the focal point and keeps
+   * the focal point stable via scroll compensation. Deliberately touches
+   * nothing else — no store update (so no header/toolbar/sidebar re-render),
+   * no viewport re-layout, no PDF re-render, no annotation repaint.
+   */
+  private previewZoomBy(factor: number, centerClient: { x: number; y: number }): void {
+    if (!store.activeDocument) return;
+    if (!Number.isFinite(factor) || factor <= 0) return;
+
+    const unclamped = this._zoomPreviewScale * factor;
+    // Clamp the TOTAL zoom (committed x preview) to the store's [0.2, 5] range.
+    const clampedTotal = Math.max(0.2, Math.min(5.0, store.zoom * unclamped)) / store.zoom;
+    const inc = clampedTotal / this._zoomPreviewScale;
+    if (Math.abs(inc - 1) < 0.0005) {
+      this.scheduleZoomCommit();
+      return;
+    }
+
+    const rect = this._scrollContainer.getBoundingClientRect();
+    const fx = centerClient.x - rect.left;
+    const fy = centerClient.y - rect.top;
+    // With transform-origin 0 0, wrapper point p renders at s*p; keeping the
+    // focal viewport point stable gives scroll' = (scroll + f) * inc - f.
+    this._scrollContainer.scrollLeft = (this._scrollContainer.scrollLeft + fx) * inc - fx;
+    this._scrollContainer.scrollTop = (this._scrollContainer.scrollTop + fy) * inc - fy;
+
+    this._zoomPreviewScale = clampedTotal;
+    this._zoomPreviewActive = true;
+    this._pagesWrapper.style.transformOrigin = '0 0';
+    this._pagesWrapper.style.transform = `scale(${this._zoomPreviewScale})`;
+    this.scheduleZoomCommit();
+  }
+
+  private scheduleZoomCommit(): void {
+    if (this._zoomCommitTimer !== null) window.clearTimeout(this._zoomCommitTimer);
+    // Commit shortly after the last tick/finger move: one layout + one render
+    // pass for the entire gesture instead of dozens per second mid-gesture.
+    this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), 160);
+  }
+
+  private commitZoomPreview(): void {
+    this._zoomCommitTimer = null;
+    if (!this._zoomPreviewActive) return;
+    const finalZoom = Math.max(0.2, Math.min(5.0, store.zoom * this._zoomPreviewScale));
+    this._zoomPreviewScale = 1;
+    this._zoomPreviewActive = false;
+    this._pagesWrapper.style.transform = '';
+    this._pagesWrapper.style.transformOrigin = '';
+    if (Math.abs(finalZoom - store.zoom) > 0.0005) {
+      store.setZoom(finalZoom);
+      viewportManager.handleScroll(true);
+    }
+  }
+
   private setupZoomAndNavigation() {
-    // Wheel zoom: Ctrl + Wheel (or trackpad pinch to zoom)
+    // Wheel zoom: Ctrl + Wheel (or trackpad pinch to zoom). Feeds the lag-free
+    // preview; the real zoom commits once the gesture pauses.
     this._scrollContainer.addEventListener('wheel', (e) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const oldZoom = store.zoom;
         // Smooth exponential factor for both trackpad pinch and mouse wheel
         const factor = Math.exp(-e.deltaY * 0.0035);
-        const newZoom = Math.max(0.2, Math.min(5.0, oldZoom * factor));
-
-        if (Math.abs(newZoom - oldZoom) > 0.001) {
-          const rect = this._scrollContainer.getBoundingClientRect();
-          const mouseX = e.clientX - rect.left;
-          const mouseY = e.clientY - rect.top;
-          const scrollLeft = this._scrollContainer.scrollLeft;
-          const scrollTop = this._scrollContainer.scrollTop;
-
-          const scaleRatio = newZoom / oldZoom;
-          const targetLeft = (scrollLeft + mouseX) * scaleRatio - mouseX;
-          const targetTop = (scrollTop + mouseY) * scaleRatio - mouseY;
-
-          store.setZoom(newZoom);
-          this._scrollContainer.scrollLeft = targetLeft;
-          this._scrollContainer.scrollTop = targetTop;
-          viewportManager.handleScroll(true);
-        }
+        this.previewZoomBy(factor, { x: e.clientX, y: e.clientY });
       }
     }, { passive: false });
 
@@ -512,6 +562,17 @@ class VeditorApp {
     }
   }
 
+  private gestureCallbacks() {
+    return {
+      onPinchZoom: (scaleDelta: number, center: { x: number; y: number }) =>
+        this.previewZoomBy(scaleDelta, center),
+      onPan: (dx: number, dy: number) => {
+        this._scrollContainer.scrollLeft -= dx;
+        this._scrollContainer.scrollTop -= dy;
+      }
+    };
+  }
+
   private bindPointerEvents(canvas: HTMLCanvasElement, pageIndex: number) {
     const onRepaint = () => {
       const pageEls = this._renderedPages.get(pageIndex);
@@ -519,6 +580,20 @@ class VeditorApp {
     };
 
     canvas.addEventListener('pointerdown', (e) => {
+      // Two-finger touch takes over as pinch-zoom/pan: abort any in-progress
+      // single-finger stroke so the gesture zooms the PDF and draws nothing.
+      if (e.pointerType === 'touch') {
+        const gestureStarted = gestureEngine.handlePointerDown(e);
+        if (gestureStarted) {
+          pointerHandler.cancelActiveStroke();
+          e.preventDefault();
+          return;
+        }
+        if (gestureEngine.isGestureActive) {
+          e.preventDefault();
+          return;
+        }
+      }
       e.preventDefault();
       try {
         canvas.setPointerCapture(e.pointerId);
@@ -527,11 +602,29 @@ class VeditorApp {
     });
 
     canvas.addEventListener('pointermove', (e) => {
+      // While a two-finger gesture is active, moves only zoom/pan — never draw.
+      if (e.pointerType === 'touch') {
+        const consumed = gestureEngine.handlePointerMove(e, this.gestureCallbacks());
+        if (consumed || gestureEngine.isGestureActive) {
+          e.preventDefault();
+          return;
+        }
+      }
       e.preventDefault();
       pointerHandler.handlePointerMove(e, pageIndex, canvas, onRepaint);
     });
 
     canvas.addEventListener('pointerup', (e) => {
+      if (e.pointerType === 'touch') {
+        const wasGesture = gestureEngine.isGestureActive;
+        gestureEngine.handlePointerUp(e);
+        if (wasGesture) {
+          // Last finger lifted: let the debounced single commit fire.
+          e.preventDefault();
+          this.scheduleZoomCommit();
+          return;
+        }
+      }
       e.preventDefault();
       try {
         canvas.releasePointerCapture(e.pointerId);
@@ -543,6 +636,15 @@ class VeditorApp {
     });
 
     canvas.addEventListener('pointercancel', (e) => {
+      if (e.pointerType === 'touch') {
+        const wasGesture = gestureEngine.isGestureActive;
+        gestureEngine.handlePointerUp(e);
+        if (wasGesture) {
+          e.preventDefault();
+          this.scheduleZoomCommit();
+          return;
+        }
+      }
       e.preventDefault();
       try {
         canvas.releasePointerCapture(e.pointerId);

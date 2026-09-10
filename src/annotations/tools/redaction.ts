@@ -44,6 +44,11 @@ export class RedactionTool {
     ctx.restore();
   }
 
+  public cancel(): void {
+    this._startPoint = null;
+    this._currentPoint = null;
+  }
+
   public finish(layerId: string): RedactionAnnotation | null {
     if (!this._startPoint || !this._currentPoint) return null;
 

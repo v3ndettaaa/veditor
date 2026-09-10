@@ -416,6 +416,47 @@ export class PointerHandler {
     }
   }
 
+  public isStrokeActive(): boolean {
+    return this._isPointerDown;
+  }
+
+  /**
+   * Aborts the in-progress press without committing anything — used when a
+   * second finger lands and the gesture takes over as pinch-zoom/pan, so no
+   * stray marks are drawn. The one exception is the eraser: its hits are
+   * applied live, so the partial work is committed as a single undo step
+   * instead of being silently lost. Completed polygon vertices (placed by
+   * earlier discrete clicks) are preserved; only the live rubber band is
+   * dropped via the scratch clear.
+   */
+  public cancelActiveStroke(): void {
+    if (!this._isPointerDown) return;
+    const tool = this._strokeTool ?? store.activeTool;
+
+    if (tool === 'eraser' && this._eraserSession) {
+      eraserTool.finish();
+      this.commitEraserSession(this._eraserSession.pageIndex);
+    } else {
+      penTool.cancel();
+      highlighterTool.cancel();
+      // Keep finished polygon vertices; a mid-click rubber band is harmless
+      // to drop since the next click re-renders it.
+      if (!shapesTool.isPolygonActive()) shapesTool.reset();
+      measureTool.cancel();
+      redactionTool.cancel();
+      laserTool.stop();
+    }
+
+    if (this._pageScratchCtx && this._pageScratchCanvas) {
+      this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+    }
+    this._isPointerDown = false;
+    this._strokeTool = null;
+    this._activePageIndex = -1;
+    this._pageScratchCanvas = null;
+    this._pageScratchCtx = null;
+  }
+
   private beginEraserSession(pageIndex: number): void {
     const doc = store.activeDocument;
     if (!doc) {
