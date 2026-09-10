@@ -13,6 +13,8 @@ export class ViewControlsComponent {
   private _container: HTMLElement;
   private _invertDocument: boolean = false;
   private _isInitialized: boolean = false;
+  /** Lens state the current DOM was built for (chip visibility). */
+  private _lensActiveRendered: boolean = false;
   /** Document the bound listeners / clamped totals belong to. */
   private _boundDocId: string | null = null;
   /** Set while Enter commits, so the ensuing blur doesn't commit twice. */
@@ -47,7 +49,8 @@ export class ViewControlsComponent {
     const currentRot = store.pageRotations[store.activePageIndex] || 0;
 
     // If already initialized in DOM, update selectively to avoid interrupting active user typing
-    if (this._isInitialized && this._container.querySelector('#view-page-input')) {
+    if (this._isInitialized && this._container.querySelector('#view-page-input') &&
+        this._lensActiveRendered === store.zoomLensActive) {
       this.updateState(currentPage, totalPages, zoomPct, currentRot);
       return;
     }
@@ -103,7 +106,7 @@ export class ViewControlsComponent {
         type="text"
         inputmode="decimal"
         value="${zoomPct}%"
-        title="Type zoom % (20-500) and press Enter"
+        title="Type zoom % (20-800) and press Enter"
         aria-label="Zoom percent"
         style="background:transparent; border:1px solid transparent; border-radius:4px; outline:none; width:52px;"
       />
@@ -111,6 +114,12 @@ export class ViewControlsComponent {
       <button id="view-zoom-in" class="view-btn" title="Zoom In (Ctrl +)">
         ${getIconSvg('zoomIn', 15)}
       </button>
+
+      ${store.zoomLensActive ? `
+        <button id="view-exit-lens" class="view-btn active" title="Exit zoom and restore ${Math.round((store.zoomLensBase ?? store.zoom) * 100)}% (Esc)">
+          ${getIconSvg('zoomOut', 15)}
+        </button>
+      ` : ''}
 
       <div class="toolbar-separator" style="height:16px;"></div>
 
@@ -146,6 +155,7 @@ export class ViewControlsComponent {
     this.bindEvents();
     this._isInitialized = true;
     this._boundDocId = doc.id;
+    this._lensActiveRendered = store.zoomLensActive;
   }
 
   private updateState(currentPage: number, totalPages: number, zoomPct: number, currentRot: number): void {
@@ -268,7 +278,7 @@ export class ViewControlsComponent {
       if (!zoomInput) return;
       const num = parseFloat(zoomInput.value.replace('%', '').trim());
       if (!isNaN(num)) {
-        const clamped = Math.max(20, Math.min(500, num));
+        const clamped = Math.max(20, Math.min(800, num));
         store.setZoom(clamped / 100);
         viewportManager.updateLayout(true);
       }
@@ -321,6 +331,10 @@ export class ViewControlsComponent {
     this._container.querySelector('#view-zoom-out')?.addEventListener('click', () => {
       store.setZoom(store.zoom / 1.15);
       viewportManager.updateLayout(true);
+    });
+
+    this._container.querySelector('#view-exit-lens')?.addEventListener('click', () => {
+      store.exitZoomLens();
     });
 
     this._container.querySelector('#view-fit-width')?.addEventListener('click', () => {

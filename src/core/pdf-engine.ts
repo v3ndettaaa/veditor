@@ -232,7 +232,11 @@ export class PDFEngine {
       this._pageCache.set(pageIndex, page);
     }
 
-    const totalRotation = ((page.rotate || 0) + (rotation || 0) + 3600) % 360;
+    // NOTE: getViewport's `rotation` already defaults to the PDF's native
+    // page rotation, so only the USER rotation is passed here. Adding
+    // page.rotate again double-rotated content out of its layout box and into
+    // neighbouring pages on rotated documents.
+    const totalRotation = ((rotation || 0) % 360 + 360) % 360;
     const viewport = page.getViewport({ scale: scale * dpr, rotation: totalRotation });
 
     const targetWidth = Math.floor(viewport.width);

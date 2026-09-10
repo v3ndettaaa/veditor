@@ -11,6 +11,7 @@ export const en = {
   tools: {
     select: 'Select & Transform (V)',
     hand: 'Hand — drag to pan (hold Space)',
+    zoomLens: 'Zoom to selection (drag a region)',
     pen: 'Freehand Pen (P)',
     highlighter: 'Highlighter (H)',
     eraser: 'Eraser (E)',

@@ -26,7 +26,7 @@ import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
 import { history } from './core/history';
-import { DocumentSession, NotebookSpec, ToolType } from './core/types';
+import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
 import { gestureEngine } from './input/gestures';
 
@@ -350,7 +350,7 @@ class VeditorApp {
 
     const unclamped = this._zoomPreviewScale * factor;
     // Clamp the TOTAL zoom (committed x preview) to the store's [0.2, 5] range.
-    const clampedTotal = Math.max(0.2, Math.min(5.0, store.zoom * unclamped)) / store.zoom;
+    const clampedTotal = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * unclamped)) / store.zoom;
     const inc = clampedTotal / this._zoomPreviewScale;
     if (Math.abs(inc - 1) < 0.0005) {
       this.scheduleZoomCommit();
@@ -369,6 +369,8 @@ class VeditorApp {
     this._zoomPreviewActive = true;
     this._pagesWrapper.style.transformOrigin = '0 0';
     this._pagesWrapper.style.transform = `scale(${this._zoomPreviewScale})`;
+    // Keep visible-page tracking in layout space while the wrapper is scaled.
+    viewportManager.setPreviewScale(this._zoomPreviewScale);
     this.scheduleZoomCommit();
   }
 
@@ -382,13 +384,20 @@ class VeditorApp {
   private commitZoomPreview(): void {
     this._zoomCommitTimer = null;
     if (!this._zoomPreviewActive) return;
-    const finalZoom = Math.max(0.2, Math.min(5.0, store.zoom * this._zoomPreviewScale));
+    const finalZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * this._zoomPreviewScale));
     this._zoomPreviewScale = 1;
     this._zoomPreviewActive = false;
     this._pagesWrapper.style.transform = '';
     this._pagesWrapper.style.transformOrigin = '';
+    // Back to 1:1 mapping BEFORE the layout pass so every consumer (visible
+    // tracking, mounts, repaints) works in real coordinates again.
+    viewportManager.setPreviewScale(1);
     if (Math.abs(finalZoom - store.zoom) > 0.0005) {
       store.setZoom(finalZoom);
+      viewportManager.handleScroll(true);
+    } else {
+      // Net-zero gesture: still force one clean pass so preview-era mounts
+      // settle (no eviction happened mid-preview by design).
       viewportManager.handleScroll(true);
     }
   }
@@ -436,7 +445,9 @@ class VeditorApp {
 
     const visibleSet = new Set(visibleIndices);
 
-    // 1. Warm windowing: only evict pages that are more than 4 pages away to prevent scroll blinking
+    // 1. Warm windowing: only evict pages that are more than 4 pages away to prevent scroll blinking.
+    // Never evict mid-preview: the commit 160ms later re-renders sharp anyway,
+    // and evicting scaled-but-correct pages is what flashed blank cracks.
     const maxKeepDistance = 4;
     for (const [pageIndex, p] of this._renderedPages) {
       let minDistance = Infinity;
@@ -445,7 +456,7 @@ class VeditorApp {
         if (d < minDistance) minDistance = d;
       }
 
-      if (minDistance > maxKeepDistance) {
+      if (!this._zoomPreviewActive && minDistance > maxKeepDistance) {
         // Cancel in-flight PDF render tasks
         pdfEngine.cancelPageRender(pageIndex);
 
@@ -595,6 +606,10 @@ class VeditorApp {
     };
 
     canvas.addEventListener('pointerdown', (e) => {
+      // A pending zoom preview leaves the wrapper CSS-scaled, so page
+      // coordinates derived from bounding rects would be wrong — flush the
+      // real zoom first so draw / pan / marquee all start 1:1.
+      if (this._zoomPreviewActive) this.commitZoomPreview();
       // Two-finger touch takes over as pinch-zoom/pan: abort any in-progress
       // single-finger stroke so the gesture zooms the PDF and draws nothing.
       if (e.pointerType === 'touch') {
@@ -676,7 +691,7 @@ class VeditorApp {
       try {
         canvas.releasePointerCapture(e.pointerId);
       } catch (_) {}
-      pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint);
+      pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint, (pi, r) => this.zoomToRect(pi, r));
       // A notebook grows once the stroke is committed, so there is always
       // blank paper below what you just wrote.
       void notebookController.autoExtend(pageIndex);
@@ -717,6 +732,38 @@ class VeditorApp {
     if (!this._handPan) return;
     this._handPan = null;
     this.updateCanvasCursors();
+  }
+
+  /**
+   * Zooms the view to fit a marquee-selected region and enters the zoom lens:
+   * the pre-lens zoom is remembered so creation widths can be compensated
+   * (tools feel identical on screen) and exiting restores it.
+   */
+  public zoomToRect(pageIndex: number, rect: { x: number; y: number; width: number; height: number }): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+
+    const availW = Math.max(50, this._scrollContainer.clientWidth - 48);
+    const availH = Math.max(50, this._scrollContainer.clientHeight - 48);
+    const rectW = Math.max(8, rect.width * store.zoom);
+    const rectH = Math.max(8, rect.height * store.zoom);
+    const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * Math.min(availW / rectW, availH / rectH)));
+
+    if (!store.zoomLensActive) store.enterZoomLens(store.zoom);
+    // Single commit: handleStoreUpdate re-layouts + re-renders once.
+    store.setZoom(targetZoom);
+
+    const layout = viewportManager.getLayout(pageIndex);
+    if (layout) {
+      const cx = layout.left + (rect.x + rect.width / 2) * targetZoom;
+      const cy = layout.top + (rect.y + rect.height / 2) * targetZoom;
+      this._scrollContainer.scrollTo({
+        left: Math.max(0, cx - this._scrollContainer.clientWidth / 2),
+        top: Math.max(0, cy - this._scrollContainer.clientHeight / 2),
+        behavior: store.appSettings.smoothScroll !== false ? 'smooth' : 'auto'
+      });
+      store.setActivePageIndex(pageIndex);
+    }
   }
 
   public updateCanvasCursors(): void {
@@ -770,6 +817,12 @@ class VeditorApp {
           return;
         }
       } else if (e.key === 'Escape') {
+        // Mid-drag marquee first, then an active lens, then polygons.
+        if (pointerHandler.cancelZoomMarquee()) return;
+        if (store.zoomLensActive) {
+          store.exitZoomLens();
+          return;
+        }
         pointerHandler.cancelPolygon();
         return;
       }

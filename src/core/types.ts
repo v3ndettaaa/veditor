@@ -5,6 +5,7 @@
 export type ToolType =
   | 'select'
   | 'hand'
+  | 'zoom-lens'
   | 'pen'
   | 'highlighter'
   | 'eraser'
@@ -213,6 +214,10 @@ export interface PaperStyle {
   /** Draw a vertical margin rule near the binding edge. */
   margin: boolean;
 }
+
+/** Global zoom bounds (raised so marquee-lens zooms can stack repeatedly). */
+export const MIN_ZOOM = 0.2;
+export const MAX_ZOOM = 8;
 
 export const PAGE_SIZES = {
   letter: { label: 'Letter', width: 612, height: 792 },

@@ -106,6 +106,8 @@ export function drawingCursorValue(
   if (tool === 'select') return 'default';
   // Hand pans the page instead of drawing.
   if (tool === 'hand') return 'grab';
+  // Zoom lens selects a region to magnify.
+  if (tool === 'zoom-lens') return 'zoom-in';
 
   const width = brushWidth(tool);
   if (width === null) return 'crosshair';

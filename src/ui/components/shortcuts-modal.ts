@@ -28,6 +28,7 @@ export class ShortcutsModalComponent {
         items: [
           { key: 'V', desc: 'Select & transform' },
           { key: 'Space (hold)', desc: 'Hand — drag to pan' },
+          { key: 'Esc', desc: 'Exit zoom lens / cancel marquee' },
           { key: 'P', desc: 'Freehand pen' },
           { key: 'H', desc: 'Highlighter' },
           { key: 'E', desc: 'Eraser' },

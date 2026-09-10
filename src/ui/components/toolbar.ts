@@ -133,6 +133,11 @@ export class ToolbarComponent {
           ${getIconSvg('hand')}
         </button>
 
+        <!-- Zoom-to-Selection Lens Tool -->
+        <button class="tool-btn ${activeTool === 'zoom-lens' ? 'active' : ''}" data-tool="zoom-lens" title="${t('tools.zoomLens')}" style="cursor:zoom-in;">
+          ${getIconSvg('zoomIn')}
+        </button>
+
         <div class="toolbar-separator"></div>
 
         <!-- Drawing & Ink Group -->
@@ -742,6 +747,12 @@ export class ToolbarComponent {
       btn.addEventListener('click', (e) => {
         const tool = btn.getAttribute('data-tool') as ToolType;
         if (!tool) return;
+
+        // Re-pressing the lens while inside one exits it (restores pre-lens zoom).
+        if (tool === 'zoom-lens' && store.activeTool === 'zoom-lens' && store.zoomLensActive) {
+          store.exitZoomLens();
+          return;
+        }
 
         store.setActiveTool(tool);
 
