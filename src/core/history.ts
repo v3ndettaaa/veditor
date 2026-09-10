@@ -56,6 +56,17 @@ class HistoryManager {
 
   public execute(command: Command) {
     command.execute();
+    this.pushCommitted(command);
+  }
+
+  /**
+   * Records a command whose effects are ALREADY applied to the document
+   * (e.g. a whole eraser drag applied live point-by-point for 60fps
+   * feedback). Pushes a single undo step without re-executing and notifies
+   * once — instead of one history entry + full app re-render per pointermove
+   * frame, which piled up hundreds of entries and lagged the whole extension.
+   */
+  public pushCommitted(command: Command) {
     this._undoStack.push(command);
     this._redoStack = []; // Clear redo stack on new action
     if (this._undoStack.length > this._maxStackSize) {

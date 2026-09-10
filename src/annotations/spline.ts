@@ -119,6 +119,39 @@ export function generateSmoothSegments(
 }
 
 /**
+ * Normalizes a highlighter color to a translucent rgba string so text stays
+ * legible. Solid hex picks from the toolbar (e.g. `#fef08a`) become
+ * `rgba(..., 0.4)`; existing rgba colors keep their alpha (clamped).
+ *
+ * This matters because annotations live on their own transparent canvas
+ * stacked above the PDF canvas — `multiply` cannot blend across separate
+ * canvas elements, so translucency must come from alpha + `source-over`.
+ */
+export function normalizeHighlighterColor(color: string, alpha = 0.4): string {
+  const c = color.trim();
+  const hexMatch = c.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+  if (hexMatch) {
+    let hex = hexMatch[1];
+    if (hex.length === 3) {
+      hex = hex.split('').map(ch => ch + ch).join('');
+    }
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  const rgbaMatch = c.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\s*\)$/i);
+  if (rgbaMatch) {
+    const r = rgbaMatch[1];
+    const g = rgbaMatch[2];
+    const b = rgbaMatch[3];
+    const a = rgbaMatch[4] !== undefined ? Math.min(parseFloat(rgbaMatch[4]), 0.55) : alpha;
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+  return c;
+}
+
+/**
  * Draws smooth stroke segments onto a canvas context with variable or uniform line width.
  */
 export function renderSmoothStroke(
@@ -139,8 +172,12 @@ export function renderSmoothStroke(
   ctx.lineJoin = tipShape === 'chisel' ? 'miter' : 'round';
 
   if (isHighlighter) {
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.strokeStyle = color;
+    // NOTE: annotations render on a transparent overlay canvas above the PDF,
+    // so `multiply` cannot blend with the page below (it only blends within
+    // the overlay itself, darkening self-overlaps). Use normal alpha blending
+    // with a translucent color instead — text stays readable.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = normalizeHighlighterColor(color);
     ctx.lineWidth = baseWidth;
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);

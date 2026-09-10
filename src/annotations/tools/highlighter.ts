@@ -4,7 +4,7 @@
  */
 
 import { StrokePoint, HighlighterAnnotation, BoundingBox } from '../../core/types';
-import { renderSmoothStroke } from '../spline';
+import { renderSmoothStroke, normalizeHighlighterColor } from '../spline';
 import { computePointsBoundingBox } from '../../utils/geometry';
 
 export class HighlighterTool {
@@ -27,9 +27,13 @@ export class HighlighterTool {
   ) {
     this._activePoints = [point];
     this._pageIndex = pageIndex;
-    this._color = color;
+    // Always store a translucent color; toolbar swatches and the native color
+    // picker yield opaque hex values which would otherwise paint solid blocks.
+    this._color = normalizeHighlighterColor(color);
     this._width = width;
-    this._blendMode = blendMode;
+    // `multiply` cannot blend across the separate overlay/PDF canvases, so
+    // force normal alpha compositing for predictable translucent highlights.
+    this._blendMode = 'source-over';
     this._straightLine = straightLine;
     this._tipShape = tipShape;
   }
@@ -84,12 +88,12 @@ export class HighlighterTool {
       type: 'highlighter',
       box,
       points: [...this._activePoints],
-      color: this._color,
+      color: normalizeHighlighterColor(this._color),
       strokeWidth: this._width,
-      blendMode: this._blendMode,
+      blendMode: 'source-over',
       straightLine: this._straightLine,
       tipShape: this._tipShape,
-      opacity: 0.8,
+      opacity: 1.0,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };

@@ -90,7 +90,7 @@ export class AnnotationEngine {
     for (const ann of annotations) {
       ctx.save();
       ctx.globalAlpha = ann.opacity ?? 1.0;
-      if (ann.blendMode) ctx.globalCompositeOperation = ann.blendMode;
+      if (ann.blendMode && ann.type !== 'highlighter') ctx.globalCompositeOperation = ann.blendMode;
       this.renderSingleAnnotation(ctx, ann, scale);
       ctx.restore();
     }
@@ -110,7 +110,10 @@ export class AnnotationEngine {
     for (const ann of visibleAnnotations) {
       ctx.save();
       ctx.globalAlpha = ann.opacity ?? 1.0;
-      if (ann.blendMode) {
+      if (ann.blendMode && ann.type !== 'highlighter') {
+        // Highlighters always render with translucent source-over (see
+        // spline.ts): legacy annotations may still carry `multiply`, which
+        // cannot blend across the separate overlay/PDF canvases.
         ctx.globalCompositeOperation = ann.blendMode;
       }
 

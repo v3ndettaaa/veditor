@@ -19,20 +19,106 @@ type SettingsTab = 'appearance' | 'input' | 'viewer' | 'performance' | 'storage'
 export class SettingsModalComponent {
   private _container: HTMLElement;
   private _activeTab: SettingsTab = 'appearance';
+  private _lastRenderKey: string | null = null;
+  private _renderedLanguage: string | null = null;
 
   constructor(container: HTMLElement) {
     this._container = container;
     store.subscribe(() => this.render());
   }
 
+  private computeRenderKey(): string {
+    const app = store.appSettings;
+    const tools = store.toolSettings;
+    return JSON.stringify({
+      tab: this._activeTab,
+      app,
+      pressureSensitivityEnabled: tools.pressureSensitivityEnabled,
+      mousePressureSimulation: tools.mousePressureSimulation,
+      pressureCurve: tools.pressureCurve,
+      pressureStrength: tools.pressureStrength,
+      strokeSmoothing: tools.strokeSmoothing,
+      palmRejectionEnabled: tools.palmRejectionEnabled,
+      stylusInvertedEraserEnabled: tools.stylusInvertedEraserEnabled,
+      drawingCursor: tools.drawingCursor,
+    });
+  }
+
+  /**
+   * Instant tab switch with NO overlay rebuild. The overlay/dialog carry open
+   * animations (`fadeIn`/`scaleUp`); recreating them restarts the animation
+   * and reads as close-then-open flicker. Only the nav highlight + content
+   * pane are swapped.
+   */
+  private switchTab(tab: SettingsTab): void {
+    if (tab === this._activeTab) return;
+    try {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    } catch (_) {}
+    this._activeTab = tab;
+    this._lastRenderKey = this.computeRenderKey();
+
+    this._container.querySelectorAll('[data-tab]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
+    });
+    const content = this._container.querySelector('.settings-content');
+    if (content) {
+      content.innerHTML = this.renderTabContent(store.appSettings, store.toolSettings);
+      content.scrollTop = 0;
+    }
+    this.bindContentEvents();
+  }
+
   public render(): void {
     if (!store.settingsModalOpen) {
       this._container.innerHTML = '';
+      this._lastRenderKey = null;
+      this._renderedLanguage = null;
       return;
     }
 
+    // Avoid rebuilding the whole dialog on unrelated store changes (document
+    // tab switches, zoom, page scroll, drawing). A full innerHTML rebuild
+    // loses scroll position/focus and looks like the panel is loading again —
+    // and it destroys color inputs mid-drag while picking a custom color.
     const app = store.appSettings;
     const tools = store.toolSettings;
+    const renderKey = this.computeRenderKey();
+    if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') {
+      return;
+    }
+    const activeEl = document.activeElement as HTMLElement | null;
+    const userIsEditing = !!activeEl && this._container.contains(activeEl) &&
+      ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeEl.tagName);
+    if (userIsEditing && this._container.innerHTML !== '') {
+      // Defer: the change the user is making will trigger another render
+      // once focus leaves; rebuilding now would tear down the control.
+      return;
+    }
+
+    // Targeted refresh when the dialog is already open: leave the overlay +
+    // nav shell untouched (no animation restart, no focus loss) and only swap
+    // the content pane. Full rebuilds happen on first open or language change
+    // (header/nav labels are localized).
+    const overlayExists = !!this._container.querySelector('#settings-overlay');
+    if (overlayExists && this._renderedLanguage === app.language) {
+      this._lastRenderKey = renderKey;
+      const content = this._container.querySelector('.settings-content');
+      const prevScroll = content?.scrollTop ?? 0;
+      this._container.querySelectorAll('[data-tab]').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === this._activeTab);
+      });
+      if (content) {
+        content.innerHTML = this.renderTabContent(app, tools);
+        content.scrollTop = prevScroll;
+      }
+      this.bindContentEvents();
+      return;
+    }
+
+    this._lastRenderKey = renderKey;
+    this._renderedLanguage = app.language;
+    const prevScroll = this._container.querySelector('.settings-content')?.scrollTop ?? 0;
 
     this._container.innerHTML = `
       <div class="modal-overlay" id="settings-overlay">
@@ -92,6 +178,8 @@ export class SettingsModalComponent {
     `;
 
     this.bindEvents();
+    const content = this._container.querySelector('.settings-content');
+    if (content && prevScroll > 0) content.scrollTop = prevScroll;
   }
 
   private renderTabContent(app: typeof store.appSettings, tools: typeof store.toolSettings): string {
@@ -483,6 +571,12 @@ export class SettingsModalComponent {
   }
 
   private bindEvents() {
+    this.bindShellEvents();
+    this.bindContentEvents();
+  }
+
+  /** Overlay, close button, tab nav — bound once per dialog lifetime. */
+  private bindShellEvents() {
     const overlay = this._container.querySelector('#settings-overlay');
     overlay?.addEventListener('click', (e) => {
       if (e.target === overlay) store.setSettingsModalOpen(false);
@@ -492,23 +586,22 @@ export class SettingsModalComponent {
       store.setSettingsModalOpen(false);
     });
 
-    // Tab buttons
+    // Tab buttons — targeted swap, never a full overlay rebuild.
     this._container.querySelectorAll('[data-tab]').forEach(btn => {
       btn.addEventListener('click', () => {
         const tab = btn.getAttribute('data-tab') as SettingsTab;
-        if (tab) {
-          this._activeTab = tab;
-          this.render();
-        }
+        if (tab) this.switchTab(tab);
       });
     });
+  }
 
-    // Theme toggles
+  /** Controls inside the content pane — rebound after every content swap. */
+  private bindContentEvents() {
+    // Theme toggles (subscription render refreshes selected states in place)
     this._container.querySelectorAll('[data-set-theme]').forEach(btn => {
       btn.addEventListener('click', () => {
         const theme = btn.getAttribute('data-set-theme') as ThemeMode;
         store.updateAppSettings({ theme });
-        this.render();
       });
     });
 
@@ -518,7 +611,6 @@ export class SettingsModalComponent {
         const accent = btn.getAttribute('data-set-accent');
         if (accent) {
           store.updateAppSettings({ accentColor: accent });
-          this.render();
         }
       });
     });
@@ -541,7 +633,6 @@ export class SettingsModalComponent {
       btn.addEventListener('click', () => {
         const density = btn.getAttribute('data-set-density') as 'comfortable' | 'compact';
         store.updateAppSettings({ uiDensity: density });
-        this.render();
       });
     });
 
@@ -593,7 +684,6 @@ export class SettingsModalComponent {
         const cursor = btn.getAttribute('data-set-cursor') as any;
         if (cursor) {
           store.updateToolSettings({ drawingCursor: cursor });
-          this.render();
         }
       });
     });
@@ -649,11 +739,10 @@ export class SettingsModalComponent {
       store.updateAppSettings({ autoSaveIntervalMs: parseInt(autosaveSelect.value, 10) });
     });
 
-    // Reset settings button
+    // Reset settings button (subscription render refreshes content in place)
     this._container.querySelector('#reset-settings-btn')?.addEventListener('click', () => {
       if (confirm('Reset all application preferences to default values?')) {
         store.resetSettingsToDefault();
-        this.render();
       }
     });
 
@@ -667,11 +756,10 @@ export class SettingsModalComponent {
       }
     });
 
-    // Language toggle
+    // Language toggle (full rebuild — header/nav labels are localized)
     this._container.querySelectorAll('[data-set-lang]').forEach(btn => {
       btn.addEventListener('click', () => {
         store.updateAppSettings({ language: btn.getAttribute('data-set-lang') as LanguageMode });
-        this.render();
       });
     });
 

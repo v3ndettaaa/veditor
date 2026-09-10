@@ -3,7 +3,7 @@
  * Handles 120/240Hz coalesced events, stylus pressure, palm rejection, and tool dispatching.
  */
 
-import { Point, StrokePoint, ToolType } from '../core/types';
+import { Point, StrokePoint, ToolType, Annotation } from '../core/types';
 import { store } from '../core/store';
 import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand } from '../core/history';
 import { PressureEngine } from './pressure';
@@ -28,6 +28,19 @@ export class PointerHandler {
   private _lastPointerX: number = 0;
   private _lastPointerY: number = 0;
   private _simulatedVelocityPressure: number = 0.5;
+  /**
+   * Effective tool for the in-progress stroke (may differ from
+   * `store.activeTool` when the stylus inverted tail auto-selects eraser).
+   * Using the latched value in move/up fixes pen-drawn-instead-of-erased
+   * strokes with hardware eraser tips.
+   */
+  private _strokeTool: ToolType | null = null;
+  /**
+   * Live eraser session: original page annotations at stroke start. Moves
+   * mutate the document directly with zero history/notify cost for instant
+   * feedback; pointer-up commits ONE undo step for the whole drag.
+   */
+  private _eraserSession: { pageIndex: number; original: Annotation[] } | null = null;
 
   public handlePointerDown(
     e: PointerEvent,
@@ -58,6 +71,7 @@ export class PointerHandler {
     if (tSettings.stylusInvertedEraserEnabled && e.pointerType === 'pen' && (e.buttons === 32 || (e as any).button === 5)) {
       tool = 'eraser';
     }
+    this._strokeTool = tool;
 
     const defaultLayerId = 'layer-default';
 
@@ -88,7 +102,9 @@ export class PointerHandler {
 
       case 'eraser':
         eraserTool.start(pt, tSettings.eraserWidth / 2, tSettings.eraserMode);
-        this.processEraser(pt, pageIndex, onNeedRepaint);
+        this.beginEraserSession(pageIndex);
+        this.applyEraserDirect([pt], pageIndex);
+        onNeedRepaint();
         break;
 
       case 'polygon': {
@@ -100,13 +116,13 @@ export class PointerHandler {
               history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
             }
             if (this._pageScratchCtx) {
-              this._pageScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
+              this._pageScratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
             }
             onNeedRepaint();
             return;
           }
           if (this._pageScratchCtx) {
-            this._pageScratchCtx.clearRect(0, 0, canvas.width, canvas.height);
+            this._pageScratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
             shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (window.devicePixelRatio || 1));
           }
           return;
@@ -210,64 +226,75 @@ export class PointerHandler {
   ): void {
     if (!this._isPointerDown || this._activePageIndex !== pageIndex) return;
 
-    // Use coalesced events for extreme pen drawing smoothness
+    // Use coalesced events for extreme pen drawing smoothness, but batch them
+    // into a SINGLE composite per animation frame:
+    // - drawing tools push all points, then render once (avoids O(n^2)
+    //   full-stroke redraws and multiply overdraw darkening per sub-event)
+    // - eraser merges all hits into one history command + one repaint + one
+    //   preview circle (fixes lag and trailing circles left behind mid-frame)
     const coalescedEvents = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e];
-    const tool = store.activeTool;
+    const tool = this._strokeTool ?? store.activeTool;
     const ctx = this._pageScratchCtx;
     if (!ctx) return;
 
-    // Clear scratchpad canvas
+    // Clear scratchpad canvas once per frame
     ctx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
 
     const dpr = window.devicePixelRatio || 1;
     const renderScale = store.zoom * dpr;
+    const pts = coalescedEvents.map((evt: PointerEvent) => this.getPointInPage(evt, scratchCanvas));
+    if (pts.length === 0) return;
+    const lastPt = pts[pts.length - 1];
+    const shiftKey = (e as MouseEvent).shiftKey === true;
 
-    for (const evt of coalescedEvents) {
-      const pt = this.getPointInPage(evt, scratchCanvas);
+    switch (tool) {
+      case 'pen':
+        for (const pt of pts) penTool.move(pt);
+        penTool.renderScratchpad(ctx, renderScale);
+        break;
 
-      switch (tool) {
-        case 'pen':
-          penTool.move(pt);
-          penTool.renderScratchpad(ctx, renderScale);
-          break;
+      case 'highlighter':
+        for (const pt of pts) highlighterTool.move(pt, shiftKey);
+        highlighterTool.renderScratchpad(ctx, renderScale);
+        break;
 
-        case 'highlighter':
-          highlighterTool.move(pt, (_e as MouseEvent).shiftKey || (e as MouseEvent).shiftKey);
-          highlighterTool.renderScratchpad(ctx, renderScale);
-          break;
+      case 'eraser':
+        eraserTool.move(lastPt);
+        // Direct document mutation + single canvas repaint: zero history,
+        // zero store.notify per frame. The whole drag commits as ONE undo
+        // step on pointer-up (see commitEraserSession).
+        this.applyEraserDirect(pts, pageIndex);
+        onNeedRepaint();
+        // Single preview ring at the live position — drawing one per
+        // coalesced sub-event left a trail of stale circles behind the cursor.
+        eraserTool.renderScratchpad(ctx, lastPt, renderScale);
+        break;
 
-        case 'eraser':
-          eraserTool.move(pt);
-          this.processEraser(pt, pageIndex, onNeedRepaint);
-          eraserTool.renderScratchpad(ctx, pt, renderScale);
-          break;
+      case 'rectangle':
+      case 'ellipse':
+      case 'line':
+      case 'arrow':
+      case 'polygon':
+      case 'freeform-shape':
+        for (const pt of pts) shapesTool.move(pt);
+        shapesTool.renderScratchpad(ctx, renderScale);
+        break;
 
-        case 'rectangle':
-        case 'ellipse':
-        case 'line':
-        case 'arrow':
-        case 'polygon':
-        case 'freeform-shape':
-          shapesTool.move(pt);
-          shapesTool.renderScratchpad(ctx, renderScale);
-          break;
+      case 'measure-distance':
+      case 'measure-angle':
+      case 'measure-area':
+        for (const pt of pts) measureTool.move(pt);
+        measureTool.renderScratchpad(ctx, renderScale);
+        break;
 
-        case 'measure-distance':
-        case 'measure-angle':
-        case 'measure-area':
-          measureTool.move(pt);
-          measureTool.renderScratchpad(ctx, renderScale);
-          break;
+      case 'laser':
+        for (const pt of pts) laserTool.move(pt);
+        break;
 
-        case 'laser':
-          laserTool.move(pt);
-          break;
-
-        case 'redaction':
-          redactionTool.move(pt);
-          redactionTool.renderScratchpad(ctx, renderScale);
-          break;
-      }
+      case 'redaction':
+        for (const pt of pts) redactionTool.move(pt);
+        redactionTool.renderScratchpad(ctx, renderScale);
+        break;
     }
   }
 
@@ -280,11 +307,12 @@ export class PointerHandler {
     if (!this._isPointerDown || this._activePageIndex !== pageIndex) return;
 
     this._isPointerDown = false;
-    const tool = store.activeTool;
+    const tool = this._strokeTool ?? store.activeTool;
     const defaultLayerId = 'layer-default';
 
     if (tool === 'polygon') {
       this._isPointerDown = false;
+      this._strokeTool = null;
       // Polygons remain active across clicks until closed or completed
       if (this._pageScratchCtx && shapesTool.isPolygonActive()) {
         shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (window.devicePixelRatio || 1));
@@ -314,6 +342,7 @@ export class PointerHandler {
 
       case 'eraser':
         eraserTool.finish();
+        this.commitEraserSession(pageIndex);
         break;
 
       case 'rectangle':
@@ -352,6 +381,7 @@ export class PointerHandler {
       this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
     }
     this._isPointerDown = false;
+    this._strokeTool = null;
     this._activePageIndex = -1;
     this._pageScratchCanvas = null;
     this._pageScratchCtx = null;
@@ -386,18 +416,67 @@ export class PointerHandler {
     }
   }
 
-  private processEraser(point: Point, pageIndex: number, onNeedRepaint: () => void) {
+  private beginEraserSession(pageIndex: number): void {
     const doc = store.activeDocument;
-    if (!doc || !doc.annotations[pageIndex]) return;
+    if (!doc) {
+      this._eraserSession = null;
+      return;
+    }
+    // Shallow copy of the array; annotation objects themselves are treated as
+    // immutable by the eraser (testErase creates new objects for splits).
+    this._eraserSession = { pageIndex, original: [...(doc.annotations[pageIndex] || [])] };
+  }
 
-    const result = eraserTool.testErase(point, doc.annotations[pageIndex]);
-    if (result.toRemove.length > 0) {
-      if (result.toAdd.length > 0) {
-        history.execute(new ReplaceAnnotationsCommand(pageIndex, result.toRemove, result.toAdd));
-      } else {
-        history.execute(new DeleteAnnotationsCommand(pageIndex, result.toRemove));
-      }
-      onNeedRepaint();
+  /**
+   * Applies eraser hits straight to the document with no history and no
+   * store notification — pure live visual feedback at pointer-event rate.
+   * Each point is tested against the CURRENT page state so continuous drags
+   * (including splits created earlier in the same frame) erase correctly.
+   */
+  private applyEraserDirect(points: Point[], pageIndex: number): void {
+    const doc = store.activeDocument;
+    if (!doc || points.length === 0) return;
+    if (!doc.annotations[pageIndex]) return;
+
+    for (const point of points) {
+      const current = doc.annotations[pageIndex];
+      if (current.length === 0) break;
+      const result = eraserTool.testErase(point, current);
+      if (result.toRemove.length === 0) continue;
+      const removeIds = new Set(result.toRemove.map(a => a.id));
+      doc.annotations[pageIndex] = current
+        .filter(a => !removeIds.has(a.id))
+        .concat(result.toAdd);
+      doc.lastModifiedAt = Date.now();
+    }
+  }
+
+  /**
+   * Commits the whole eraser drag as a SINGLE undo step. Net diff between
+   * stroke-start snapshot and live state — transient pixel fragments created
+   * and re-erased mid-stroke cancel out instead of piling hundreds of history
+   * entries (each a full app re-render) onto the stack.
+   */
+  private commitEraserSession(pageIndex: number): void {
+    const session = this._eraserSession;
+    this._eraserSession = null;
+    if (!session || session.pageIndex !== pageIndex) return;
+    const doc = store.activeDocument;
+    if (!doc) return;
+
+    const current = doc.annotations[pageIndex] || [];
+    const original = session.original;
+    const currentIds = new Set(current.map(a => a.id));
+    const originalIds = new Set(original.map(a => a.id));
+
+    const removed = original.filter(a => !currentIds.has(a.id));
+    const added = current.filter(a => !originalIds.has(a.id));
+    if (removed.length === 0 && added.length === 0) return;
+
+    if (added.length > 0) {
+      history.pushCommitted(new ReplaceAnnotationsCommand(pageIndex, removed, added));
+    } else {
+      history.pushCommitted(new DeleteAnnotationsCommand(pageIndex, removed));
     }
   }
 
