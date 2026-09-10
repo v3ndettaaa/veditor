@@ -592,6 +592,50 @@ body.no-page-shadows .pdf-page-container {
   text-align: right;
 }
 
+/* Free-typed numeric + hex inputs inside tool hover cards. */
+.size-type-input {
+  width: 44px;
+  min-width: 0;
+  padding: 1px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--text-primary);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: 4px;
+  outline: none;
+}
+
+.size-type-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.hex-type-input {
+  width: 62px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  outline: none;
+}
+
+.hex-type-input:hover {
+  border-color: var(--border-medium);
+}
+
+.hex-type-input:focus {
+  color: var(--text-primary);
+  background: var(--bg-surface-elevated);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
 .mode-toggle-btn {
   display: flex;
   align-items: center;
@@ -864,6 +908,11 @@ body.invert-pdf-document .pdf-page-canvas {
   text-align: center;
 }
 
+input.view-zoom-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
 /* Empty State */
 .empty-state-view {
   display: flex;
@@ -960,6 +1009,33 @@ body.invert-pdf-document .pdf-page-canvas {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+input.prop-num-input,
+input.prop-hex-input {
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+  border-radius: 4px;
+  outline: none;
+  padding: 1px 5px;
+  width: 64px;
+  text-align: right;
+}
+
+input.prop-hex-input {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  width: 76px;
+}
+
+input.prop-num-input:focus,
+input.prop-hex-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+  color: var(--text-primary);
 }
 
 .prop-btn-row {

@@ -10,6 +10,24 @@ import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
 import { ToolType, EraserMode } from '../../core/types';
 
+/** Parses free-typed numeric input, falling back when empty/invalid. */
+function clampTypedNumber(raw: string, min: number, max: number, fallback: number): number {
+  const n = parseFloat(String(raw ?? '').trim());
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** Validates free-typed hex colors (`#rrggbb`, `#rgb`, with/without `#`). */
+function parseHexColor(raw: string): string | null {
+  let h = String(raw ?? '').trim().toLowerCase();
+  if (!h) return null;
+  if (h[0] !== '#') h = '#' + h;
+  if (/^#[0-9a-f]{3}$/.test(h)) {
+    h = '#' + h.slice(1).split('').map(c => c + c).join('');
+  }
+  return /^#[0-9a-f]{6}$/.test(h) ? h : null;
+}
+
 export class ToolbarComponent {
   private _container: HTMLElement;
   private _lastActiveTool: ToolType | null = null;
@@ -133,6 +151,8 @@ export class ToolbarComponent {
                   <div class="color-picker-wrapper" title="Custom color picker">
                     <input type="color" id="hover-pen-color-picker" class="color-picker-input" value="${s.penColor}">
                   </div>
+                  <input type="text" id="hover-pen-color-hex" class="hex-type-input" value="${s.penColor}"
+                         spellcheck="false" maxlength="7" title="Type any hex color, e.g. #4f46e5" aria-label="Pen color hex">
                 </div>
               </div>
 
@@ -150,7 +170,8 @@ export class ToolbarComponent {
                 </div>
                 <div class="size-slider-wrapper">
                   <input type="range" id="hover-pen-slider" class="size-slider" min="1" max="30" value="${s.penWidth}">
-                  <span class="size-readout pen-readout">${s.penWidth}px</span>
+                  <input type="number" id="hover-pen-width-input" class="size-readout size-type-input pen-readout"
+                         min="1" max="50" step="1" value="${s.penWidth}" title="Type any width (1-50px)" aria-label="Pen width">
                 </div>
               </div>
 
@@ -194,6 +215,8 @@ export class ToolbarComponent {
                   <div class="color-picker-wrapper" title="Custom highlighter color">
                     <input type="color" id="hover-hl-color-picker" class="color-picker-input" value="${s.highlighterColor}">
                   </div>
+                  <input type="text" id="hover-hl-color-hex" class="hex-type-input" value="${s.highlighterColor}"
+                         spellcheck="false" maxlength="7" title="Type any hex color, e.g. #fef08a" aria-label="Highlighter color hex">
                 </div>
               </div>
 
@@ -208,7 +231,8 @@ export class ToolbarComponent {
                 </div>
                 <div class="size-slider-wrapper">
                   <input type="range" id="hover-hl-slider" class="size-slider" min="6" max="60" value="${s.highlighterWidth}">
-                  <span class="size-readout hl-readout">${s.highlighterWidth}px</span>
+                  <input type="number" id="hover-hl-width-input" class="size-readout size-type-input hl-readout"
+                         min="2" max="100" step="1" value="${s.highlighterWidth}" title="Type any width (2-100px)" aria-label="Highlighter width">
                 </div>
               </div>
 
@@ -252,7 +276,8 @@ export class ToolbarComponent {
                 <button class="size-pill eraser-pill ${s.eraserWidth === 48 ? 'active' : ''}" data-eraser-width="48">Large</button>
                 <div class="size-slider-wrapper">
                   <input type="range" id="hover-eraser-slider" class="size-slider" min="6" max="80" value="${s.eraserWidth}">
-                  <span class="size-readout eraser-readout">${s.eraserWidth}px</span>
+                  <input type="number" id="hover-eraser-width-input" class="size-readout size-type-input eraser-readout"
+                         min="4" max="120" step="1" value="${s.eraserWidth}" title="Type any width (4-120px)" aria-label="Eraser width">
                 </div>
               </div>
             </div>
@@ -338,6 +363,8 @@ export class ToolbarComponent {
                   <div class="color-picker-wrapper" title="Custom text color">
                     <input type="color" id="hover-text-color-picker" class="color-picker-input" value="${s.textColor}">
                   </div>
+                  <input type="text" id="hover-text-color-hex" class="hex-type-input" value="${s.textColor}"
+                         spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Text color hex">
                 </div>
               </div>
 
@@ -349,6 +376,10 @@ export class ToolbarComponent {
                   ${textSizes.map(sz => `
                     <button class="size-pill text-pill ${s.fontSize === sz ? 'active' : ''}" data-font-size="${sz}">${sz}</button>
                   `).join('')}
+                </div>
+                <div class="size-slider-wrapper">
+                  <input type="number" id="hover-font-size-input" class="size-readout size-type-input"
+                         min="6" max="144" step="1" value="${s.fontSize}" title="Type any size (6-144px)" aria-label="Font size">
                 </div>
               </div>
 
@@ -457,8 +488,12 @@ export class ToolbarComponent {
       el.classList.toggle('active', w === s.penWidth);
     });
 
-    const penReadout = this._container.querySelector('.pen-readout');
-    if (penReadout) penReadout.textContent = `${s.penWidth}px`;
+    const penReadout = this._container.querySelector<HTMLInputElement>('.pen-readout');
+    if (penReadout && document.activeElement !== penReadout) penReadout.value = String(s.penWidth);
+
+    this._container.querySelectorAll<HTMLInputElement>('.hex-type-input#hover-pen-color-hex').forEach(el => {
+      if (document.activeElement !== el && el.value !== s.penColor) el.value = s.penColor;
+    });
 
     const penSlider = this._container.querySelector<HTMLInputElement>('#hover-pen-slider');
     if (penSlider && penSlider.value !== String(s.penWidth)) {
@@ -492,8 +527,11 @@ export class ToolbarComponent {
       el.classList.toggle('active', w === s.highlighterWidth);
     });
 
-    const hlReadout = this._container.querySelector('.hl-readout');
-    if (hlReadout) hlReadout.textContent = `${s.highlighterWidth}px`;
+    const hlReadout = this._container.querySelector<HTMLInputElement>('.hl-readout');
+    if (hlReadout && document.activeElement !== hlReadout) hlReadout.value = String(s.highlighterWidth);
+
+    const hlHex = this._container.querySelector<HTMLInputElement>('#hover-hl-color-hex');
+    if (hlHex && document.activeElement !== hlHex && hlHex.value !== s.highlighterColor) hlHex.value = s.highlighterColor;
 
     const hlSlider = this._container.querySelector<HTMLInputElement>('#hover-hl-slider');
     if (hlSlider && hlSlider.value !== String(s.highlighterWidth)) {
@@ -521,8 +559,8 @@ export class ToolbarComponent {
       el.classList.toggle('active', w === s.eraserWidth);
     });
 
-    const eraserReadout = this._container.querySelector('.eraser-readout');
-    if (eraserReadout) eraserReadout.textContent = `${s.eraserWidth}px`;
+    const eraserReadout = this._container.querySelector<HTMLInputElement>('.eraser-readout');
+    if (eraserReadout && document.activeElement !== eraserReadout) eraserReadout.value = String(s.eraserWidth);
 
     const eraserSlider = this._container.querySelector<HTMLInputElement>('#hover-eraser-slider');
     if (eraserSlider && eraserSlider.value !== String(s.eraserWidth)) {
@@ -567,6 +605,19 @@ export class ToolbarComponent {
       }
     });
 
+    this._container.querySelectorAll<HTMLInputElement>('.shape-width-input').forEach(el => {
+      if (document.activeElement !== el && el.value !== String(s.shapeWidth)) el.value = String(s.shapeWidth);
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-stroke-hex').forEach(el => {
+      if (document.activeElement !== el && el.value !== s.shapeColor) el.value = s.shapeColor;
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-fill-hex').forEach(el => {
+      const shown = s.shapeFillColor === 'transparent' ? '' : s.shapeFillColor;
+      if (document.activeElement !== el && el.value !== shown) el.value = shown;
+    });
+
     // 5. Text Indicators
     this._container.querySelectorAll('[data-text-color]').forEach(el => {
       const c = el.getAttribute('data-text-color');
@@ -575,6 +626,14 @@ export class ToolbarComponent {
 
     const textPicker = this._container.querySelector<HTMLInputElement>('#hover-text-color-picker');
     if (textPicker && textPicker.value !== s.textColor) textPicker.value = s.textColor;
+
+    const textHex = this._container.querySelector<HTMLInputElement>('#hover-text-color-hex');
+    if (textHex && document.activeElement !== textHex && textHex.value !== s.textColor) textHex.value = s.textColor;
+
+    const fontInput = this._container.querySelector<HTMLInputElement>('#hover-font-size-input');
+    if (fontInput && document.activeElement !== fontInput && fontInput.value !== String(s.fontSize)) {
+      fontInput.value = String(s.fontSize);
+    }
 
     this._container.querySelectorAll('[data-font-size]').forEach(el => {
       const sz = parseInt(el.getAttribute('data-font-size') || '0', 10);
@@ -638,6 +697,8 @@ export class ToolbarComponent {
           <div class="color-picker-wrapper" title="Custom stroke color">
             <input type="color" class="color-picker-input shape-color-picker" value="${s.shapeColor}">
           </div>
+          <input type="text" class="hex-type-input shape-stroke-hex" value="${s.shapeColor}"
+                 spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Shape stroke color hex">
         </div>
       </div>
 
@@ -649,6 +710,10 @@ export class ToolbarComponent {
           ${strokeWidths.map(w => `
             <button class="size-pill shape-pill ${s.shapeWidth === w ? 'active' : ''}" data-shape-width="${w}">${w}px</button>
           `).join('')}
+        </div>
+        <div class="size-slider-wrapper">
+          <input type="number" class="size-readout size-type-input shape-width-input"
+                 min="0.5" max="40" step="0.5" value="${s.shapeWidth}" title="Type any width (0.5-40px)" aria-label="Shape stroke width">
         </div>
       </div>
 
@@ -676,6 +741,8 @@ export class ToolbarComponent {
             <div class="color-picker-wrapper" title="Custom Fill Color">
               <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
             </div>
+            <input type="text" class="hex-type-input shape-fill-hex" value="${s.shapeFillColor === 'transparent' ? '' : s.shapeFillColor}"
+                   spellcheck="false" maxlength="7" placeholder="None" title="Type any hex fill color, empty = none" aria-label="Shape fill color hex">
           </div>
         </div>
       ` : ''}
@@ -859,6 +926,117 @@ export class ToolbarComponent {
       const w = parseInt((e.target as HTMLInputElement).value, 10);
       store.updateToolSettings({ eraserWidth: w });
       this.updateIndicators();
+    });
+
+    // Free-typed numeric + hex inputs (Enter/blur commits, Escape reverts).
+    // Commits skip no-op values so tabbing through never spams store notifies.
+    const bindTyped = (selector: string, commit: (el: HTMLInputElement) => void) => {
+      this._container.querySelectorAll<HTMLInputElement>(selector).forEach(el => {
+        el.addEventListener('keydown', (e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit(el);
+            el.blur();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            this.updateIndicators();
+            el.blur();
+          }
+        });
+        el.addEventListener('focus', () => el.select());
+        // 'change' covers spinner arrows + picker-like commits; blur covers typing.
+        el.addEventListener('change', () => commit(el));
+        el.addEventListener('blur', () => commit(el));
+      });
+    };
+
+    bindTyped('#hover-pen-width-input', (el) => {
+      const w = Math.round(clampTypedNumber(el.value, 1, 50, store.toolSettings.penWidth));
+      if (w !== store.toolSettings.penWidth) {
+        store.updateToolSettings({ penWidth: w });
+        this.updateIndicators();
+      } else {
+        el.value = String(w);
+      }
+    });
+
+    bindTyped('#hover-hl-width-input', (el) => {
+      const w = Math.round(clampTypedNumber(el.value, 2, 100, store.toolSettings.highlighterWidth));
+      if (w !== store.toolSettings.highlighterWidth) {
+        store.updateToolSettings({ highlighterWidth: w });
+        this.updateIndicators();
+      } else {
+        el.value = String(w);
+      }
+    });
+
+    bindTyped('#hover-eraser-width-input', (el) => {
+      const w = Math.round(clampTypedNumber(el.value, 4, 120, store.toolSettings.eraserWidth));
+      if (w !== store.toolSettings.eraserWidth) {
+        store.updateToolSettings({ eraserWidth: w });
+        this.updateIndicators();
+      } else {
+        el.value = String(w);
+      }
+    });
+
+    bindTyped('.shape-width-input', (el) => {
+      const w = Math.round(clampTypedNumber(el.value, 0.5, 40, store.toolSettings.shapeWidth) * 2) / 2;
+      if (w !== store.toolSettings.shapeWidth) {
+        store.updateToolSettings({ shapeWidth: w });
+        this.updateIndicators();
+      } else {
+        el.value = String(w);
+      }
+    });
+
+    bindTyped('#hover-font-size-input', (el) => {
+      const sz = Math.round(clampTypedNumber(el.value, 6, 144, store.toolSettings.fontSize));
+      if (sz !== store.toolSettings.fontSize) {
+        store.updateToolSettings({ fontSize: sz });
+        this.updateIndicators();
+      } else {
+        el.value = String(sz);
+      }
+    });
+
+    const bindHex = (selector: string, get: () => string, set: (hex: string) => void) => {
+      bindTyped(selector, (el) => {
+        const current = get();
+        const parsed = parseHexColor(el.value);
+        if (parsed && parsed !== current.toLowerCase()) {
+          set(parsed);
+          this.updateIndicators();
+        } else {
+          el.value = current;
+        }
+      });
+    };
+
+    bindHex('#hover-pen-color-hex', () => store.toolSettings.penColor, (hex) => store.updateToolSettings({ penColor: hex }));
+    bindHex('#hover-hl-color-hex', () => store.toolSettings.highlighterColor, (hex) => store.updateToolSettings({ highlighterColor: hex }));
+    bindHex('#hover-text-color-hex', () => store.toolSettings.textColor, (hex) => store.updateToolSettings({ textColor: hex }));
+    bindHex('.shape-stroke-hex', () => store.toolSettings.shapeColor, (hex) => store.updateToolSettings({ shapeColor: hex }));
+    // Fill allows empty (= None / transparent).
+    bindTyped('.shape-fill-hex', (el) => {
+      const raw = el.value.trim();
+      if (raw === '') {
+        if (store.toolSettings.shapeFillColor !== 'transparent') {
+          store.updateToolSettings({ shapeFillColor: 'transparent' });
+          this.updateIndicators();
+        }
+        el.value = '';
+        return;
+      }
+      const parsed = parseHexColor(raw);
+      const current = store.toolSettings.shapeFillColor;
+      if (parsed && parsed !== current.toLowerCase()) {
+        store.updateToolSettings({ shapeFillColor: parsed });
+        this.updateIndicators();
+      } else {
+        el.value = current === 'transparent' ? '' : current;
+      }
     });
 
     // Shapes listeners

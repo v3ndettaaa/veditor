@@ -10,8 +10,20 @@ import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
 import { Annotation } from '../../core/types';
 
+/** Validates free-typed hex colors (`#rrggbb`, `#rgb`, with/without `#`). */
+function parseHexInput(raw: string): string | null {
+  let h = String(raw ?? '').trim().toLowerCase();
+  if (!h) return null;
+  if (h[0] !== '#') h = '#' + h;
+  if (/^#[0-9a-f]{3}$/.test(h)) {
+    h = '#' + h.slice(1).split('').map(c => c + c).join('');
+  }
+  return /^#[0-9a-f]{6}$/.test(h) ? h : null;
+}
+
 export class PropertiesPanelComponent {
   private _container: HTMLElement;
+  private _lastSelectedKey: string | null = null;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -45,8 +57,22 @@ export class PropertiesPanelComponent {
 
     if (selectedAnnotations.length === 0) {
       this._container.classList.add('collapsed');
+      this._lastSelectedKey = null;
       return;
     }
+
+    // Never rebuild while the user is typing in a panel field: slider drags
+    // and keystrokes fire store notifies that would otherwise destroy the
+    // focused control mid-edit. Rebuild only when the selection itself changes.
+    const selectedKey = selectedIds.slice().sort().join(',');
+    const activeEl = document.activeElement as HTMLElement | null;
+    const userIsEditing = !!activeEl && this._container.contains(activeEl) &&
+      ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeEl.tagName);
+    if (userIsEditing && selectedKey === this._lastSelectedKey &&
+        this._container.querySelector('#prop-delete-btn')) {
+      return;
+    }
+    this._lastSelectedKey = selectedKey;
 
     const firstAnn = selectedAnnotations[0];
     const hasShape = selectedAnnotations.some(ann => 'fillColor' in ann || ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' || ann.type === 'freeform-shape');
@@ -68,9 +94,9 @@ export class PropertiesPanelComponent {
             <div class="color-picker-wrapper is-lg" title="Color">
               <input type="color" id="prop-color-picker" class="color-picker-input" value="${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}">
             </div>
-            <span class="prop-color-value" id="prop-color-val">
-              ${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}
-            </span>
+            <input type="text" class="prop-color-value prop-hex-input" id="prop-color-val"
+                   value="${(firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'}"
+                   spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Stroke color hex">
           </div>
         </div>
 
@@ -85,9 +111,10 @@ export class PropertiesPanelComponent {
               <div class="color-picker-wrapper is-lg" title="Fill Color">
                 <input type="color" id="prop-fill-picker" class="color-picker-input" value="${firstFillColor === 'transparent' ? '#ffffff' : firstFillColor}">
               </div>
-              <span class="prop-color-value" id="prop-fill-val">
-                ${firstFillColor === 'transparent' ? 'None' : firstFillColor}
-              </span>
+              <input type="text" class="prop-color-value prop-hex-input" id="prop-fill-val"
+                     value="${firstFillColor === 'transparent' ? '' : firstFillColor}"
+                     placeholder="None" spellcheck="false" maxlength="7"
+                     title="Type any hex fill color, empty = none" aria-label="Fill color hex">
             </div>
           </div>
         ` : ''}
@@ -96,7 +123,9 @@ export class PropertiesPanelComponent {
         <div class="prop-group">
           <div class="prop-label-row">
             <span class="prop-label">${t('properties.strokeWidth')}</span>
-            <span class="prop-value" id="prop-width-val">${(firstAnn as any).strokeWidth || 3}px</span>
+            <input type="number" class="prop-value prop-num-input" id="prop-width-val"
+                   min="0.5" max="100" step="0.5" value="${(firstAnn as any).strokeWidth || 3}"
+                   title="Type any width (0.5-100px)" aria-label="${t('properties.strokeWidth')}">
           </div>
           <input type="range" id="prop-width-slider" class="prop-slider" min="1" max="48"
                  value="${(firstAnn as any).strokeWidth || 3}" aria-label="${t('properties.strokeWidth')}">
@@ -106,7 +135,9 @@ export class PropertiesPanelComponent {
         <div class="prop-group">
           <div class="prop-label-row">
             <span class="prop-label">${t('properties.opacity')}</span>
-            <span class="prop-value" id="prop-opacity-val">${Math.round((firstAnn.opacity || 1) * 100)}%</span>
+            <input type="number" class="prop-value prop-num-input" id="prop-opacity-val"
+                   min="1" max="100" step="1" value="${Math.round((firstAnn.opacity || 1) * 100)}"
+                   title="Type any opacity (1-100%)" aria-label="${t('properties.opacity')}">
           </div>
           <input type="range" id="prop-opacity-slider" class="prop-slider" min="10" max="100"
                  value="${Math.round((firstAnn.opacity || 1) * 100)}" aria-label="${t('properties.opacity')}">
@@ -137,13 +168,12 @@ export class PropertiesPanelComponent {
       store.clearSelection();
     });
 
-    // Color picker change
-    const colorPicker = this._container.querySelector('#prop-color-picker') as HTMLInputElement;
-    colorPicker?.addEventListener('input', () => {
-      const val = colorPicker.value;
-      const colorValEl = this._container.querySelector('#prop-color-val');
-      if (colorValEl) colorValEl.textContent = val;
+    const syncHexInput = (selector: string, val: string) => {
+      const el = this._container.querySelector<HTMLInputElement>(selector);
+      if (el && document.activeElement !== el && el.value !== val) el.value = val;
+    };
 
+    const applyStrokeColor = (val: string) => {
       selectedAnnotations.forEach(ann => {
         const prev = { ...ann };
         const next = { ...ann };
@@ -152,13 +182,41 @@ export class PropertiesPanelComponent {
         history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
       });
       store.setActivePageIndex(store.activePageIndex);
+    };
+
+    // Color picker change
+    const colorPicker = this._container.querySelector('#prop-color-picker') as HTMLInputElement;
+    colorPicker?.addEventListener('input', () => {
+      const val = colorPicker.value;
+      syncHexInput('#prop-color-val', val);
+      applyStrokeColor(val);
     });
+
+    // Typed hex stroke color (Enter/blur commits, Escape reverts)
+    const colorHex = this._container.querySelector<HTMLInputElement>('#prop-color-val');
+    const commitColorHex = () => {
+      if (!colorHex) return;
+      const parsed = parseHexInput(colorHex.value);
+      const current = String((firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5');
+      if (parsed) {
+        if (parsed !== current.toLowerCase()) applyStrokeColor(parsed);
+        colorHex.value = parsed;
+      } else {
+        colorHex.value = current;
+      }
+    };
+    colorHex?.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commitColorHex(); colorHex.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); colorHex.value = String((firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5'); colorHex.blur(); }
+    });
+    colorHex?.addEventListener('focus', () => colorHex.select());
+    colorHex?.addEventListener('blur', () => commitColorHex());
 
     // Fill picker & No-Fill button
     const fillPicker = this._container.querySelector('#prop-fill-picker') as HTMLInputElement;
     const onFillChange = (val: string) => {
-      const fillValEl = this._container.querySelector('#prop-fill-val');
-      if (fillValEl) fillValEl.textContent = val === 'transparent' ? 'None' : val;
+      syncHexInput('#prop-fill-val', val === 'transparent' ? '' : val);
       const noFillBtn = this._container.querySelector('#prop-no-fill-btn');
       noFillBtn?.classList.toggle('is-selected', val === 'transparent');
 
@@ -172,6 +230,32 @@ export class PropertiesPanelComponent {
       store.setActivePageIndex(store.activePageIndex);
     };
 
+    // Typed hex fill color (empty = none)
+    const fillHex = this._container.querySelector<HTMLInputElement>('#prop-fill-val');
+    const commitFillHex = () => {
+      if (!fillHex) return;
+      const raw = fillHex.value.trim();
+      if (raw === '') {
+        onFillChange('transparent');
+        fillHex.value = '';
+        return;
+      }
+      const parsed = parseHexInput(raw);
+      if (parsed) {
+        onFillChange(parsed);
+        fillHex.value = parsed;
+      } else {
+        fillHex.value = firstFillColor === 'transparent' ? '' : firstFillColor;
+      }
+    };
+    fillHex?.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commitFillHex(); fillHex.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); fillHex.value = firstFillColor === 'transparent' ? '' : firstFillColor; fillHex.blur(); }
+    });
+    fillHex?.addEventListener('focus', () => fillHex.select());
+    fillHex?.addEventListener('blur', () => commitFillHex());
+
     fillPicker?.addEventListener('input', () => onFillChange(fillPicker.value));
     fillPicker?.addEventListener('change', () => onFillChange(fillPicker.value));
 
@@ -179,13 +263,7 @@ export class PropertiesPanelComponent {
       onFillChange('transparent');
     });
 
-    // Width slider change
-    const widthSlider = this._container.querySelector('#prop-width-slider') as HTMLInputElement;
-    widthSlider?.addEventListener('input', () => {
-      const val = parseInt(widthSlider.value, 10);
-      const widthValEl = this._container.querySelector('#prop-width-val');
-      if (widthValEl) widthValEl.textContent = `${val}px`;
-
+    const applyStrokeWidth = (val: number) => {
       selectedAnnotations.forEach(ann => {
         if ('strokeWidth' in ann) {
           const prev = { ...ann };
@@ -194,22 +272,72 @@ export class PropertiesPanelComponent {
         }
       });
       store.setActivePageIndex(store.activePageIndex);
-    });
+    };
 
-    // Opacity slider change
-    const opacitySlider = this._container.querySelector('#prop-opacity-slider') as HTMLInputElement;
-    opacitySlider?.addEventListener('input', () => {
-      const val = parseInt(opacitySlider.value, 10) / 100;
-      const opValEl = this._container.querySelector('#prop-opacity-val');
-      if (opValEl) opValEl.textContent = `${Math.round(val * 100)}%`;
-
+    const applyOpacity = (val: number) => {
       selectedAnnotations.forEach(ann => {
         const prev = { ...ann };
         const next = { ...ann, opacity: val };
         history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
       });
       store.setActivePageIndex(store.activePageIndex);
+    };
+
+    // Width slider change
+    const widthSlider = this._container.querySelector('#prop-width-slider') as HTMLInputElement;
+    widthSlider?.addEventListener('input', () => {
+      const val = parseInt(widthSlider.value, 10);
+      const widthNum = this._container.querySelector<HTMLInputElement>('#prop-width-val');
+      if (widthNum && document.activeElement !== widthNum) widthNum.value = String(val);
+      applyStrokeWidth(val);
     });
+
+    // Typed width (Enter/blur commits)
+    const widthNum = this._container.querySelector<HTMLInputElement>('#prop-width-val');
+    const commitWidthNum = () => {
+      if (!widthNum) return;
+      const fallback = Number((firstAnn as any).strokeWidth) || 3;
+      const n = parseFloat(widthNum.value);
+      const val = Number.isFinite(n) ? Math.min(100, Math.max(0.5, n)) : fallback;
+      widthNum.value = String(val);
+      applyStrokeWidth(val);
+    };
+    widthNum?.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commitWidthNum(); widthNum.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); widthNum.value = String((firstAnn as any).strokeWidth || 3); widthNum.blur(); }
+    });
+    widthNum?.addEventListener('focus', () => widthNum.select());
+    widthNum?.addEventListener('change', () => commitWidthNum());
+    widthNum?.addEventListener('blur', () => commitWidthNum());
+
+    // Opacity slider change
+    const opacitySlider = this._container.querySelector('#prop-opacity-slider') as HTMLInputElement;
+    opacitySlider?.addEventListener('input', () => {
+      const val = parseInt(opacitySlider.value, 10) / 100;
+      const opNum = this._container.querySelector<HTMLInputElement>('#prop-opacity-val');
+      if (opNum && document.activeElement !== opNum) opNum.value = String(Math.round(val * 100));
+      applyOpacity(val);
+    });
+
+    // Typed opacity (Enter/blur commits)
+    const opacityNum = this._container.querySelector<HTMLInputElement>('#prop-opacity-val');
+    const commitOpacityNum = () => {
+      if (!opacityNum) return;
+      const fallback = Math.round((firstAnn.opacity || 1) * 100);
+      const n = parseFloat(opacityNum.value);
+      const pct = Number.isFinite(n) ? Math.min(100, Math.max(1, Math.round(n))) : fallback;
+      opacityNum.value = String(pct);
+      applyOpacity(pct / 100);
+    };
+    opacityNum?.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commitOpacityNum(); opacityNum.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); opacityNum.value = String(Math.round((firstAnn.opacity || 1) * 100)); opacityNum.blur(); }
+    });
+    opacityNum?.addEventListener('focus', () => opacityNum.select());
+    opacityNum?.addEventListener('change', () => commitOpacityNum());
+    opacityNum?.addEventListener('blur', () => commitOpacityNum());
 
     // Delete button
     this._container.querySelector('#prop-delete-btn')?.addEventListener('click', () => {

@@ -203,11 +203,23 @@ export class ViewportManager {
 
   public scrollToPage(pageIndex: number) {
     if (!this._scrollContainer) return;
-    const layout = this._pageLayouts.find(p => p.pageIndex === pageIndex);
+    const doc = store.activeDocument;
+    if (doc) {
+      pageIndex = Math.max(0, Math.min(doc.pageCount - 1, Math.floor(pageIndex)));
+    }
+    let layout = this._pageLayouts.find(p => p.pageIndex === pageIndex);
+    if (!layout) {
+      // Single / two-page modes only lay out the active spread, so a jump
+      // target has no layout yet: activate it first, then lay out and scroll.
+      // (Previously this silently did nothing and the jump field reset.)
+      store.setActivePageIndex(pageIndex);
+      this.updateLayout(true);
+      layout = this._pageLayouts.find(p => p.pageIndex === pageIndex);
+    }
     if (layout) {
       this._scrollContainer.scrollTo({
         top: Math.max(0, layout.top - 20),
-        behavior: 'smooth'
+        behavior: store.appSettings.smoothScroll !== false ? 'smooth' : 'auto'
       });
       store.setActivePageIndex(pageIndex);
     }

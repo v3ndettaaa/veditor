@@ -13,6 +13,10 @@ export class ViewControlsComponent {
   private _container: HTMLElement;
   private _invertDocument: boolean = false;
   private _isInitialized: boolean = false;
+  /** Document the bound listeners / clamped totals belong to. */
+  private _boundDocId: string | null = null;
+  /** Set while Enter commits, so the ensuing blur doesn't commit twice. */
+  private _enterCommitted: boolean = false;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -25,7 +29,15 @@ export class ViewControlsComponent {
     if (!doc) {
       this._container.style.display = 'none';
       this._isInitialized = false;
+      this._boundDocId = null;
       return;
+    }
+
+    // A new / switched document changes the page count: bound listeners close
+    // over the old total, so force a full rebuild + rebind instead of the
+    // selective-update path (stale clamps sent jumps to the wrong page).
+    if (this._boundDocId !== null && this._boundDocId !== doc.id) {
+      this._isInitialized = false;
     }
 
     this._container.style.display = 'flex';
@@ -85,7 +97,16 @@ export class ViewControlsComponent {
         ${getIconSvg('zoomOut', 15)}
       </button>
 
-      <span class="view-zoom-text">${zoomPct}%</span>
+      <input
+        id="view-zoom-input"
+        class="view-zoom-text view-zoom-input"
+        type="text"
+        inputmode="decimal"
+        value="${zoomPct}%"
+        title="Type zoom % (20-500) and press Enter"
+        aria-label="Zoom percent"
+        style="background:transparent; border:1px solid transparent; border-radius:4px; outline:none; width:52px;"
+      />
 
       <button id="view-zoom-in" class="view-btn" title="Zoom In (Ctrl +)">
         ${getIconSvg('zoomIn', 15)}
@@ -122,8 +143,9 @@ export class ViewControlsComponent {
       </button>
     `;
 
-    this.bindEvents(totalPages);
+    this.bindEvents();
     this._isInitialized = true;
+    this._boundDocId = doc.id;
   }
 
   private updateState(currentPage: number, totalPages: number, zoomPct: number, currentRot: number): void {
@@ -131,7 +153,6 @@ export class ViewControlsComponent {
     const totalPagesSpan = this._container.querySelector<HTMLElement>('#view-total-pages');
     const prevBtn = this._container.querySelector<HTMLButtonElement>('#view-prev-page');
     const nextBtn = this._container.querySelector<HTMLButtonElement>('#view-next-page');
-    const zoomSpan = this._container.querySelector<HTMLElement>('.view-zoom-text');
     const rotBadge = this._container.querySelector<HTMLElement>('#view-rotate-badge');
     const invertBtn = this._container.querySelector<HTMLElement>('#view-invert-doc');
 
@@ -156,8 +177,9 @@ export class ViewControlsComponent {
       nextBtn.style.opacity = currentPage >= totalPages ? '0.4' : '1';
     }
 
-    if (zoomSpan) {
-      zoomSpan.textContent = `${zoomPct}%`;
+    const zoomInput = this._container.querySelector<HTMLInputElement>('#view-zoom-input');
+    if (zoomInput && document.activeElement !== zoomInput) {
+      zoomInput.value = `${zoomPct}%`;
     }
 
     if (rotBadge) {
@@ -170,19 +192,23 @@ export class ViewControlsComponent {
     }
   }
 
-  private bindEvents(totalPages: number): void {
+  private bindEvents(): void {
     const pageInput = this._container.querySelector<HTMLInputElement>('#view-page-input');
+    // Page totals come from the LIVE document, never a bind-time closure
+    // (stale totals after tab switches clamped jumps to the wrong page).
+    const liveTotalPages = () => store.activeDocument?.pageCount ?? 1;
 
     const commitPageJump = () => {
       if (!pageInput) return;
+      const total = liveTotalPages();
       const raw = pageInput.value.trim();
       const num = parseInt(raw, 10);
       if (!isNaN(num)) {
-        const clamped = Math.max(1, Math.min(totalPages, num));
+        const clamped = Math.max(1, Math.min(total, num));
         pageInput.value = String(clamped);
-        if (clamped - 1 !== store.activePageIndex) {
-          viewportManager.scrollToPage(clamped - 1);
-        }
+        // scrollToPage is robust across view modes (activates + lays out the
+        // target spread first when its layout is missing).
+        viewportManager.scrollToPage(clamped - 1);
       } else {
         pageInput.value = String(store.activePageIndex + 1);
       }
@@ -198,7 +224,15 @@ export class ViewControlsComponent {
       pageInput.addEventListener('blur', () => {
         pageInput.style.borderColor = 'var(--border-medium)';
         pageInput.style.boxShadow = 'none';
-        commitPageJump();
+        // Enter already committed; skip so the jump isn't issued twice.
+        if (this._enterCommitted) {
+          this._enterCommitted = false;
+          return;
+        }
+        // Clicking away with an unchanged value is not a jump.
+        if (pageInput.value.trim() !== String(store.activePageIndex + 1)) {
+          commitPageJump();
+        }
       });
 
       pageInput.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -207,10 +241,12 @@ export class ViewControlsComponent {
 
         if (e.key === 'Enter') {
           e.preventDefault();
+          this._enterCommitted = true;
           commitPageJump();
           pageInput.blur();
         } else if (e.key === 'Escape') {
           e.preventDefault();
+          this._enterCommitted = true;
           pageInput.value = String(store.activePageIndex + 1);
           pageInput.blur();
         } else if (e.key === 'ArrowUp') {
@@ -220,9 +256,46 @@ export class ViewControlsComponent {
           }
         } else if (e.key === 'ArrowDown') {
           e.preventDefault();
-          if (store.activePageIndex < totalPages - 1) {
+          if (store.activePageIndex < liveTotalPages() - 1) {
             viewportManager.scrollToPage(store.activePageIndex + 1);
           }
+        }
+      });
+    }
+
+    const zoomInput = this._container.querySelector<HTMLInputElement>('#view-zoom-input');
+    const commitZoom = () => {
+      if (!zoomInput) return;
+      const num = parseFloat(zoomInput.value.replace('%', '').trim());
+      if (!isNaN(num)) {
+        const clamped = Math.max(20, Math.min(500, num));
+        store.setZoom(clamped / 100);
+        viewportManager.updateLayout(true);
+      }
+      zoomInput.value = `${Math.round(store.zoom * 100)}%`;
+    };
+
+    if (zoomInput) {
+      zoomInput.addEventListener('focus', () => {
+        zoomInput.select();
+        zoomInput.style.borderColor = 'var(--accent)';
+      });
+      zoomInput.addEventListener('blur', () => {
+        zoomInput.style.borderColor = 'transparent';
+        if (zoomInput.value.trim() !== `${Math.round(store.zoom * 100)}%`) {
+          commitZoom();
+        }
+      });
+      zoomInput.addEventListener('keydown', (e: KeyboardEvent) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commitZoom();
+          zoomInput.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          zoomInput.value = `${Math.round(store.zoom * 100)}%`;
+          zoomInput.blur();
         }
       });
     }
@@ -234,7 +307,8 @@ export class ViewControlsComponent {
     });
 
     this._container.querySelector('#view-next-page')?.addEventListener('click', () => {
-      if (store.activePageIndex < totalPages - 1) {
+      const total = store.activeDocument?.pageCount ?? 1;
+      if (store.activePageIndex < total - 1) {
         viewportManager.scrollToPage(store.activePageIndex + 1);
       }
     });
