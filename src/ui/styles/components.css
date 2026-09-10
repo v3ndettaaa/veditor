@@ -315,6 +315,11 @@ input[type="range"] {
   color: var(--text-primary);
 }
 
+/* Hidden toolbar tools in Settings → Toolbar stay listed but dimmed. */
+.list-card.is-dimmed {
+  opacity: 0.55;
+}
+
 .list-card-title {
   font-weight: 500;
   color: var(--text-primary);

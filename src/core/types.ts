@@ -229,6 +229,22 @@ export interface PaperStyle {
 export const MIN_ZOOM = 0.2;
 export const MAX_ZOOM = 8;
 
+/** Default toolbar button order (undo/redo stay pinned separately). */
+export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
+  'select', 'hand', 'zoom-lens',
+  'pen', 'highlighter', 'eraser',
+  'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
+  'text', 'stamp', 'measure-distance', 'callout', 'signature', 'redaction', 'laser'
+];
+
+/** Visual family per toolbar tool; separators render between families. */
+export function toolbarFamily(id: ToolType): string {
+  if (id === 'select' || id === 'hand' || id === 'zoom-lens') return 'nav';
+  if (id === 'pen' || id === 'highlighter' || id === 'eraser') return 'ink';
+  if (id === 'rectangle' || id === 'ellipse' || id === 'line' || id === 'arrow' || id === 'polygon') return 'shapes';
+  return 'annotate';
+}
+
 export const PAGE_SIZES = {
   letter: { label: 'Letter', width: 612, height: 792 },
   a4: { label: 'A4', width: 595, height: 842 },

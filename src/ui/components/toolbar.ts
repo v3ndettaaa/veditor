@@ -8,7 +8,29 @@ import { store } from '../../core/store';
 import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
-import { ToolType, EraserMode } from '../../core/types';
+import { ToolType, EraserMode, toolbarFamily } from '../../core/types';
+
+/** Short labels for the overflow menu of hidden tools (also reused by Settings). */
+export const TOOL_SHORT_LABELS: Record<string, string> = {
+  select: 'Select',
+  hand: 'Hand',
+  'zoom-lens': 'Zoom lens',
+  pen: 'Pen',
+  highlighter: 'Highlighter',
+  eraser: 'Eraser',
+  rectangle: 'Rectangle',
+  ellipse: 'Ellipse',
+  line: 'Line',
+  arrow: 'Arrow',
+  polygon: 'Polygon',
+  text: 'Text',
+  stamp: 'Stamp',
+  'measure-distance': 'Measure',
+  callout: 'Callout',
+  signature: 'Signature',
+  redaction: 'Redaction',
+  laser: 'Laser'
+};
 
 /** Parses free-typed numeric input, falling back when empty/invalid. */
 function clampTypedNumber(raw: string, min: number, max: number, fallback: number): number {
@@ -35,6 +57,7 @@ export class ToolbarComponent {
   private _lastCanRedo: boolean = false;
   private _lastSelectedCount: number = 0;
   private _lastHasDoc: boolean = false;
+  private _lastLayoutKey: string = '';
   private _pinnedTool: string | null = null;
 
   constructor(container: HTMLElement) {
@@ -42,10 +65,11 @@ export class ToolbarComponent {
     store.subscribe(() => this.onStoreUpdate());
     this.render();
 
-    // Clicking anywhere outside the toolbar closes any pinned cards
+    // Clicking anywhere outside the toolbar closes pinned cards + overflow menu
     document.addEventListener('pointerdown', (e) => {
       if (!this._container.contains(e.target as Node)) {
         this.unpinAll();
+        this._container.querySelector('.toolbar-overflow-menu.open')?.classList.remove('open');
       }
     });
   }
@@ -56,15 +80,18 @@ export class ToolbarComponent {
     const canUndo = history.canUndo;
     const canRedo = history.canRedo;
     const selectedCount = store.selectedAnnotationIds.size;
+    const layoutKey = JSON.stringify(store.toolbarLayout);
 
     if (
       hasDoc !== this._lastHasDoc ||
       activeTool !== this._lastActiveTool ||
       canUndo !== this._lastCanUndo ||
       canRedo !== this._lastCanRedo ||
-      selectedCount !== this._lastSelectedCount
+      selectedCount !== this._lastSelectedCount ||
+      layoutKey !== this._lastLayoutKey
     ) {
       this._lastHasDoc = hasDoc;
+      this._lastLayoutKey = layoutKey;
       this.render();
     } else {
       this.updateIndicators();
@@ -97,6 +124,7 @@ export class ToolbarComponent {
     this._lastCanUndo = canUndo;
     this._lastCanRedo = canRedo;
     this._lastSelectedCount = selectedIds.length;
+    this._lastLayoutKey = JSON.stringify(store.toolbarLayout);
 
     const penColors = ['#000000', '#ffffff', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
     const penWidths = [1, 2, 4, 8, 14];
@@ -473,6 +501,124 @@ export class ToolbarComponent {
     `;
 
     this.bindEvents(s);
+    this.applyCustomLayout();
+  }
+
+  /**
+   * Reorders / hides toolbar buttons per the user's saved layout WITHOUT
+   * re-templating: elements (and their bound listeners) are moved in place,
+   * family separators rebuilt, hidden tools parked in an overflow menu.
+   * Arrangement itself lives in Settings → Toolbar (explicit list with
+   * show/hide + up/down), so nothing here ever mutates the layout.
+   */
+  private applyCustomLayout(): void {
+    const row = this._container.querySelector('.toolbar-main-row');
+    if (!row) return;
+    const layout = store.toolbarLayout;
+    const undoGroup = row.querySelector('#toolbar-undo-btn')?.closest('.toolbar-group') as HTMLElement | null;
+
+    const byId = new Map<ToolType, HTMLElement>();
+    for (const el of this.toolElements()) {
+      const id = this.toolIdOf(el);
+      if (id && !byId.has(id)) byId.set(id, el);
+    }
+
+    const shown = layout.filter(l => l.visible);
+    const hidden = layout.filter(l => !l.visible);
+
+    // Clear the row except the undo group: emptied template shells,
+    // separators, the old overflow menu — and, crucially, any hidden tool
+    // stranded by an earlier pass. Leaving those nodes in place rendered
+    // deselected tools visibly at the row start. byId keeps references to
+    // every tool element (with listeners intact), so removal here is safe.
+    row.querySelectorAll(':scope > *').forEach(n => {
+      if (n !== undoGroup) n.remove();
+    });
+
+    let lastFamily: string | null = null;
+    for (const item of shown) {
+      const el = byId.get(item.id);
+      if (!el) continue;
+      const fam = toolbarFamily(item.id);
+      if (lastFamily !== null && fam !== lastFamily) {
+        const sep = document.createElement('div');
+        sep.className = 'toolbar-separator';
+        row.appendChild(sep);
+      }
+      lastFamily = fam;
+      row.appendChild(el);
+    }
+
+    if (undoGroup) row.appendChild(undoGroup);
+
+    if (hidden.length > 0) {
+      const wrap = document.createElement('div');
+      wrap.className = 'tool-btn-wrapper toolbar-overflow-wrap';
+      wrap.innerHTML = `
+        <button class="tool-btn" id="toolbar-overflow-btn" title="More tools">
+          ${getIconSvg('moreVertical')}
+        </button>
+        <div class="toolbar-overflow-menu" role="menu">
+          ${hidden.map(l => `
+            <button class="toolbar-overflow-item" data-overflow-tool="${l.id}" role="menuitem">
+              ${TOOL_SHORT_LABELS[l.id] ?? l.id}
+            </button>
+          `).join('')}
+        </div>
+      `;
+      row.appendChild(wrap);
+      const menu = wrap.querySelector('.toolbar-overflow-menu') as HTMLElement | null;
+      const btn = wrap.querySelector('#toolbar-overflow-btn') as HTMLElement | null;
+      btn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = !menu?.classList.contains('open');
+        menu?.classList.remove('open');
+        if (willOpen && menu && btn) {
+          // Fixed positioning measured from the button: immune to ancestor
+          // containing blocks, overflow clipping, and RTL flips. Opens BELOW
+          // the bar — the toolbar floats at the top, so above is off-screen.
+          const r = btn.getBoundingClientRect();
+          menu.style.position = 'fixed';
+          menu.style.bottom = 'auto';
+          menu.style.right = 'auto';
+          menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 170))}px`;
+          menu.style.top = `${r.bottom + 10}px`;
+          menu.classList.add('open');
+        }
+      });
+      wrap.querySelectorAll('[data-overflow-tool]').forEach(b => {
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const id = b.getAttribute('data-overflow-tool') as ToolType | null;
+          if (!id) return;
+          store.setActiveTool(id);
+          menu?.classList.remove('open');
+        });
+      });
+    }
+  }
+
+  /** Top-level tool elements: hover-card wrappers + standalone buttons. */
+  private toolElements(): HTMLElement[] {
+    const els: HTMLElement[] = [];
+    this._container.querySelectorAll('.toolbar-main-row [data-wrapper-tool]').forEach(w => {
+      els.push(w as HTMLElement);
+    });
+    this._container.querySelectorAll('.toolbar-main-row .tool-btn[data-tool]').forEach(b => {
+      const btn = b as HTMLElement;
+      if (!btn.closest('[data-wrapper-tool]')) els.push(btn);
+    });
+    return els;
+  }
+
+  private toolIdOf(el: HTMLElement): ToolType | null {
+    if (el.hasAttribute('data-wrapper-tool')) {
+      return el.getAttribute('data-wrapper-tool') as ToolType;
+    }
+    if (el.classList.contains('tool-btn')) {
+      return el.getAttribute('data-tool') as ToolType;
+    }
+    return null;
   }
 
   private updateIndicators(): void {
@@ -756,7 +902,7 @@ export class ToolbarComponent {
   }
 
   private bindEvents(s: typeof store.toolSettings) {
-    // Tool buttons click & toggle pin
+    // Tool buttons click & toggle pin (arrangement lives in Settings → Toolbar)
     this._container.querySelectorAll<HTMLElement>('.tool-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const tool = btn.getAttribute('data-tool') as ToolType;

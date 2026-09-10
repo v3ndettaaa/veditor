@@ -1,6 +1,6 @@
 /**
  * Advanced Settings & Preferences Modal Component
- * Features an intuitive icon-driven tabbed interface for Appearance,
+ * Features an intuitive icon-driven tabbed interface for Appearance, Toolbar,
  * Pen & Stylus Input (Pressure sensitivity, curves, mouse velocity),
  * Viewer & Reading, Performance, Storage, Localization, and About with GitHub link.
  */
@@ -8,13 +8,36 @@
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
-import { ThemeMode, LanguageMode, BackgroundPattern } from '../../core/types';
+import { ThemeMode, LanguageMode, BackgroundPattern, ToolType } from '../../core/types';
 import { pdfEngine } from '../../core/pdf-engine';
 import { viewportManager } from '../../core/viewport';
 import { clearAllStorage } from '../../io/storage';
 import { DEFAULT_ACCENT } from '../theme';
+import { TOOL_SHORT_LABELS } from './toolbar';
 
-type SettingsTab = 'appearance' | 'input' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
+type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
+
+/** Toolbar tool id → icon name, mirroring the toolbar template. */
+const TOOLBAR_ICONS: Record<string, string> = {
+  select: 'select',
+  hand: 'hand',
+  'zoom-lens': 'zoomIn',
+  pen: 'pen',
+  highlighter: 'highlighter',
+  eraser: 'eraser',
+  rectangle: 'rectangle',
+  ellipse: 'ellipse',
+  line: 'line',
+  arrow: 'arrow',
+  polygon: 'polygon',
+  text: 'text',
+  stamp: 'stamp',
+  'measure-distance': 'measure',
+  callout: 'callout',
+  signature: 'signature',
+  redaction: 'redaction',
+  laser: 'laser'
+};
 
 export class SettingsModalComponent {
   private _container: HTMLElement;
@@ -33,6 +56,7 @@ export class SettingsModalComponent {
     return JSON.stringify({
       tab: this._activeTab,
       app,
+      toolbar: store.toolbarLayout,
       pressureSensitivityEnabled: tools.pressureSensitivityEnabled,
       mousePressureSimulation: tools.mousePressureSimulation,
       pressureCurve: tools.pressureCurve,
@@ -75,6 +99,14 @@ export class SettingsModalComponent {
       this._lastRenderKey = null;
       this._renderedLanguage = null;
       return;
+    }
+
+    // One-shot jump request (e.g. command palette → Toolbar tab).
+    if (store.settingsTabRequest) {
+      const req = store.settingsTabRequest;
+      store.settingsTabRequest = null;
+      const tabs: string[] = ['appearance', 'toolbar', 'input', 'viewer', 'performance', 'storage', 'language', 'about'];
+      if (tabs.includes(req)) this._activeTab = req as SettingsTab;
     }
 
     // Avoid rebuilding the whole dialog on unrelated store changes (document
@@ -141,6 +173,10 @@ export class SettingsModalComponent {
               <button class="settings-tab-btn ${this._activeTab === 'appearance' ? 'active' : ''}" data-tab="appearance">
                 ${getIconSvg('palette', 15)}
                 <span>Appearance</span>
+              </button>
+              <button class="settings-tab-btn ${this._activeTab === 'toolbar' ? 'active' : ''}" data-tab="toolbar">
+                ${getIconSvg('sliders', 15)}
+                <span>Toolbar</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'input' ? 'active' : ''}" data-tab="input">
                 ${getIconSvg('pen', 15)}
@@ -263,6 +299,46 @@ export class SettingsModalComponent {
               </button>
             </div>
           </div>
+        </div>
+      `;
+    }
+
+    if (this._activeTab === 'toolbar') {
+      const layout = store.toolbarLayout;
+      return `
+        <div class="settings-stack">
+          <div class="settings-section-header">Toolbar Buttons</div>
+          <div class="settings-callout">
+            <span class="settings-callout-icon">${getIconSvg('info', 15)}</span>
+            <span>Tick a tool to show it in the bar, untick to park it under the <strong>⋯</strong> menu. Use the arrows to move it left or right.</span>
+          </div>
+          <div class="panel-stack" id="toolbar-list">
+            ${layout.map((item, idx) => `
+              <div class="list-card ${item.visible ? '' : 'is-dimmed'}" data-toolbar-row="${item.id}">
+                <label class="setting-switch" title="Show in toolbar">
+                  <input type="checkbox" data-toolbar-visible="${item.id}" ${item.visible ? 'checked' : ''}>
+                  <span class="setting-slider"></span>
+                </label>
+                <span class="list-card-icon">${getIconSvg(TOOLBAR_ICONS[item.id] ?? 'pen', 15)}</span>
+                <span class="list-card-title" style="flex:1; min-width:0;">${TOOL_SHORT_LABELS[item.id] ?? item.id}</span>
+                <button class="icon-btn is-small" data-toolbar-up="${item.id}" title="Move up (toward bar start)"
+                        ${idx === 0 ? 'disabled style="opacity:0.35; cursor:default;"' : ''}>
+                  <span aria-hidden="true" style="font-size:14px; font-weight:700;">↑</span>
+                </button>
+                <button class="icon-btn is-small" data-toolbar-down="${item.id}" title="Move down (toward bar end)"
+                        ${idx === layout.length - 1 ? 'disabled style="opacity:0.35; cursor:default;"' : ''}>
+                  <span aria-hidden="true" style="font-size:14px; font-weight:700;">↓</span>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+          <div class="panel-stack">
+            <button id="toolbar-layout-reset-btn" class="secondary-btn is-block">
+              ${getIconSvg('rotate', 14)}
+              <span>Reset Toolbar to Defaults</span>
+            </button>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); text-align:center;">Toolbar settings • b9</div>
         </div>
       `;
     }
@@ -634,6 +710,43 @@ export class SettingsModalComponent {
         const density = btn.getAttribute('data-set-density') as 'comfortable' | 'compact';
         store.updateAppSettings({ uiDensity: density });
       });
+    });
+
+    // Toolbar list: show/hide checkboxes (subscription render refreshes rows)
+    this._container.querySelectorAll<HTMLInputElement>('[data-toolbar-visible]').forEach(box => {
+      box.addEventListener('change', () => {
+        const id = box.getAttribute('data-toolbar-visible') as ToolType | null;
+        if (!id) return;
+        const hidden = store.toolbarLayout.filter(l => !l.visible).map(l => l.id);
+        store.setToolbarHidden(
+          box.checked ? hidden.filter(h => h !== id) : [...hidden, id]
+        );
+      });
+    });
+
+    // Toolbar list: move up/down within the saved order (subscription refreshes)
+    const moveToolbarItem = (id: ToolType, dir: -1 | 1) => {
+      const order = store.toolbarLayout.map(l => l.id);
+      const idx = order.indexOf(id);
+      const swapWith = idx + dir;
+      if (idx === -1 || swapWith < 0 || swapWith >= order.length) return;
+      [order[idx], order[swapWith]] = [order[swapWith], order[idx]];
+      store.setToolbarOrder(order);
+    };
+    this._container.querySelectorAll('[data-toolbar-up]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-toolbar-up') as ToolType | null;
+        if (id) moveToolbarItem(id, -1);
+      });
+    });
+    this._container.querySelectorAll('[data-toolbar-down]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-toolbar-down') as ToolType | null;
+        if (id) moveToolbarItem(id, 1);
+      });
+    });
+    this._container.querySelector('#toolbar-layout-reset-btn')?.addEventListener('click', () => {
+      store.resetToolbarLayout();
     });
 
     // Master Pressure Sensitivity Toggle

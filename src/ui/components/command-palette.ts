@@ -59,6 +59,7 @@ export class CommandPaletteComponent {
       { id: 'tool-laser', title: 'Presentation Laser Pointer', category: 'Tools', shortcut: 'Z', action: () => store.setActiveTool('laser') },
       { id: 'tool-redaction', title: 'Redaction Tool', category: 'Tools', shortcut: 'X', action: () => store.setActiveTool('redaction') },
 
+      { id: 'view-customize-toolbar', title: 'Customize toolbar layout', category: 'View', action: () => { store.setSettingsModalOpen(true); store.settingsTabRequest = 'toolbar'; } },
       { id: 'view-fit-width', title: 'Fit to Width', category: 'View', action: () => viewportManager.fitToWidth() },
       { id: 'view-fit-page', title: 'Fit to Page', category: 'View', action: () => viewportManager.fitToPage() },
       { id: 'view-zoom-in', title: 'Zoom In', category: 'View', shortcut: 'Ctrl +', action: () => store.setZoom(store.zoom * 1.2) },

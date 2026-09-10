@@ -754,6 +754,52 @@ body.no-page-shadows .pdf-page-container {
   gap: 2px;
 }
 
+/* ---- Toolbar overflow menu (hidden tools live here) ---- */
+.toolbar-overflow-wrap {
+  position: relative;
+}
+
+.toolbar-overflow-menu {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  min-width: 150px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  z-index: 120;
+}
+
+.toolbar-overflow-menu.open {
+  display: flex;
+}
+
+.toolbar-overflow-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.toolbar-overflow-item:hover {
+  background: var(--accent-subtle);
+}
+
 .toolbar-separator {
   width: 1px;
   height: 20px;
@@ -1082,6 +1128,22 @@ input.prop-hex-input:focus {
   flex-direction: column;
   overflow: hidden;
   animation: scaleUp 0.15s ease;
+}
+
+/* Wide dialog hosting the full landing page from the tab-strip "+" button. */
+.modal-dialog.add-tab-dialog {
+  width: 94%;
+  max-width: 1020px;
+  max-height: 88vh;
+}
+
+.add-tab-landing-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.add-tab-landing-body .landing-container {
+  padding: 40px 28px 48px;
 }
 
 @keyframes fadeIn {

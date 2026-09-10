@@ -95,7 +95,8 @@ class VeditorApp {
     // 2. Initialize Components
     new HeaderComponent(
       document.getElementById('app-header') as HTMLElement,
-      () => this._fileInput.click()
+      () => this._fileInput.click(),
+      () => this.openAddTabLanding()
     );
     new ToolbarComponent(document.getElementById('app-floating-toolbar') as HTMLElement);
     new SidePanelsComponent(document.getElementById('app-sidebar') as HTMLElement);
@@ -190,13 +191,78 @@ class VeditorApp {
     landing.render();
   }
 
+  /**
+   * Opens the full landing page (recents, folders, sample, notebook, file
+   * picker) in a modal so the tab-strip "+" offers every entry point.
+   * Hosted on <body> because the header re-renders on every store change and
+   * would tear a nested dialog down mid-interaction.
+   */
+  private openAddTabLanding(): void {
+    if (document.getElementById('add-tab-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'add-tab-overlay';
+    overlay.innerHTML = `
+      <div class="modal-dialog add-tab-dialog" role="dialog" aria-modal="true" aria-label="Add tab">
+        <div class="panel-header">
+          <span>Add tab</span>
+          <button id="close-add-tab-btn" class="icon-btn" title="Close" aria-label="Close">✕</button>
+        </div>
+        <div id="add-tab-landing" class="add-tab-landing-body"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    const close = () => {
+      window.removeEventListener('keydown', onEsc);
+      overlay.remove();
+    };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector('#close-add-tab-btn')?.addEventListener('click', close);
+    window.addEventListener('keydown', onEsc);
+
+    const host = overlay.querySelector('#add-tab-landing') as HTMLElement;
+    const landing = new LandingPageComponent(host, {
+      onOpenFile: () => {
+        this._fileInput.click();
+      },
+      onOpenBytes: async (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => {
+        close();
+        await this.loadPDF(name, bytes, undefined, notebook);
+      },
+      onOpenRecent: async (docId: string) => {
+        close();
+        if (store.openDocuments.has(docId)) {
+          store.switchDocumentTab(docId);
+          return;
+        }
+        const session = await getDocumentSession(docId);
+        if (session && session.fileData) {
+          await this.loadPDF(session.name, session.fileData, docId, session.notebook);
+        }
+      }
+    });
+    void landing.render();
+  }
+
   private setupFileHandling() {
     this._fileInput.addEventListener('change', async () => {
       if (this._fileInput.files && this._fileInput.files[0]) {
         const file = this._fileInput.files[0];
         const bytes = new Uint8Array(await file.arrayBuffer());
+        // A pick from the add-tab landing dismisses it via its own closer
+        // (keeps the Escape listener cleanup intact).
+        (document.getElementById('close-add-tab-btn') as HTMLButtonElement | null)?.click();
         await this.loadPDF(file.name, bytes);
       }
+      // Reset so picking the same file twice still fires change.
+      this._fileInput.value = '';
     });
 
     // Window Drag & Drop

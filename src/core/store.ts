@@ -16,8 +16,16 @@ import {
   Layer,
   SidebarTab,
   MIN_ZOOM,
-  MAX_ZOOM
+  MAX_ZOOM,
+  DEFAULT_TOOLBAR_ORDER
 } from './types';
+
+export interface ToolbarLayoutItem {
+  id: ToolType;
+  visible: boolean;
+}
+
+const TOOLBAR_LAYOUT_KEY = 'veditor_toolbar_layout';
 
 export type StoreListener = () => void;
 
@@ -103,6 +111,10 @@ class StateStore {
   private _selectedAnnotationIds: Set<string> = new Set();
   private _clipboardAnnotations: Annotation[] = [];
 
+  // Toolbar customization (order + visibility persisted; arranged in Settings)
+  private _toolbarOrder: ToolType[] = [...DEFAULT_TOOLBAR_ORDER];
+  private _toolbarHidden: ToolType[] = [];
+
   // UI Panels State
   private _sidebarOpen: boolean = false;
   private _activeSidebarTab: SidebarTab = 'thumbnails';
@@ -121,6 +133,29 @@ class StateStore {
     if (typeof window !== 'undefined' && window.matchMedia) {
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       this._appSettings.theme = prefersDark ? 'dark' : 'light';
+    }
+
+    // Load persisted toolbar layout (unknown ids dropped, new tools appended).
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const savedLayout = localStorage.getItem(TOOLBAR_LAYOUT_KEY);
+        if (savedLayout) {
+          const parsed = JSON.parse(savedLayout) as { order?: string[]; hidden?: string[] };
+          const known = new Set<string>(DEFAULT_TOOLBAR_ORDER);
+          if (Array.isArray(parsed.order)) {
+            const ordered = [...new Set(parsed.order.filter(id => known.has(id)) as ToolType[])];
+            for (const id of DEFAULT_TOOLBAR_ORDER) {
+              if (!ordered.includes(id)) ordered.push(id);
+            }
+            this._toolbarOrder = ordered;
+          }
+          if (Array.isArray(parsed.hidden)) {
+            this._toolbarHidden = (parsed.hidden.filter(id => known.has(id)) as ToolType[]);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load toolbar layout from localStorage:', e);
     }
 
     // Load persisted settings from localStorage if available
@@ -447,6 +482,54 @@ class StateStore {
     this._clipboardAnnotations = [...annotations];
   }
 
+  // Toolbar customization
+
+  /** Ordered toolbar tools with visibility, merged against known tools. */
+  get toolbarLayout(): ToolbarLayoutItem[] {
+    const hidden = new Set(this._toolbarHidden);
+    return this._toolbarOrder.map(id => ({ id, visible: !hidden.has(id) }));
+  }
+
+  private persistToolbarLayout() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(TOOLBAR_LAYOUT_KEY, JSON.stringify({
+          order: this._toolbarOrder,
+          hidden: this._toolbarHidden
+        }));
+      }
+    } catch (e) {
+      console.warn('Failed to persist toolbar layout:', e);
+    }
+  }
+
+  public setToolbarOrder(ids: ToolType[]) {
+    const known = new Set<string>(DEFAULT_TOOLBAR_ORDER);
+    // Dedupe defensively: a duplicated id would render the tool twice and
+    // could no longer be reasoned about by position.
+    const ordered = [...new Set(ids.filter(id => known.has(id)) as ToolType[])];
+    for (const id of DEFAULT_TOOLBAR_ORDER) {
+      if (!ordered.includes(id)) ordered.push(id);
+    }
+    this._toolbarOrder = ordered;
+    this.persistToolbarLayout();
+    this.notify();
+  }
+
+  public setToolbarHidden(ids: ToolType[]) {
+    const known = new Set<string>(DEFAULT_TOOLBAR_ORDER);
+    this._toolbarHidden = ids.filter(id => known.has(id));
+    this.persistToolbarLayout();
+    this.notify();
+  }
+
+  public resetToolbarLayout() {
+    this._toolbarOrder = [...DEFAULT_TOOLBAR_ORDER];
+    this._toolbarHidden = [];
+    this.persistToolbarLayout();
+    this.notify();
+  }
+
   // UI Panels
 
   /**
@@ -497,6 +580,14 @@ class StateStore {
     this._settingsModalOpen = open;
     this.notify();
   }
+
+  /**
+   * One-shot request for the settings modal to open a specific tab
+   * (e.g. the command palette jumping straight to Toolbar). Consumed
+   * (cleared) by the modal on render; plain field on purpose — no notify,
+   * the accompanying setSettingsModalOpen(true) already notifies.
+   */
+  public settingsTabRequest: string | null = null;
 
   public setSignatureModalOpen(open: boolean) {
     this._signatureModalOpen = open;

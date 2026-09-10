@@ -14,10 +14,18 @@ import { NotebookDialogComponent } from './notebook-dialog';
 export class HeaderComponent {
   private _container: HTMLElement;
   private _onOpenFileRequested: () => void;
+  private _onAddTabRequested: () => void;
 
-  constructor(container: HTMLElement, onOpenFileRequested: () => void) {
+  constructor(
+    container: HTMLElement,
+    onOpenFileRequested: () => void,
+    onAddTabRequested?: () => void
+  ) {
     this._container = container;
     this._onOpenFileRequested = onOpenFileRequested;
+    // The tab-strip "+" opens the full landing (recents, folders, new file)
+    // instead of jumping straight to the file picker.
+    this._onAddTabRequested = onAddTabRequested ?? onOpenFileRequested;
     store.subscribe(() => this.render());
     this.render();
   }
@@ -172,7 +180,7 @@ export class HeaderComponent {
     });
 
     this._container.querySelector('#header-add-tab-btn')?.addEventListener('click', () => {
-      this._onOpenFileRequested();
+      this._onAddTabRequested();
     });
   }
 
