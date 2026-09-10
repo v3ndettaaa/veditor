@@ -310,7 +310,7 @@ export class SettingsModalComponent {
           <div class="settings-section-header">Toolbar Buttons</div>
           <div class="settings-callout">
             <span class="settings-callout-icon">${getIconSvg('info', 15)}</span>
-            <span>Tick a tool to show it in the bar, untick to park it under the <strong>⋯</strong> menu. Use the arrows to move it left or right.</span>
+            <span>Tick a tool to show it in the bar, untick to hide it. Use the arrows to move it left or right.</span>
           </div>
           <div class="panel-stack" id="toolbar-list">
             ${layout.map((item, idx) => `

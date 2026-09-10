@@ -10,7 +10,7 @@ import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
 import { ToolType, EraserMode, toolbarFamily } from '../../core/types';
 
-/** Short labels for the overflow menu of hidden tools (also reused by Settings). */
+/** Short labels for tools, reused by Settings → Toolbar. */
 export const TOOL_SHORT_LABELS: Record<string, string> = {
   select: 'Select',
   hand: 'Hand',
@@ -65,11 +65,10 @@ export class ToolbarComponent {
     store.subscribe(() => this.onStoreUpdate());
     this.render();
 
-    // Clicking anywhere outside the toolbar closes pinned cards + overflow menu
+    // Clicking anywhere outside the toolbar closes pinned cards
     document.addEventListener('pointerdown', (e) => {
       if (!this._container.contains(e.target as Node)) {
         this.unpinAll();
-        this._container.querySelector('.toolbar-overflow-menu.open')?.classList.remove('open');
       }
     });
   }
@@ -506,10 +505,9 @@ export class ToolbarComponent {
 
   /**
    * Reorders / hides toolbar buttons per the user's saved layout WITHOUT
-   * re-templating: elements (and their bound listeners) are moved in place,
-   * family separators rebuilt, hidden tools parked in an overflow menu.
-   * Arrangement itself lives in Settings → Toolbar (explicit list with
-   * show/hide + up/down), so nothing here ever mutates the layout.
+   * re-templating: elements (and their bound listeners) are moved in place
+   * and family separators rebuilt. Hidden tools are simply left out (they
+   * live only in Settings → Toolbar), so nothing here ever mutates the layout.
    */
   private applyCustomLayout(): void {
     const row = this._container.querySelector('.toolbar-main-row');
@@ -524,13 +522,11 @@ export class ToolbarComponent {
     }
 
     const shown = layout.filter(l => l.visible);
-    const hidden = layout.filter(l => !l.visible);
 
-    // Clear the row except the undo group: emptied template shells,
-    // separators, the old overflow menu — and, crucially, any hidden tool
-    // stranded by an earlier pass. Leaving those nodes in place rendered
-    // deselected tools visibly at the row start. byId keeps references to
-    // every tool element (with listeners intact), so removal here is safe.
+    // Clear the row except the undo group: emptied template shells and
+    // separators go, and hidden tools are left out entirely (they live only
+    // in Settings → Toolbar). byId keeps references to every tool element
+    // (with listeners intact), so removal here is safe.
     row.querySelectorAll(':scope > *').forEach(n => {
       if (n !== undoGroup) n.remove();
     });
@@ -550,52 +546,6 @@ export class ToolbarComponent {
     }
 
     if (undoGroup) row.appendChild(undoGroup);
-
-    if (hidden.length > 0) {
-      const wrap = document.createElement('div');
-      wrap.className = 'tool-btn-wrapper toolbar-overflow-wrap';
-      wrap.innerHTML = `
-        <button class="tool-btn" id="toolbar-overflow-btn" title="More tools">
-          ${getIconSvg('moreVertical')}
-        </button>
-        <div class="toolbar-overflow-menu" role="menu">
-          ${hidden.map(l => `
-            <button class="toolbar-overflow-item" data-overflow-tool="${l.id}" role="menuitem">
-              ${TOOL_SHORT_LABELS[l.id] ?? l.id}
-            </button>
-          `).join('')}
-        </div>
-      `;
-      row.appendChild(wrap);
-      const menu = wrap.querySelector('.toolbar-overflow-menu') as HTMLElement | null;
-      const btn = wrap.querySelector('#toolbar-overflow-btn') as HTMLElement | null;
-      btn?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const willOpen = !menu?.classList.contains('open');
-        menu?.classList.remove('open');
-        if (willOpen && menu && btn) {
-          // Fixed positioning measured from the button: immune to ancestor
-          // containing blocks, overflow clipping, and RTL flips. Opens BELOW
-          // the bar — the toolbar floats at the top, so above is off-screen.
-          const r = btn.getBoundingClientRect();
-          menu.style.position = 'fixed';
-          menu.style.bottom = 'auto';
-          menu.style.right = 'auto';
-          menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 170))}px`;
-          menu.style.top = `${r.bottom + 10}px`;
-          menu.classList.add('open');
-        }
-      });
-      wrap.querySelectorAll('[data-overflow-tool]').forEach(b => {
-        b.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const id = b.getAttribute('data-overflow-tool') as ToolType | null;
-          if (!id) return;
-          store.setActiveTool(id);
-          menu?.classList.remove('open');
-        });
-      });
-    }
   }
 
   /** Top-level tool elements: hover-card wrappers + standalone buttons. */
