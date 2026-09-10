@@ -33,7 +33,17 @@
 ### 🖍️ Advanced Highlighter with Straight-Line Auto-Snap
 - **Straight-Line Snapping**: Hold the **`Shift`** key while dragging or toggle "Straight Snap" in the highlighter popover to draw crisp, level horizontal or vertical highlights over lines of text.
 - **Chisel Tip vs. Round Tip**: Choose between classic stationery flat chisel marker tips or rounded brush caps.
-- **Vibrant Pastel Multiplying**: Calibrated fluorescent tints (Yellow, Green, Pink, Blue, Orange, Purple) that preserve underlying text legibility without darkening or muddying.
+- **True Translucency**: Any picked color is rendered as translucent alpha-blended ink, so highlights never paint opaque blocks over your text.
+
+### ✌️ Lag-Free Touch Gestures
+- **Two-Finger Pinch-to-Zoom**: Zooms the PDF around your fingers with a buttery compositor preview — no re-layouts, re-renders, or stray marks mid-gesture. A second finger safely aborts any in-progress stroke.
+- **Two-Finger Pan**: Glide around large pages with two fingers, on any device.
+- **Trackpad Pinch**: The same single-commit zoom path powers `Ctrl` + scroll, so fast pinches never stutter.
+
+### ⌨️ Precise Typed Input — No Sliders, No Guesswork
+- **Type Any Number**: Pen / highlighter / eraser / shape widths, font sizes, opacity, page numbers, and zoom % all accept exact typed values (`Enter` commits, `Esc` reverts).
+- **Type Any Color**: Every color swatch row takes hand-typed hex (`#4f46e5`, short `#f43` and `#`-less forms work too).
+- **Quick Presets Stay**: One-click pills and swatches remain for the common values.
 
 ### 🎯 Configurable Drawing Cursors
 - **Tailored Pointer Styles**: Switch between **Pen** (sleek vector fountain pen nib with hotspot at tip), **Dot** (minimalist 4px precision center dot), **Circle** (dynamic stroke width target ring), and **Crosshair** (classic drafting reticle).
@@ -57,7 +67,8 @@
 - **Interactive Add Tab (`+`) Button**: Effortlessly load additional files directly from the tab strip.
 
 ### ⚡ Interactive Page Navigation
-- **Direct Page Jump Field**: Click the page counter indicator (`X / Total`) at the bottom of the screen, type any page number, and press **Enter** to jump immediately with automatic boundary validation and smooth scrolling.
+- **Direct Page Jump Field**: Click the page counter (`X / Total`) in the bottom pill, type any page number, and press **Enter** to jump immediately with automatic boundary validation and smooth scrolling — works in Continuous, Single, and Book Spread modes alike.
+- **Typed Zoom**: The zoom readout (`100%`) next to it is also a field — type any percentage from 20 to 500.
 - **Keyboard Stepping**: Use **Arrow Up** / **Arrow Down** while focused in the page box to step through pages sequentially.
 
 ### 🖊️ Natural Drawing & Ink Dynamics
@@ -76,7 +87,7 @@
 | **Selection & Transform** | `V` | 8-point bounding box resize, drag reposition, multi-select, and alignment |
 | **Freehand Pen** | `P` | Dynamic ink with custom colors, opacity, stroke widths, and pressure dynamics |
 | **Highlighter** | `H` | Non-destructive highlighting with chisel/round tips, straight snap & multiply blend |
-| **Eraser** | `E` | 3 modes: Stroke Eraser, Object Eraser, and Pixel/Mask Eraser |
+| **Eraser** | `E` | 3 modes: Stroke Eraser, Object Eraser, and Pixel/Mask Eraser — each drag is a single undo step, so long erasing sessions never lag |
 | **Polygon Shape** | `G` | Multi-point custom polygon shape with click-to-place vertices and close detection |
 | **Geometric Shapes** | `R`, `O`, `L`, `A` | Rectangles, Ellipses, Lines, and Arrows with solid/dashed/dotted borders and fills |
 | **Rich Text Boxes** | `T` | Multi-line text boxes with font sizing, colors, borders, and background fills |
@@ -159,14 +170,15 @@ npm run package         # Creates dist/veditor-chrome.zip and dist/veditor-firef
 All core mathematical algorithms, spline generation, pressure mappings, multi-tab switching, and undo/redo stacks are covered by automated unit tests:
 ```
 ✓ tests/eraser.test.ts (4 tests)
-✓ tests/export.test.ts (2 tests)
-✓ tests/geometry.test.ts (3 tests)
-✓ tests/history.test.ts (4 tests)
+✓ tests/export.test.ts (3 tests)
 ✓ tests/folders.test.ts (4 tests)
-✓ tests/spline.test.ts (12 tests)
+✓ tests/geometry.test.ts (8 tests)
+✓ tests/history.test.ts (4 tests)
+✓ tests/polygon-highlighter.test.ts (10 tests)
+✓ tests/spline.test.ts (6 tests)
 
-Test Files  6 passed (6)
-     Tests  29 passed (29)
+Test Files  7 passed (7)
+     Tests  39 passed (39)
 ```
 
 ---

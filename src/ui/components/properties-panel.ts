@@ -69,7 +69,7 @@ export class PropertiesPanelComponent {
     const userIsEditing = !!activeEl && this._container.contains(activeEl) &&
       ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeEl.tagName);
     if (userIsEditing && selectedKey === this._lastSelectedKey &&
-        this._container.querySelector('#prop-delete-btn')) {
+        this._container.querySelector('#prop-width-val, #prop-color-picker')) {
       return;
     }
     this._lastSelectedKey = selectedKey;
@@ -127,8 +127,6 @@ export class PropertiesPanelComponent {
                    min="0.5" max="100" step="0.5" value="${(firstAnn as any).strokeWidth || 3}"
                    title="Type any width (0.5-100px)" aria-label="${t('properties.strokeWidth')}">
           </div>
-          <input type="range" id="prop-width-slider" class="prop-slider" min="1" max="48"
-                 value="${(firstAnn as any).strokeWidth || 3}" aria-label="${t('properties.strokeWidth')}">
         </div>
 
         <!-- Opacity -->
@@ -139,8 +137,6 @@ export class PropertiesPanelComponent {
                    min="1" max="100" step="1" value="${Math.round((firstAnn.opacity || 1) * 100)}"
                    title="Type any opacity (1-100%)" aria-label="${t('properties.opacity')}">
           </div>
-          <input type="range" id="prop-opacity-slider" class="prop-slider" min="10" max="100"
-                 value="${Math.round((firstAnn.opacity || 1) * 100)}" aria-label="${t('properties.opacity')}">
         </div>
 
         <!-- Alignment (if multi-select) -->
@@ -283,15 +279,6 @@ export class PropertiesPanelComponent {
       store.setActivePageIndex(store.activePageIndex);
     };
 
-    // Width slider change
-    const widthSlider = this._container.querySelector('#prop-width-slider') as HTMLInputElement;
-    widthSlider?.addEventListener('input', () => {
-      const val = parseInt(widthSlider.value, 10);
-      const widthNum = this._container.querySelector<HTMLInputElement>('#prop-width-val');
-      if (widthNum && document.activeElement !== widthNum) widthNum.value = String(val);
-      applyStrokeWidth(val);
-    });
-
     // Typed width (Enter/blur commits)
     const widthNum = this._container.querySelector<HTMLInputElement>('#prop-width-val');
     const commitWidthNum = () => {
@@ -310,15 +297,6 @@ export class PropertiesPanelComponent {
     widthNum?.addEventListener('focus', () => widthNum.select());
     widthNum?.addEventListener('change', () => commitWidthNum());
     widthNum?.addEventListener('blur', () => commitWidthNum());
-
-    // Opacity slider change
-    const opacitySlider = this._container.querySelector('#prop-opacity-slider') as HTMLInputElement;
-    opacitySlider?.addEventListener('input', () => {
-      const val = parseInt(opacitySlider.value, 10) / 100;
-      const opNum = this._container.querySelector<HTMLInputElement>('#prop-opacity-val');
-      if (opNum && document.activeElement !== opNum) opNum.value = String(Math.round(val * 100));
-      applyOpacity(val);
-    });
 
     // Typed opacity (Enter/blur commits)
     const opacityNum = this._container.querySelector<HTMLInputElement>('#prop-opacity-val');

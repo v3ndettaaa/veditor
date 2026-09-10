@@ -169,7 +169,6 @@ export class ToolbarComponent {
                   `).join('')}
                 </div>
                 <div class="size-slider-wrapper">
-                  <input type="range" id="hover-pen-slider" class="size-slider" min="1" max="30" value="${s.penWidth}">
                   <input type="number" id="hover-pen-width-input" class="size-readout size-type-input pen-readout"
                          min="1" max="50" step="1" value="${s.penWidth}" title="Type any width (1-50px)" aria-label="Pen width">
                 </div>
@@ -230,7 +229,6 @@ export class ToolbarComponent {
                   `).join('')}
                 </div>
                 <div class="size-slider-wrapper">
-                  <input type="range" id="hover-hl-slider" class="size-slider" min="6" max="60" value="${s.highlighterWidth}">
                   <input type="number" id="hover-hl-width-input" class="size-readout size-type-input hl-readout"
                          min="2" max="100" step="1" value="${s.highlighterWidth}" title="Type any width (2-100px)" aria-label="Highlighter width">
                 </div>
@@ -275,7 +273,6 @@ export class ToolbarComponent {
                 <button class="size-pill eraser-pill ${s.eraserWidth === 24 ? 'active' : ''}" data-eraser-width="24">Medium</button>
                 <button class="size-pill eraser-pill ${s.eraserWidth === 48 ? 'active' : ''}" data-eraser-width="48">Large</button>
                 <div class="size-slider-wrapper">
-                  <input type="range" id="hover-eraser-slider" class="size-slider" min="6" max="80" value="${s.eraserWidth}">
                   <input type="number" id="hover-eraser-width-input" class="size-readout size-type-input eraser-readout"
                          min="4" max="120" step="1" value="${s.eraserWidth}" title="Type any width (4-120px)" aria-label="Eraser width">
                 </div>
@@ -495,11 +492,6 @@ export class ToolbarComponent {
       if (document.activeElement !== el && el.value !== s.penColor) el.value = s.penColor;
     });
 
-    const penSlider = this._container.querySelector<HTMLInputElement>('#hover-pen-slider');
-    if (penSlider && penSlider.value !== String(s.penWidth)) {
-      penSlider.value = String(s.penWidth);
-    }
-
     this._container.querySelectorAll('[data-curve]').forEach(el => {
       const curve = el.getAttribute('data-curve');
       el.classList.toggle('active', curve === s.pressureCurve);
@@ -533,11 +525,6 @@ export class ToolbarComponent {
     const hlHex = this._container.querySelector<HTMLInputElement>('#hover-hl-color-hex');
     if (hlHex && document.activeElement !== hlHex && hlHex.value !== s.highlighterColor) hlHex.value = s.highlighterColor;
 
-    const hlSlider = this._container.querySelector<HTMLInputElement>('#hover-hl-slider');
-    if (hlSlider && hlSlider.value !== String(s.highlighterWidth)) {
-      hlSlider.value = String(s.highlighterWidth);
-    }
-
     this._container.querySelectorAll('[data-hl-straight]').forEach(el => {
       const isStr = el.getAttribute('data-hl-straight') === 'true';
       el.classList.toggle('active', isStr === !!s.highlighterStraightLine);
@@ -561,11 +548,6 @@ export class ToolbarComponent {
 
     const eraserReadout = this._container.querySelector<HTMLInputElement>('.eraser-readout');
     if (eraserReadout && document.activeElement !== eraserReadout) eraserReadout.value = String(s.eraserWidth);
-
-    const eraserSlider = this._container.querySelector<HTMLInputElement>('#hover-eraser-slider');
-    if (eraserSlider && eraserSlider.value !== String(s.eraserWidth)) {
-      eraserSlider.value = String(s.eraserWidth);
-    }
 
     // 4. Shape Indicators across all 5 shape cards
     const shapeDot = this._container.querySelector<HTMLElement>('.shape-dot');
@@ -815,13 +797,6 @@ export class ToolbarComponent {
       });
     });
 
-    const penSlider = this._container.querySelector<HTMLInputElement>('#hover-pen-slider');
-    penSlider?.addEventListener('input', (e) => {
-      const w = parseInt((e.target as HTMLInputElement).value, 10);
-      store.updateToolSettings({ penWidth: w });
-      this.updateIndicators();
-    });
-
     this._container.querySelectorAll('[data-curve]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -873,13 +848,6 @@ export class ToolbarComponent {
       });
     });
 
-    const hlSlider = this._container.querySelector<HTMLInputElement>('#hover-hl-slider');
-    hlSlider?.addEventListener('input', (e) => {
-      const w = parseInt((e.target as HTMLInputElement).value, 10);
-      store.updateToolSettings({ highlighterWidth: w });
-      this.updateIndicators();
-    });
-
     this._container.querySelectorAll('[data-hl-straight]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -919,13 +887,6 @@ export class ToolbarComponent {
         store.updateToolSettings({ eraserWidth: w });
         this.updateIndicators();
       });
-    });
-
-    const eraserSlider = this._container.querySelector<HTMLInputElement>('#hover-eraser-slider');
-    eraserSlider?.addEventListener('input', (e) => {
-      const w = parseInt((e.target as HTMLInputElement).value, 10);
-      store.updateToolSettings({ eraserWidth: w });
-      this.updateIndicators();
     });
 
     // Free-typed numeric + hex inputs (Enter/blur commits, Escape reverts).
