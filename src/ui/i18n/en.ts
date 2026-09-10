@@ -10,6 +10,7 @@ export const en = {
   redo: 'Redo',
   tools: {
     select: 'Select & Transform (V)',
+    hand: 'Hand — drag to pan (hold Space)',
     pen: 'Freehand Pen (P)',
     highlighter: 'Highlighter (H)',
     eraser: 'Eraser (E)',

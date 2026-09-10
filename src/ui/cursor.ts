@@ -104,6 +104,8 @@ export function drawingCursorValue(
 ): string {
   // Select doesn't draw, so it keeps the normal arrow.
   if (tool === 'select') return 'default';
+  // Hand pans the page instead of drawing.
+  if (tool === 'hand') return 'grab';
 
   const width = brushWidth(tool);
   if (width === null) return 'crosshair';

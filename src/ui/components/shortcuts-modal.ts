@@ -27,6 +27,7 @@ export class ShortcutsModalComponent {
         icon: 'pen',
         items: [
           { key: 'V', desc: 'Select & transform' },
+          { key: 'Space (hold)', desc: 'Hand — drag to pan' },
           { key: 'P', desc: 'Freehand pen' },
           { key: 'H', desc: 'Highlighter' },
           { key: 'E', desc: 'Eraser' },

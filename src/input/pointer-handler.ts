@@ -276,7 +276,9 @@ export class PointerHandler {
       case 'arrow':
       case 'polygon':
       case 'freeform-shape':
-        for (const pt of pts) shapesTool.move(pt);
+        // Shift constrains drag shapes to regular forms (square / circle /
+        // 15°-snapped line), mirroring the highlighter's straight-snap key.
+        for (const pt of pts) shapesTool.move(pt, shiftKey);
         shapesTool.renderScratchpad(ctx, renderScale);
         break;
 

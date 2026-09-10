@@ -6,6 +6,7 @@
 | Shortcut | Action | Description |
 |---|---|---|
 | `V` | **Select Tool** | Select, move, resize, rotate, or align annotations |
+| `Space` (hold) | **Hand Tool** | Drag to pan the page like a trackpad; release to return to the previous tool |
 | `P` | **Freehand Pen** | Pressure-sensitive ink pen with Catmull-Rom spline smoothing |
 | `H` | **Highlighter** | Translucent marker with Multiply blend mode |
 | `E` | **Eraser** | Smart eraser (Stroke, Object, and Pixel modes) |

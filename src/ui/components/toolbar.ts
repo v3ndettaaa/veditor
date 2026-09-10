@@ -128,6 +128,11 @@ export class ToolbarComponent {
           ` : ''}
         </div>
 
+        <!-- Hand / Pan Tool -->
+        <button class="tool-btn ${activeTool === 'hand' ? 'active' : ''}" data-tool="hand" title="${t('tools.hand')}" style="cursor:grab;">
+          ${getIconSvg('hand')}
+        </button>
+
         <div class="toolbar-separator"></div>
 
         <!-- Drawing & Ink Group -->

@@ -26,7 +26,7 @@ import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
 import { history } from './core/history';
-import { DocumentSession, NotebookSpec } from './core/types';
+import { DocumentSession, NotebookSpec, ToolType } from './core/types';
 import { notebookController } from './core/notebook';
 import { gestureEngine } from './input/gestures';
 
@@ -56,6 +56,21 @@ class VeditorApp {
   private _zoomPreviewScale: number = 1;
   private _zoomPreviewActive: boolean = false;
   private _zoomCommitTimer: number | null = null;
+
+  /**
+   * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
+   * moves scroll the document instead of drawing anything.
+   */
+  private _handPan: {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    scrollL: number;
+    scrollT: number;
+    canvas: HTMLCanvasElement;
+  } | null = null;
+  /** Tool to restore when a held Space (temporary hand) is released. */
+  private _spacePrevTool: ToolType | null = null;
 
   constructor() {
     this._scrollContainer = document.getElementById('document-scroll-container') as HTMLElement;
@@ -586,6 +601,7 @@ class VeditorApp {
         const gestureStarted = gestureEngine.handlePointerDown(e);
         if (gestureStarted) {
           pointerHandler.cancelActiveStroke();
+          this.endHandPan();
           e.preventDefault();
           return;
         }
@@ -593,6 +609,23 @@ class VeditorApp {
           e.preventDefault();
           return;
         }
+      }
+      // Hand tool: drag pans the page like a trackpad — never draws.
+      if (store.activeTool === 'hand') {
+        e.preventDefault();
+        try {
+          canvas.setPointerCapture(e.pointerId);
+        } catch (_) {}
+        this._handPan = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          scrollL: this._scrollContainer.scrollLeft,
+          scrollT: this._scrollContainer.scrollTop,
+          canvas
+        };
+        canvas.style.cursor = 'grabbing';
+        return;
       }
       e.preventDefault();
       try {
@@ -610,6 +643,12 @@ class VeditorApp {
           return;
         }
       }
+      if (this._handPan && e.pointerId === this._handPan.pointerId) {
+        e.preventDefault();
+        this._scrollContainer.scrollLeft = this._handPan.scrollL - (e.clientX - this._handPan.startX);
+        this._scrollContainer.scrollTop = this._handPan.scrollT - (e.clientY - this._handPan.startY);
+        return;
+      }
       e.preventDefault();
       pointerHandler.handlePointerMove(e, pageIndex, canvas, onRepaint);
     });
@@ -624,6 +663,14 @@ class VeditorApp {
           this.scheduleZoomCommit();
           return;
         }
+      }
+      if (this._handPan && e.pointerId === this._handPan.pointerId) {
+        e.preventDefault();
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+        this.endHandPan();
+        return;
       }
       e.preventDefault();
       try {
@@ -645,6 +692,14 @@ class VeditorApp {
           return;
         }
       }
+      if (this._handPan && e.pointerId === this._handPan.pointerId) {
+        e.preventDefault();
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+        this.endHandPan();
+        return;
+      }
       e.preventDefault();
       try {
         canvas.releasePointerCapture(e.pointerId);
@@ -656,6 +711,12 @@ class VeditorApp {
       e.preventDefault();
       pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
     });
+  }
+
+  private endHandPan(): void {
+    if (!this._handPan) return;
+    this._handPan = null;
+    this.updateCanvasCursors();
   }
 
   public updateCanvasCursors(): void {
@@ -676,9 +737,29 @@ class VeditorApp {
   }
 
   private setupGlobalShortcuts() {
+    // Hold Space for a temporary hand tool (Figma-style); release restores.
+    window.addEventListener('keyup', (e) => {
+      if (e.key === ' ' && this._spacePrevTool) {
+        const prev = this._spacePrevTool;
+        this._spacePrevTool = null;
+        // If the user picked another tool mid-hold, don't override it.
+        if (store.activeTool === 'hand') store.setActiveTool(prev);
+      }
+    });
+
     window.addEventListener('keydown', (e) => {
       // Don't trigger tool shortcuts when typing in inputs
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+
+      // Hold Space to pan (ignored with modifiers and on key repeat).
+      if (e.key === ' ' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (store.activeTool !== 'hand' && this._spacePrevTool === null) {
+          this._spacePrevTool = store.activeTool;
+          store.setActiveTool('hand');
+        }
+        return;
+      }
 
       if (e.key === 'Enter') {
         const handled = pointerHandler.finishPolygon(store.activePageIndex, 'layer-default', () => {

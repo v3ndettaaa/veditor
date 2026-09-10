@@ -45,6 +45,7 @@ export class CommandPaletteComponent {
   private getAllCommands(): PaletteCommand[] {
     return [
       { id: 'tool-select', title: 'Select & Transform Tool', category: 'Tools', shortcut: 'V', action: () => store.setActiveTool('select') },
+      { id: 'tool-hand', title: 'Hand Tool (drag to pan)', category: 'Tools', shortcut: 'Space', action: () => store.setActiveTool('hand') },
       { id: 'tool-pen', title: 'Freehand Pen Tool', category: 'Tools', shortcut: 'P', action: () => store.setActiveTool('pen') },
       { id: 'tool-highlighter', title: 'Highlighter Tool', category: 'Tools', shortcut: 'H', action: () => store.setActiveTool('highlighter') },
       { id: 'tool-eraser', title: 'Eraser Tool', category: 'Tools', shortcut: 'E', action: () => store.setActiveTool('eraser') },

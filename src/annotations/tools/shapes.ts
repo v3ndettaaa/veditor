@@ -6,6 +6,48 @@
 import { Point, ShapeAnnotation, ToolType, BoundingBox } from '../../core/types';
 import { computePointsBoundingBox } from '../../utils/geometry';
 
+export type ConstrainedShapeType = 'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'freeform-shape';
+
+/**
+ * Constrains a drag point to a regular shape while Shift is held:
+ * - rectangle / ellipse: equal sides (square / circle), growing from the drag
+ *   start and preserving the drag direction per axis;
+ * - line / arrow: angle snapped to 15° increments, length preserved;
+ * - polygon / freeform: unconstrained.
+ *
+ * Pure function so the geometry is unit-testable.
+ */
+export function constrainShapePoint(
+  type: ConstrainedShapeType,
+  start: Point,
+  current: Point
+): Point {
+  const dx = current.x - start.x;
+  const dy = current.y - start.y;
+
+  if (type === 'rectangle' || type === 'ellipse') {
+    if (dx === 0 && dy === 0) return { ...current };
+    const side = Math.max(Math.abs(dx), Math.abs(dy));
+    return {
+      x: start.x + (dx === 0 ? 0 : Math.sign(dx) * side),
+      y: start.y + (dy === 0 ? 0 : Math.sign(dy) * side)
+    };
+  }
+
+  if (type === 'line' || type === 'arrow') {
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return { ...current };
+    const step = Math.PI / 12; // 15°
+    const snapped = Math.round(Math.atan2(dy, dx) / step) * step;
+    return {
+      x: start.x + len * Math.cos(snapped),
+      y: start.y + len * Math.sin(snapped)
+    };
+  }
+
+  return { ...current };
+}
+
 export class ShapesTool {
   private _startPoint: Point | null = null;
   private _currentPoint: Point | null = null;
@@ -16,6 +58,8 @@ export class ShapesTool {
   private _fillColor: string = 'transparent';
   private _strokeWidth: number = 2;
   private _strokeStyle: 'solid' | 'dashed' | 'dotted' = 'solid';
+  /** True while Shift is held: preview and finish a regular shape. */
+  private _constrain: boolean = false;
 
   public start(
     point: Point,
@@ -40,11 +84,22 @@ export class ShapesTool {
     }
   }
 
-  public move(point: Point): void {
+  public move(point: Point, constrain: boolean = false): void {
     this._currentPoint = point;
+    // Only drag shapes constrain; polygon vertices and freeform paths ignore it.
+    this._constrain = constrain &&
+      (this._type === 'rectangle' || this._type === 'ellipse' ||
+       this._type === 'line' || this._type === 'arrow');
     if (this._type === 'freeform-shape') {
       this._polygonPoints.push(point);
     }
+  }
+
+  /** Current drag point with the Shift constraint applied when active. */
+  private effectiveCurrent(): Point | null {
+    if (!this._startPoint || !this._currentPoint) return null;
+    if (!this._constrain) return this._currentPoint;
+    return constrainShapePoint(this._type, this._startPoint, this._currentPoint);
   }
 
   public isPolygonActive(): boolean {
@@ -70,14 +125,14 @@ export class ShapesTool {
   }
 
   public renderScratchpad(ctx: CanvasRenderingContext2D, scale: number): void {
-    if (!this._startPoint || !this._currentPoint) return;
+    const cp = this.effectiveCurrent();
+    if (!this._startPoint || !cp) return;
 
     ctx.save();
     ctx.scale(scale, scale);
     this.applyStyle(ctx);
 
     const sp = this._startPoint;
-    const cp = this._currentPoint;
 
     if (this._type === 'rectangle') {
       const x = Math.min(sp.x, cp.x);
@@ -178,14 +233,17 @@ export class ShapesTool {
     let box: BoundingBox;
     let points: Point[] | undefined;
 
+    // Finish what was previewed: the Shift-constrained point when active.
+    const end = this.effectiveCurrent() ?? this._currentPoint;
+
     if (this._type === 'rectangle' || this._type === 'ellipse') {
-      const x = Math.min(this._startPoint!.x, this._currentPoint!.x);
-      const y = Math.min(this._startPoint!.y, this._currentPoint!.y);
-      const w = Math.max(4, Math.abs(this._currentPoint!.x - this._startPoint!.x));
-      const h = Math.max(4, Math.abs(this._currentPoint!.y - this._startPoint!.y));
+      const x = Math.min(this._startPoint!.x, end!.x);
+      const y = Math.min(this._startPoint!.y, end!.y);
+      const w = Math.max(4, Math.abs(end!.x - this._startPoint!.x));
+      const h = Math.max(4, Math.abs(end!.y - this._startPoint!.y));
       box = { x, y, width: w, height: h };
     } else if (this._type === 'line' || this._type === 'arrow') {
-      points = [this._startPoint!, this._currentPoint!];
+      points = [this._startPoint!, end!];
       box = computePointsBoundingBox(points, this._strokeWidth);
     } else {
       points = [...this._polygonPoints];
@@ -217,6 +275,7 @@ export class ShapesTool {
     this._startPoint = null;
     this._currentPoint = null;
     this._polygonPoints = [];
+    this._constrain = false;
   }
 
   private applyStyle(ctx: CanvasRenderingContext2D) {
