@@ -19,6 +19,7 @@ import { SettingsModalComponent } from './ui/components/settings-modal';
 import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { showToast } from './ui/components/toast';
 import { openDocumentSession, getDocumentSession, createDocumentId } from './io/storage';
+import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle } from './io/save';
 import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { t } from './ui/i18n';
@@ -59,6 +60,10 @@ class VeditorApp {
   private _zoomPreviewScale: number = 1;
   private _zoomPreviewActive: boolean = false;
   private _zoomCommitTimer: number | null = null;
+  /** rAF coalescing for wheel/pinch preview ticks (one layout read per frame). */
+  private _previewRafId: number | null = null;
+  private _previewPendingFactor: number = 1;
+  private _previewPendingCenter: { x: number; y: number } | null = null;
 
   /**
    * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
@@ -172,6 +177,7 @@ class VeditorApp {
     store.onTabClosed((tabId) => {
       pdfEngine.unloadDoc(tabId);
       history.removeDocument(tabId);
+      forgetFileHandle(tabId);
     });
 
     // 9. Subscribe to document/page changes
@@ -346,6 +352,7 @@ class VeditorApp {
         savedScrollLeft: initialState?.savedScrollLeft,
         createdAt: Date.now(),
         lastModifiedAt: Date.now(),
+        lastSavedAt: Date.now(),
         notebook
       };
 
@@ -362,6 +369,11 @@ class VeditorApp {
         store.setActiveDocument(session);
         this.clearRenderedPages();
         this.renderEmptyState();
+        // Apply the user's default zoom for brand-new docs (reopens keep
+        // their restored position/zoom instead).
+        if (!existingDocId && !initialState) {
+          this.applyDefaultZoomMode();
+        }
         viewportManager.updateLayout(true);
         if (typeof session.savedScrollTop === 'number' && session.savedScrollTop > 0) {
           this._scrollContainer.scrollTo({ top: session.savedScrollTop, left: session.savedScrollLeft ?? 0, behavior: 'auto' });
@@ -533,18 +545,36 @@ class VeditorApp {
     if (!store.activeDocument) return;
     if (!Number.isFinite(factor) || factor <= 0) return;
 
+    // Coalesce rapid wheel/pinch ticks into one rAF: accumulate the factor and
+    // latest focal point so we pay one getBoundingClientRect + one transform
+    // write per frame instead of one per tick.
+    this._previewPendingFactor *= factor;
+    this._previewPendingCenter = { x: centerClient.x, y: centerClient.y };
+    if (this._previewRafId === null) {
+      this._previewRafId = window.requestAnimationFrame(() => this.flushPreviewZoom());
+    }
+    this.scheduleZoomCommit();
+  }
+
+  private flushPreviewZoom(): void {
+    this._previewRafId = null;
+    const factor = this._previewPendingFactor;
+    const center = this._previewPendingCenter;
+    this._previewPendingFactor = 1;
+    if (!store.activeDocument) return;
+    if (!center || !Number.isFinite(factor) || factor <= 0) return;
+
     const unclamped = this._zoomPreviewScale * factor;
-    // Clamp the TOTAL zoom (committed x preview) to the store's [0.2, 5] range.
+    // Clamp the TOTAL zoom (committed x preview) to the store's MIN/MAX range.
     const clampedTotal = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * unclamped)) / store.zoom;
     const inc = clampedTotal / this._zoomPreviewScale;
     if (Math.abs(inc - 1) < 0.0005) {
-      this.scheduleZoomCommit();
       return;
     }
 
     const rect = this._scrollContainer.getBoundingClientRect();
-    const fx = centerClient.x - rect.left;
-    const fy = centerClient.y - rect.top;
+    const fx = center.x - rect.left;
+    const fy = center.y - rect.top;
     // With transform-origin 0 0, wrapper point p renders at s*p; keeping the
     // focal viewport point stable gives scroll' = (scroll + f) * inc - f.
     this._scrollContainer.scrollLeft = (this._scrollContainer.scrollLeft + fx) * inc - fx;
@@ -556,7 +586,6 @@ class VeditorApp {
     this._pagesWrapper.style.transform = `scale(${this._zoomPreviewScale})`;
     // Keep visible-page tracking in layout space while the wrapper is scaled.
     viewportManager.setPreviewScale(this._zoomPreviewScale);
-    this.scheduleZoomCommit();
   }
 
   private scheduleZoomCommit(): void {
@@ -572,6 +601,12 @@ class VeditorApp {
       window.clearTimeout(this._zoomCommitTimer);
       this._zoomCommitTimer = null;
     }
+    if (this._previewRafId !== null) {
+      window.cancelAnimationFrame(this._previewRafId);
+      this._previewRafId = null;
+    }
+    this._previewPendingFactor = 1;
+    this._previewPendingCenter = null;
     this._zoomPreviewScale = 1;
     this._zoomPreviewActive = false;
     if (this._pagesWrapper) {
@@ -583,6 +618,12 @@ class VeditorApp {
 
   private commitZoomPreview(): void {
     this._zoomCommitTimer = null;
+    // Apply any ticks that arrived after the last rAF before committing.
+    if (this._previewRafId !== null) {
+      window.cancelAnimationFrame(this._previewRafId);
+      this._previewRafId = null;
+      this.flushPreviewZoom();
+    }
     if (!this._zoomPreviewActive) return;
     const finalZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * this._zoomPreviewScale));
     this._zoomPreviewScale = 1;
@@ -593,13 +634,46 @@ class VeditorApp {
     // tracking, mounts, repaints) works in real coordinates again.
     viewportManager.setPreviewScale(1);
     if (Math.abs(finalZoom - store.zoom) > 0.0005) {
+      // Single commit: setZoom's notify path does the one layout + render pass.
       store.setZoom(finalZoom);
-      viewportManager.handleScroll(true);
     } else {
       // Net-zero gesture: still force one clean pass so preview-era mounts
       // settle (no eviction happened mid-preview by design).
       viewportManager.handleScroll(true);
     }
+  }
+
+  /** Applies Settings → default zoom for brand-new documents. */
+  private applyDefaultZoomMode(): void {
+    const mode = store.appSettings.defaultZoomMode;
+    if (mode === 'fitWidth') viewportManager.fitToWidth();
+    else if (mode === 'fitPage') viewportManager.fitToPage();
+    else if (mode === '100%') store.setZoom(1.0);
+    else if (mode === '125%') store.setZoom(1.25);
+    else if (mode === '150%') store.setZoom(1.5);
+    // 'lastUsed' keeps the current global zoom.
+  }
+
+  /**
+   * Immediate focal-anchored zoom step (double-click): keeps the clicked point
+   * stable via scroll compensation. Single store commit → single layout pass.
+   */
+  private zoomAtPoint(factor: number, client: { x: number; y: number }): void {
+    if (!store.activeDocument) return;
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    if (this._zoomPreviewActive) this.commitZoomPreview();
+    const oldZoom = store.zoom;
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldZoom * factor));
+    if (Math.abs(newZoom - oldZoom) < 0.0005) return;
+    const rect = this._scrollContainer.getBoundingClientRect();
+    const fx = client.x - rect.left;
+    const fy = client.y - rect.top;
+    const ratio = newZoom / oldZoom;
+    store.setZoom(newZoom);
+    // handleStoreUpdate rebuilt layout synchronously; re-anchor scroll.
+    this._scrollContainer.scrollLeft = (this._scrollContainer.scrollLeft + fx) * ratio - fx;
+    this._scrollContainer.scrollTop = (this._scrollContainer.scrollTop + fy) * ratio - fy;
+    viewportManager.handleScroll(true);
   }
 
   private setupZoomAndNavigation() {
@@ -743,7 +817,7 @@ class VeditorApp {
       pageElements.pdfCanvas.style.width = `${layout.width}px`;
       pageElements.pdfCanvas.style.height = `${layout.height}px`;
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = store.appSettings.retinaRendering === false ? 1 : (window.devicePixelRatio || 1);
       const w = layout.width * dpr;
       const h = layout.height * dpr;
 
@@ -770,7 +844,7 @@ class VeditorApp {
     pageIndex: number,
     p: { patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement }
   ) {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = store.appSettings.retinaRendering === false ? 1 : (window.devicePixelRatio || 1);
     const scale = store.zoom * dpr;
 
     // 1. Background paper pattern
@@ -943,7 +1017,16 @@ class VeditorApp {
 
     canvas.addEventListener('dblclick', (e) => {
       e.preventDefault();
-      pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
+      // Polygon tool owns dblclick to close shapes; every other tool zooms.
+      const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
+      if (finished) return;
+      if (store.activeTool === 'polygon') return;
+      // Toggle: zoomed out → 200% at click; zoomed in → fit width.
+      if (store.zoom < 1.5) {
+        this.zoomAtPoint(2.0 / Math.max(store.zoom, MIN_ZOOM), { x: e.clientX, y: e.clientY });
+      } else {
+        viewportManager.fitToWidth();
+      }
     });
   }
 
@@ -976,10 +1059,12 @@ class VeditorApp {
     if (layout) {
       const cx = layout.left + (rect.x + rect.width / 2) * targetZoom;
       const cy = layout.top + (rect.y + rect.height / 2) * targetZoom;
+      // Instant anchor: smooth would animate through intermediates and walk
+      // activePageIndex across pages via handleScroll (lag + wrong page).
       this._scrollContainer.scrollTo({
         left: Math.max(0, cx - this._scrollContainer.clientWidth / 2),
         top: Math.max(0, cy - this._scrollContainer.clientHeight / 2),
-        behavior: store.appSettings.smoothScroll !== false ? 'smooth' : 'auto'
+        behavior: 'auto'
       });
       store.setActivePageIndex(pageIndex);
     }
@@ -1069,7 +1154,11 @@ class VeditorApp {
           return;
         } else if (key === 's') {
           e.preventDefault();
-          document.getElementById('header-export-btn')?.click();
+          if (e.shiftKey) {
+            void saveActiveDocumentAs();
+          } else {
+            void saveActiveDocument();
+          }
           return;
         }
         return;

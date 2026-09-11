@@ -159,6 +159,13 @@ body {
   opacity: 1;
 }
 
+.doc-tab-dirty {
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
 .doc-tab-add {
   display: flex;
   align-items: center;

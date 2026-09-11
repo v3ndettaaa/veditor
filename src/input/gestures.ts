@@ -49,7 +49,7 @@ export class GestureEngine {
         y: (pts[0].y + pts[1].y) / 2
       };
 
-      if (this._initialDistance > 0 && Math.abs(currentDist - this._initialDistance) > 8) {
+      if (this._initialDistance > 0 && Math.abs(currentDist - this._initialDistance) > 4) {
         const scaleFactor = currentDist / this._initialDistance;
         callbacks.onPinchZoom(scaleFactor, currentMid);
         this._initialDistance = currentDist;
@@ -72,12 +72,13 @@ export class GestureEngine {
 
   public handlePointerUp(e: PointerEvent): boolean {
     const had = this._activeTouches.delete(e.pointerId);
+    const wasActive = this._isGestureActive;
     if (this._activeTouches.size < 2) {
       this._isGestureActive = false;
       this._initialDistance = 0;
       this._lastMidpoint = null;
     }
-    return had && this._isGestureActive;
+    return had && wasActive;
   }
 
   get isGestureActive(): boolean {

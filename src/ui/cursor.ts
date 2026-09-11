@@ -112,8 +112,11 @@ export function drawingCursorValue(
   const width = brushWidth(tool);
   if (width === null) return 'crosshair';
 
-  // The brush is stored in page units; on screen it is scaled by the zoom.
-  const onScreen = width * zoom;
+  // While the zoom lens is active, creation widths are divided by
+  // zoom/baseZoom so tools feel identical on screen — the cursor must show
+  // the on-screen size (width * baseZoom), not width * zoom.
+  const effectiveZoom = store.zoomLensActive ? (store.zoomLensBase ?? zoom) : zoom;
+  const onScreen = width * effectiveZoom;
 
   switch (style) {
     case 'circle': return ringCursor(onScreen);

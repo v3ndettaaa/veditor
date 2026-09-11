@@ -57,6 +57,7 @@ export class ShortcutsModalComponent {
         items: [
           { key: 'Ctrl / Cmd  +', desc: 'Zoom in' },
           { key: 'Ctrl / Cmd  −', desc: 'Zoom out' },
+          { key: 'Double-click', desc: 'Toggle 200% / fit width' },
           { key: '0', desc: 'Fit to width' },
           { key: 'F', desc: 'Toggle focus mode' }
         ]
@@ -67,6 +68,8 @@ export class ShortcutsModalComponent {
         items: [
           { key: 'Ctrl / Cmd  Z', desc: 'Undo' },
           { key: 'Ctrl / Cmd  ⇧ Z', desc: 'Redo' },
+          { key: 'Ctrl / Cmd  S', desc: 'Save' },
+          { key: 'Ctrl / Cmd  ⇧ S', desc: 'Save As' },
           { key: 'Ctrl / Cmd  K', desc: 'Command palette' },
           { key: '?', desc: 'This reference' },
           { key: 'Esc', desc: 'Dismiss / deselect' },

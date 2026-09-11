@@ -816,9 +816,9 @@ export class SettingsModalComponent {
       store.updateAppSettings({ defaultZoomMode: val });
       if (val === 'fitWidth') viewportManager.fitToWidth();
       else if (val === 'fitPage') viewportManager.fitToPage();
-      else if (val === '100%') { store.setZoom(1.0); viewportManager.updateLayout(true); }
-      else if (val === '125%') { store.setZoom(1.25); viewportManager.updateLayout(true); }
-      else if (val === '150%') { store.setZoom(1.5); viewportManager.updateLayout(true); }
+      else if (val === '100%') { store.setZoom(1.0); }
+      else if (val === '125%') { store.setZoom(1.25); }
+      else if (val === '150%') { store.setZoom(1.5); }
     });
 
     // Page shadows toggle

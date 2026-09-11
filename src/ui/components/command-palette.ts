@@ -6,6 +6,7 @@
 import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
 import { pdfExporter } from '../../io/export-pdf';
+import { saveActiveDocument, saveActiveDocumentAs } from '../../io/save';
 import { dataExporter } from '../../io/export-data';
 import { showToast } from './toast';
 import { getIconSvg } from '../../utils/icons';
@@ -69,6 +70,20 @@ export class CommandPaletteComponent {
       { id: 'view-twopage', title: 'View: Two-Page Facing Mode', category: 'View', action: () => store.setViewMode('two-page') },
       { id: 'view-focus', title: 'Toggle Focus Mode', category: 'View', action: () => store.toggleFocusMode() },
 
+      {
+        id: 'file-save',
+        title: 'Save (write into this PDF)',
+        category: 'File',
+        shortcut: 'Ctrl+S',
+        action: () => { void saveActiveDocument(); }
+      },
+      {
+        id: 'file-save-as',
+        title: 'Save As (new file/location)',
+        category: 'File',
+        shortcut: 'Ctrl+Shift+S',
+        action: () => { void saveActiveDocumentAs(); }
+      },
       {
         id: 'export-pdf',
         title: 'Export Annotated PDF Document',

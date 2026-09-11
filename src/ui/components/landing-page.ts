@@ -343,7 +343,8 @@ export class LandingPageComponent {
             <div class="shortcut-item"><span>Undo</span> <kbd class="shortcut-kbd">Ctrl+Z</kbd></div>
             <div class="shortcut-item"><span>Redo</span> <kbd class="shortcut-kbd">Ctrl+Y</kbd></div>
             <div class="shortcut-item"><span>Open File</span> <kbd class="shortcut-kbd">Ctrl+O</kbd></div>
-            <div class="shortcut-item"><span>Export PDF</span> <kbd class="shortcut-kbd">Ctrl+S</kbd></div>
+            <div class="shortcut-item"><span>Save</span> <kbd class="shortcut-kbd">Ctrl+S</kbd></div>
+            <div class="shortcut-item"><span>Save As</span> <kbd class="shortcut-kbd">Ctrl+Shift+S</kbd></div>
           </div>
         </div>
       </div>

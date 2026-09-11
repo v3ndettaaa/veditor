@@ -131,5 +131,21 @@ export const en = {
     saved: 'All changes saved locally',
     exported: 'PDF exported successfully',
     copied: 'Annotations copied to clipboard'
+  },
+  saveAs: {
+    title: 'Save As',
+    filename: 'File name',
+    locationPicker: 'You will pick the folder in the next step.',
+    locationDownload: 'Your browser will save it to the downloads folder.',
+    quality: 'Quality',
+    flatten: 'Flatten annotations into the PDF',
+    flattenHint: 'Off keeps pages editable but only rectangles are preserved.',
+    applyRedactions: 'Burn in redactions permanently',
+    redactionWarn: 'Redacted content cannot be recovered after saving.',
+    pages: 'Pages',
+    allPages: 'All pages',
+    custom: 'Custom',
+    cancel: 'Cancel',
+    save: 'Save'
   }
 };

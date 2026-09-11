@@ -97,6 +97,24 @@ export class PDFExporter {
    * Prompts user to save the exported PDF to their computer.
    */
   public async saveToFile(bytes: Uint8Array, defaultName: string): Promise<void> {
+    await this.saveToFileReturningHandle(bytes, defaultName);
+  }
+
+  /**
+   * Same as saveToFile but returns the FileSystemFileHandle when the
+   * File System Access API path was used (null on fallback/cancel).
+   * Throws on real failures; returns null when the user cancels.
+   */
+  public async saveToFileReturningHandle(bytes: Uint8Array, defaultName: string): Promise<any | null> {
+    const result = await this.saveToFileWithResult(bytes, defaultName);
+    return result.cancelled ? null : result.handle;
+  }
+
+  /**
+   * Full result distinguishing user-cancel from the Firefox/Safari fallback
+   * download (both yield handle=null from the legacy method).
+   */
+  public async saveToFileWithResult(bytes: Uint8Array, defaultName: string): Promise<{ handle: any | null; cancelled: boolean }> {
     const filename = defaultName.endsWith('.pdf') ? defaultName : `${defaultName}.pdf`;
 
     // Try File System Access API (Modern Chrome/Edge)
@@ -114,9 +132,9 @@ export class PDFExporter {
         const writable = await handle.createWritable();
         await writable.write(bytes as any);
         await writable.close();
-        return;
+        return { handle, cancelled: false };
       } catch (err: any) {
-        if (err.name === 'AbortError') return; // User cancelled
+        if (err.name === 'AbortError') return { handle: null, cancelled: true }; // User cancelled
       }
     }
 
@@ -130,6 +148,7 @@ export class PDFExporter {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return { handle: null, cancelled: false };
   }
 
   private dataUrlToUint8Array(dataUrl: string): Uint8Array {

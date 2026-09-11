@@ -279,8 +279,8 @@ export class ViewControlsComponent {
       const num = parseFloat(zoomInput.value.replace('%', '').trim());
       if (!isNaN(num)) {
         const clamped = Math.max(20, Math.min(800, num));
+        // Single commit: setZoom's notify path does the one layout + render.
         store.setZoom(clamped / 100);
-        viewportManager.updateLayout(true);
       }
       zoomInput.value = `${Math.round(store.zoom * 100)}%`;
     };
@@ -324,13 +324,12 @@ export class ViewControlsComponent {
     });
 
     this._container.querySelector('#view-zoom-in')?.addEventListener('click', () => {
+      // Single commit via notify path (no explicit updateLayout → no double layout).
       store.setZoom(store.zoom * 1.15);
-      viewportManager.updateLayout(true);
     });
 
     this._container.querySelector('#view-zoom-out')?.addEventListener('click', () => {
       store.setZoom(store.zoom / 1.15);
-      viewportManager.updateLayout(true);
     });
 
     this._container.querySelector('#view-exit-lens')?.addEventListener('click', () => {

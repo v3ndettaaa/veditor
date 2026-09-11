@@ -219,10 +219,22 @@ export class PointerHandler {
         break;
 
       case 'stamp':
-        const stampAnn = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
-        history.execute(new AddAnnotationCommand(pageIndex, stampAnn));
+        const stampBase = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
+        // Fixed-size stamps must shrink in page units while lens-zoomed so
+        // they land at the same on-screen size.
+        if (store.zoomLensFactor !== 1) {
+          const f = store.zoomLensFactor;
+          stampBase.box = {
+            ...stampBase.box,
+            x: pt.x - stampBase.box.width / 2 / f,
+            y: pt.y - stampBase.box.height / 2 / f,
+            width: stampBase.box.width / f,
+            height: stampBase.box.height / f
+          };
+        }
+        history.execute(new AddAnnotationCommand(pageIndex, stampBase));
         store.setActiveTool('select');
-        store.selectAnnotation(stampAnn.id);
+        store.selectAnnotation(stampBase.id);
         onNeedRepaint();
         break;
 

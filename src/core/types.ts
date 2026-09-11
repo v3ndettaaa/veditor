@@ -280,6 +280,8 @@ export interface DocumentSession {
   savedScrollLeft?: number;
   createdAt: number;
   lastModifiedAt: number;
+  /** Last time Save wrote bytes to IDB/disk. Absent = never saved (dirty). */
+  lastSavedAt?: number;
   /** Present only for generated notebooks; see NotebookSpec. */
   notebook?: NotebookSpec;
 }

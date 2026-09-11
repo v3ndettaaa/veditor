@@ -4,7 +4,7 @@
  */
 
 import { store } from './store';
-import { PageInfo, ViewMode } from './types';
+import { PageInfo, ViewMode, MIN_ZOOM, MAX_ZOOM } from './types';
 
 export interface ViewportPageRect {
   pageIndex: number;
@@ -279,9 +279,8 @@ export class ViewportManager {
     if (!activePage) return;
     const { width: baseW } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
     const containerW = this._scrollContainer.clientWidth - 64;
-    const newZoom = Math.max(0.2, Math.min(3.0, containerW / baseW));
-    store.setZoom(newZoom);
-    this.updateLayout();
+    // Single commit: setZoom's notify path lays out once.
+    store.setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, containerW / baseW)));
   }
 
   public fitToPage() {
@@ -292,9 +291,7 @@ export class ViewportManager {
     const { width: baseW, height: baseH } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
     const containerW = this._scrollContainer.clientWidth - 64;
     const containerH = this._scrollContainer.clientHeight - 80;
-    const newZoom = Math.max(0.2, Math.min(3.0, Math.min(containerW / baseW, containerH / baseH)));
-    store.setZoom(newZoom);
-    this.updateLayout();
+    store.setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(containerW / baseW, containerH / baseH))));
   }
 }
 

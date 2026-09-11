@@ -6,6 +6,17 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { PageInfo, PDFBookmarkItem } from './types';
 import { extensionApi } from '../utils/browser-compat';
+import { store } from './store';
+
+/** Max canvas dimension in px: caps VRAM at extreme zoom/dpr (CSS upscales). */
+const MAX_RENDER_DIMENSION = 4096;
+
+function effectiveDpr(): number {
+  try {
+    if (store.appSettings.retinaRendering === false) return 1;
+  } catch (_) {}
+  return window.devicePixelRatio || 1;
+}
 
 // Configure offline worker
 try {
@@ -286,7 +297,7 @@ export class PDFEngine {
     if (!this._pdfDoc) return;
     const renderDocId = this._currentDocId;
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = effectiveDpr();
 
     let page = this._pageCache.get(pageIndex);
     if (!page) {
@@ -333,10 +344,23 @@ export class PDFEngine {
     // page.rotate again double-rotated content out of its layout box and into
     // neighbouring pages on rotated documents.
     const totalRotation = ((rotation || 0) % 360 + 360) % 360;
-    const viewport = page.getViewport({ scale: scale * dpr, rotation: totalRotation });
+    const rawViewport = page.getViewport({ scale: scale * dpr, rotation: totalRotation });
 
-    const targetWidth = Math.floor(viewport.width);
-    const targetHeight = Math.floor(viewport.height);
+    // Cap backing-store size at extreme zoom/dpr to avoid multi-hundred-MB
+    // canvases; CSS style stays at layout size so output upscales cleanly.
+    let renderScale = scale * dpr;
+    const rawW = Math.floor(rawViewport.width);
+    const rawH = Math.floor(rawViewport.height);
+    const largest = Math.max(rawW, rawH);
+    if (largest > MAX_RENDER_DIMENSION && largest > 0) {
+      renderScale *= MAX_RENDER_DIMENSION / largest;
+    }
+    const viewport = largest > MAX_RENDER_DIMENSION
+      ? page.getViewport({ scale: renderScale, rotation: totalRotation })
+      : rawViewport;
+
+    const targetWidth = Math.max(1, Math.floor(viewport.width));
+    const targetHeight = Math.max(1, Math.floor(viewport.height));
 
     // Zero-blank frame double buffering: If a cached bitmap exists (even at a different zoom),
     // display it immediately scaled to fit so the user never sees white canvas space while re-rendering

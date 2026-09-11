@@ -6,6 +6,7 @@
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { pdfExporter } from '../../io/export-pdf';
+import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
 import { showToast } from './toast';
 import { t } from '../i18n';
 import { notebookController } from '../../core/notebook';
@@ -53,6 +54,7 @@ export class HeaderComponent {
             <div class="doc-tab ${activeDoc?.id === tab.id ? 'active' : ''}" data-tab-id="${tab.id}" title="${tab.name}">
               <span class="doc-tab-icon">${getIconSvg('fileText', 13)}</span>
               <span class="doc-tab-title">${tab.name}</span>
+              ${isDocumentDirty(tab.id) ? '<span class="doc-tab-dirty" title="Unsaved changes">●</span>' : ''}
               <span class="doc-tab-close" data-close-tab="${tab.id}" title="Close Tab">${getIconSvg('close', 11)}</span>
             </div>
           `).join('')}
@@ -80,7 +82,17 @@ export class HeaderComponent {
           <span>${t('openFile')}</span>
         </button>
 
-        <button id="header-export-btn" class="header-btn primary" ${!activeDoc ? 'style="display:none;"' : ''}>
+        <button id="header-save-btn" class="header-btn primary" ${!activeDoc ? 'style="display:none;"' : ''} title="Save (Ctrl+S)">
+          ${getIconSvg('save', 14)}
+          <span>Save</span>
+        </button>
+
+        <button id="header-saveas-btn" class="header-btn" ${!activeDoc ? 'style="display:none;"' : ''} title="Save As (Ctrl+Shift+S)">
+          ${getIconSvg('saveAll', 14)}
+          <span>Save As</span>
+        </button>
+
+        <button id="header-export-btn" class="header-btn" ${!activeDoc ? 'style="display:none;"' : ''}>
           ${getIconSvg('download', 14)}
           <span>${t('export')}</span>
         </button>
@@ -132,6 +144,16 @@ export class HeaderComponent {
       if (added) showToast(`Page ${store.activeDocument?.pageCount} added`, 'success');
     });
 
+    this._container.querySelector('#header-save-btn')?.addEventListener('click', async () => {
+      if (!store.activeDocument) return;
+      await saveActiveDocument();
+    });
+
+    this._container.querySelector('#header-saveas-btn')?.addEventListener('click', async () => {
+      if (!store.activeDocument) return;
+      await saveActiveDocumentAs();
+    });
+
     this._container.querySelector('#header-export-btn')?.addEventListener('click', async () => {
       if (!activeDoc) return;
       try {
@@ -175,7 +197,13 @@ export class HeaderComponent {
       closeEl.addEventListener('click', (e) => {
         e.stopPropagation();
         const tabId = closeEl.getAttribute('data-close-tab');
-        if (tabId) store.closeDocumentTab(tabId);
+        if (!tabId) return;
+        if (isDocumentDirty(tabId)) {
+          const ok = window.confirm('This document has unsaved changes. Close without saving?');
+          if (!ok) return;
+        }
+        forgetFileHandle(tabId);
+        store.closeDocumentTab(tabId);
       });
     });
 
