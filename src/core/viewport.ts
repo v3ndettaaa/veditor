@@ -190,7 +190,7 @@ export class ViewportManager {
     const rawTop = this._scrollContainer.scrollTop;
     const scrollTop = rawTop / this._previewScale;
     const viewH = this._scrollContainer.clientHeight / this._previewScale;
-    const buffer = viewH * 1.5; // 150% buffer ahead and behind to preload visible pages smoothly
+    const buffer = viewH * 2.0; // 200% buffer ahead and behind so zoom-out exposes mounted pages, not gaps
 
     const newVisible = new Set<number>();
     let centerPage = 0;
@@ -210,6 +210,10 @@ export class ViewportManager {
         centerPage = layout.pageIndex;
       }
     }
+
+    // During a focal-anchored zoom step the scroll correction lands after the
+    // layout pass; the intermediate pass must not mount, persist, or page-flip.
+    if (store.isZoomAdjusting) return;
 
     // Persist exact scroll offset per-document for instant tab restore.
     // Skipped while a tab switch rebuild is in flight (stale offset would

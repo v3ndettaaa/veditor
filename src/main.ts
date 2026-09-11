@@ -64,6 +64,9 @@ class VeditorApp {
   private _previewRafId: number | null = null;
   private _previewPendingFactor: number = 1;
   private _previewPendingCenter: { x: number; y: number } | null = null;
+  /** Unscaled wrapper size captured when the preview activates (for truthful scrollHeight). */
+  private _previewBaseHeight: number | null = null;
+  private _previewBaseWidth: number | null = null;
 
   /**
    * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
@@ -584,6 +587,20 @@ class VeditorApp {
     this._zoomPreviewActive = true;
     this._pagesWrapper.style.transformOrigin = '0 0';
     this._pagesWrapper.style.transform = `scale(${this._zoomPreviewScale})`;
+    // CSS transforms don't change scrollHeight, so without this the scroller
+    // clamps at the old max-scroll mid-gesture (can't reach content zooming
+    // in) and leaves dead space zooming out. Scale the box truthfully; the
+    // commit's updateLayout recomputes the real size right after.
+    if (this._previewBaseHeight === null) {
+      this._previewBaseHeight = parseFloat(this._pagesWrapper.style.height) || this._pagesWrapper.scrollHeight;
+      this._previewBaseWidth = parseFloat(this._pagesWrapper.style.width) || this._pagesWrapper.scrollWidth;
+    }
+    if (this._previewBaseHeight) {
+      this._pagesWrapper.style.height = `${Math.max(1, Math.floor(this._previewBaseHeight * this._zoomPreviewScale))}px`;
+    }
+    if (this._previewBaseWidth) {
+      this._pagesWrapper.style.width = `${Math.max(1, Math.floor(this._previewBaseWidth * this._zoomPreviewScale))}px`;
+    }
     // Keep visible-page tracking in layout space while the wrapper is scaled.
     viewportManager.setPreviewScale(this._zoomPreviewScale);
   }
@@ -607,6 +624,8 @@ class VeditorApp {
     }
     this._previewPendingFactor = 1;
     this._previewPendingCenter = null;
+    this._previewBaseHeight = null;
+    this._previewBaseWidth = null;
     this._zoomPreviewScale = 1;
     this._zoomPreviewActive = false;
     if (this._pagesWrapper) {
@@ -634,11 +653,22 @@ class VeditorApp {
     // tracking, mounts, repaints) works in real coordinates again.
     viewportManager.setPreviewScale(1);
     if (Math.abs(finalZoom - store.zoom) > 0.0005) {
-      // Single commit: setZoom's notify path does the one layout + render pass.
+      // Single commit: setZoom's notify path does the one layout + render pass
+      // (updateLayout recomputes the wrapper box, discarding preview scaling).
+      this._previewBaseHeight = null;
+      this._previewBaseWidth = null;
       store.setZoom(finalZoom);
     } else {
-      // Net-zero gesture: still force one clean pass so preview-era mounts
-      // settle (no eviction happened mid-preview by design).
+      // Net-zero gesture: restore the unscaled box, then one clean pass so
+      // preview-era mounts settle (no eviction happened mid-preview by design).
+      if (this._previewBaseHeight) {
+        this._pagesWrapper.style.height = `${Math.max(1, Math.floor(this._previewBaseHeight))}px`;
+      }
+      if (this._previewBaseWidth) {
+        this._pagesWrapper.style.width = `${Math.max(1, Math.floor(this._previewBaseWidth))}px`;
+      }
+      this._previewBaseHeight = null;
+      this._previewBaseWidth = null;
       viewportManager.handleScroll(true);
     }
   }
@@ -669,10 +699,18 @@ class VeditorApp {
     const fx = client.x - rect.left;
     const fy = client.y - rect.top;
     const ratio = newZoom / oldZoom;
-    store.setZoom(newZoom);
-    // handleStoreUpdate rebuilt layout synchronously; re-anchor scroll.
-    this._scrollContainer.scrollLeft = (this._scrollContainer.scrollLeft + fx) * ratio - fx;
-    this._scrollContainer.scrollTop = (this._scrollContainer.scrollTop + fy) * ratio - fy;
+    // Precompute the anchored scroll BEFORE setZoom: the layout pass inside
+    // setZoom is suppressed, so only one mount pass happens after correction.
+    const targetLeft = (this._scrollContainer.scrollLeft + fx) * ratio - fx;
+    const targetTop = (this._scrollContainer.scrollTop + fy) * ratio - fy;
+    store.beginZoomAdjust();
+    try {
+      store.setZoom(newZoom);
+      this._scrollContainer.scrollLeft = targetLeft;
+      this._scrollContainer.scrollTop = targetTop;
+    } finally {
+      store.endZoomAdjust();
+    }
     viewportManager.handleScroll(true);
   }
 
@@ -716,16 +754,17 @@ class VeditorApp {
   private async renderVisiblePages(visibleIndices: number[]) {
     // During a tab-switch rebuild the layout is torn down; mounting now would
     // place old-doc pages at new-doc tops. The post-switch updateLayout does
-    // the one true mount pass.
-    if (store.isDocSwitching) return;
+    // the one true mount pass. Same for focal-anchored zoom steps.
+    if (store.isDocSwitching || store.isZoomAdjusting) return;
     const doc = store.activeDocument;
     if (!doc) return;
     const docId = doc.id;
 
-    // 1. Warm windowing: only evict pages that are more than 4 pages away to prevent scroll blinking.
-    // Never evict mid-preview: the commit 160ms later re-renders sharp anyway,
-    // and evicting scaled-but-correct pages is what flashed blank cracks.
-    const maxKeepDistance = 4;
+    // 1. Warm windowing: only evict pages well outside the viewport to prevent
+    // scroll blinking. Never evict mid-preview: the commit 160ms later
+    // re-renders sharp anyway, and evicting scaled-but-correct pages is what
+    // flashed blank cracks.
+    const maxKeepDistance = 6;
     for (const [pageIndex, p] of this._renderedPages) {
       if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
       let minDistance = Infinity;
@@ -1052,8 +1091,14 @@ class VeditorApp {
     const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * Math.min(availW / rectW, availH / rectH)));
 
     if (!store.zoomLensActive) store.enterZoomLens(store.zoom);
-    // Single commit: handleStoreUpdate re-layouts + re-renders once.
-    store.setZoom(targetZoom);
+    // Suppress the intermediate pass: layout rebuilds under the guard, then
+    // one anchored mount pass runs after the correction below.
+    store.beginZoomAdjust();
+    try {
+      store.setZoom(targetZoom);
+    } finally {
+      store.endZoomAdjust();
+    }
 
     const layout = viewportManager.getLayout(pageIndex);
     if (layout) {
@@ -1067,6 +1112,9 @@ class VeditorApp {
         behavior: 'auto'
       });
       store.setActivePageIndex(pageIndex);
+      viewportManager.handleScroll(true);
+    } else {
+      viewportManager.handleScroll(true);
     }
   }
 

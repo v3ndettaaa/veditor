@@ -55,6 +55,12 @@ class StateStore {
    * tracking must not overwrite the restored page in this window.
    */
   private _docSwitching: boolean = false;
+  /**
+   * True while a focal-anchored zoom step (double-click, marquee) is applying
+   * its scroll correction. Suppresses the intermediate scroll pass so one
+   * layout + mount pass happens instead of two.
+   */
+  private _zoomAdjusting: boolean = false;
 
   // Tool State
   private _activeTool: ToolType = 'pen';
@@ -231,6 +237,9 @@ class StateStore {
   get isDocSwitching() { return this._docSwitching; }
   public beginDocSwitch() { this._docSwitching = true; }
   public endDocSwitch() { this._docSwitching = false; }
+  get isZoomAdjusting() { return this._zoomAdjusting; }
+  public beginZoomAdjust() { this._zoomAdjusting = true; }
+  public endZoomAdjust() { this._zoomAdjusting = false; }
   get activeTool() { return this._activeTool; }
   get toolSettings() { return this._toolSettings; }
   get appSettings() { return this._appSettings; }
@@ -364,7 +373,7 @@ class StateStore {
       }
       // During a tab-switch layout rebuild, scroll tracking must stay silent
       // or the stale scrollTop clobbers the just-restored page.
-      if (!this._docSwitching) {
+      if (!this._docSwitching && !this._zoomAdjusting) {
         this.notify();
       }
     }
@@ -375,6 +384,18 @@ class StateStore {
     const current = rotations[pageIndex] || 0;
     // Normalize to [0,360) so -90 becomes 270 (consistent badge + geometry).
     rotations[pageIndex] = ((current + deltaDeg) % 360 + 360) % 360;
+    this.notify();
+  }
+
+  /** Rotates every page of the active document in a single update (one layout). */
+  public rotateAllPages(deltaDeg = 90) {
+    const doc = this._activeDocument;
+    if (!doc) return;
+    const rotations = this.pageRotations;
+    for (let i = 0; i < doc.pageCount; i++) {
+      const current = rotations[i] || 0;
+      rotations[i] = ((current + deltaDeg) % 360 + 360) % 360;
+    }
     this.notify();
   }
 

@@ -345,27 +345,20 @@ export class ViewControlsComponent {
     });
 
     this._container.querySelector('#view-rotate-cw')?.addEventListener('click', (e: MouseEvent) => {
-      const doc = store.activeDocument;
-      if (e.shiftKey && doc) {
-        for (let i = 0; i < doc.pageCount; i++) {
-          store.rotatePage(i, 90);
-        }
+      // Single commit: rotate notifies once → rotation path lays out once.
+      if (e.shiftKey) {
+        store.rotateAllPages(90);
       } else {
         store.rotatePage(store.activePageIndex, 90);
       }
-      viewportManager.updateLayout(true);
     });
 
     this._container.querySelector('#view-rotate-ccw')?.addEventListener('click', (e: MouseEvent) => {
-      const doc = store.activeDocument;
-      if (e.shiftKey && doc) {
-        for (let i = 0; i < doc.pageCount; i++) {
-          store.rotatePage(i, -90);
-        }
+      if (e.shiftKey) {
+        store.rotateAllPages(-90);
       } else {
         store.rotatePage(store.activePageIndex, -90);
       }
-      viewportManager.updateLayout(true);
     });
 
     this._container.querySelector('#view-invert-doc')?.addEventListener('click', () => {

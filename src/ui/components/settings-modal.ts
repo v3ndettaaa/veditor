@@ -700,8 +700,8 @@ export class SettingsModalComponent {
     // Pattern select
     const patSelect = this._container.querySelector<HTMLSelectElement>('#pattern-select');
     patSelect?.addEventListener('change', () => {
+      // Paint-only change: the store notify path repaints overlays, no relayout.
       store.updateAppSettings({ backgroundPattern: patSelect.value as BackgroundPattern });
-      viewportManager.updateLayout(true);
     });
 
     // UI Density

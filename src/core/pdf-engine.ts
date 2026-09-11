@@ -30,10 +30,20 @@ export interface RenderTaskToken {
   cancel(): void;
 }
 
+interface CachedBitmap {
+  pageIndex: number;
+  width: number;
+  height: number;
+  scale: number;
+  rotation: number;
+  canvas: HTMLCanvasElement;
+}
+
 interface CachedDocSession {
   doc: pdfjsLib.PDFDocumentProxy;
   pageCache: Map<number, pdfjsLib.PDFPageProxy>;
-  renderedBitmaps: Map<number, { width: number; height: number; scale: number; rotation: number; canvas: HTMLCanvasElement }>;
+  /** Keyed by page+scale+rotation so zooming back hits cache instantly. */
+  renderedBitmaps: Map<string, CachedBitmap>;
   meta: {
     pageCount: number;
     pages: PageInfo[];
@@ -41,11 +51,15 @@ interface CachedDocSession {
   };
 }
 
+function bitmapKey(pageIndex: number, scale: number, rotation: number): string {
+  return `${pageIndex}@${scale.toFixed(3)}:${Math.round(((rotation % 360) + 360) % 360)}`;
+}
+
 export class PDFEngine {
   private _pdfDoc: pdfjsLib.PDFDocumentProxy | null = null;
   private _pageCache: Map<number, pdfjsLib.PDFPageProxy> = new Map();
   private _activeRenderTasks: Map<number, any> = new Map();
-  private _renderedBitmaps = new Map<number, { width: number; height: number; scale: number; rotation: number; canvas: HTMLCanvasElement }>();
+  private _renderedBitmaps = new Map<string, CachedBitmap>();
   private _docSessions: Map<string, CachedDocSession> = new Map();
   private _currentDocId: string | null = null;
   private _dimListeners: Set<(docId: string) => void> = new Set();
@@ -288,6 +302,15 @@ export class PDFEngine {
     this._renderedBitmaps.clear();
   }
 
+  /** Any cached scale of a page, for instant stale upscale while re-rendering. */
+  private findAnyBitmap(pageIndex: number): CachedBitmap | undefined {
+    const prefix = `${pageIndex}@`;
+    for (const [key, entry] of this._renderedBitmaps) {
+      if (key.startsWith(prefix)) return entry;
+    }
+    return undefined;
+  }
+
   public async renderPageToCanvas(
     pageIndex: number,
     canvas: HTMLCanvasElement,
@@ -362,15 +385,16 @@ export class PDFEngine {
     const targetWidth = Math.max(1, Math.floor(viewport.width));
     const targetHeight = Math.max(1, Math.floor(viewport.height));
 
-    // Zero-blank frame double buffering: If a cached bitmap exists (even at a different zoom),
-    // display it immediately scaled to fit so the user never sees white canvas space while re-rendering
-    const cached = this._renderedBitmaps.get(pageIndex);
+    // Zero-blank frame double buffering: paint any cached bitmap for this page
+    // immediately (even at a different zoom) so the user never sees white
+    // canvas space while re-rendering. CSS size is owned by main.ts layout —
+    // only the backing store is touched here to avoid ±1px seam drift.
+    const exactKey = bitmapKey(pageIndex, scale, totalRotation);
+    const cached = this._renderedBitmaps.get(exactKey) ?? this.findAnyBitmap(pageIndex);
     if (cached) {
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth;
         canvas.height = targetHeight;
-        canvas.style.width = `${Math.floor(targetWidth / dpr)}px`;
-        canvas.style.height = `${Math.floor(targetHeight / dpr)}px`;
       }
       const ctx = canvas.getContext('2d', { alpha: false });
       ctx?.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
@@ -417,12 +441,13 @@ export class PDFEngine {
         return;
       }
 
-      // Keep recent bitmaps in memory for instant scroll navigation
+      // Keep recent bitmaps (across a few zoom levels) for instant navigation.
       if (this._renderedBitmaps.size >= 25) {
         const oldestKey = this._renderedBitmaps.keys().next().value;
         if (oldestKey !== undefined) this._renderedBitmaps.delete(oldestKey);
       }
-      this._renderedBitmaps.set(pageIndex, {
+      this._renderedBitmaps.set(exactKey, {
+        pageIndex,
         width: targetWidth,
         height: targetHeight,
         scale,
@@ -430,12 +455,11 @@ export class PDFEngine {
         canvas: offscreen
       });
 
-      // Atomic blit to visible canvas with zero flicker and zero blank frame
+      // Atomic blit to visible canvas with zero flicker and zero blank frame.
+      // Backing store only — CSS size stays owned by the viewport layout.
       if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
         canvas.width = targetWidth;
         canvas.height = targetHeight;
-        canvas.style.width = `${Math.floor(targetWidth / dpr)}px`;
-        canvas.style.height = `${Math.floor(targetHeight / dpr)}px`;
       }
       const ctx = canvas.getContext('2d', { alpha: false });
       ctx?.drawImage(offscreen, 0, 0);

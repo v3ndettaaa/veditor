@@ -16,6 +16,8 @@ export class HeaderComponent {
   private _container: HTMLElement;
   private _onOpenFileRequested: () => void;
   private _onAddTabRequested: () => void;
+  /** Zoom never changes header output — skip full rebuilds on zoom-only notifies. */
+  private _lastRenderKey: string = '';
 
   constructor(
     container: HTMLElement,
@@ -37,6 +39,14 @@ export class HeaderComponent {
     const lang = store.appSettings.language;
     const theme = store.appSettings.theme;
     const isNotebook = notebookController.isNotebook(activeDoc);
+
+    const renderKey = [
+      activeDoc?.id ?? '',
+      tabs.map(t => `${t.id}:${t.name}:${isDocumentDirty(t.id) ? 1 : 0}`).join(','),
+      lang, theme, isNotebook ? 1 : 0
+    ].join('|');
+    if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') return;
+    this._lastRenderKey = renderKey;
 
     this._container.innerHTML = `
       <div class="header-left">

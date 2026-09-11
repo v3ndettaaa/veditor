@@ -21,6 +21,8 @@ export class SidePanelsComponent {
    * bitmap, and a canvas can only be attached at one place in the document.
    */
   private _thumbnailCache: Map<string, string> = new Map();
+  /** Zoom never changes sidebar output — skip full rebuilds on zoom-only notifies. */
+  private _lastRenderKey: string = '';
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -31,6 +33,20 @@ export class SidePanelsComponent {
   public render(): void {
     const isOpen = store.sidebarOpen;
     const activeTab = store.activeSidebarTab;
+    const doc = store.activeDocument;
+
+    // Zoom/page-scroll-independent parts first: collapsed state is trivial.
+    // Full rebuild key excludes zoom — zoom commits must not rebuild O(n)
+    // thumbnail DOM or refire thumbnail renders.
+    const renderKey = [
+      isOpen ? 1 : 0, activeTab,
+      doc?.id ?? '', doc?.pageCount ?? 0,
+      store.activePageIndex,
+      doc?.lastModifiedAt ?? 0,
+      store.appSettings.language
+    ].join('|');
+    if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') return;
+    this._lastRenderKey = renderKey;
 
     if (!isOpen) {
       this._container.classList.add('collapsed');
