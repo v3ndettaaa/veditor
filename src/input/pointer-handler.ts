@@ -3,10 +3,12 @@
  * Handles 120/240Hz coalesced events, stylus pressure, palm rejection, and tool dispatching.
  */
 
-import { Point, StrokePoint, ToolType, Annotation, BoundingBox } from '../core/types';
+import { Point, StrokePoint, ToolType, Annotation, BoundingBox, ShapeAnnotation } from '../core/types';
 import { store } from '../core/store';
 import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand } from '../core/history';
-import { mergeBoundingBoxes } from '../utils/geometry';
+import { mergeBoundingBoxes, computePointsBoundingBox } from '../utils/geometry';
+import { fitStroke, type FittedShape } from '../utils/shape-fit';
+import { annotationEngine } from '../annotations/engine';
 import { PressureEngine } from './pressure';
 import { palmRejection } from './palm-rejection';
 import { penTool } from '../annotations/tools/pen';
@@ -68,6 +70,21 @@ export class PointerHandler {
   } | null = null;
   /** Region-marquee rubber band (Shift extends the selection). */
   private _marquee: { pageIndex: number; start: Point; current: Point; additive: boolean } | null = null;
+  /** Freehand lasso path (Alt+drag in Select): closed loop, page coordinates. */
+  private _lasso: { pageIndex: number; points: Point[]; additive: boolean } | null = null;
+
+  /**
+   * Draw-and-hold shape recognition (pen only): holding the pointer nearly
+   * still briefly snaps the live stroke to a geometric primitive on lift.
+   * Never runs on the move hot path — one timer, one fit per hold.
+   */
+  private _holdTimer: number | null = null;
+  private _holdAnchor: Point | null = null;
+  private _holdFired: boolean = false;
+  private _holdShape: FittedShape | null = null;
+  private static readonly HOLD_DELAY_MS = 400;
+  private static readonly HOLD_RADIUS = 8;
+  private static readonly HOLD_MIN_SIZE = 12;
 
   /**
    * Lens width compensation: while a zoom-lens is active, creation widths are
@@ -77,6 +94,88 @@ export class PointerHandler {
   private lensWidth(base: number): number {
     const f = store.zoomLensFactor;
     return f !== 1 ? base / f : base;
+  }
+
+  /** (Re)starts the draw-and-hold snap timer anchored at the given point. */
+  private startHoldTimer(anchor: Point): void {
+    this.clearHoldTimer();
+    this._holdAnchor = { ...anchor };
+    this._holdTimer = window.setTimeout(() => this.onHoldFire(), PointerHandler.HOLD_DELAY_MS);
+  }
+
+  private clearHoldTimer(): void {
+    if (this._holdTimer !== null) {
+      window.clearTimeout(this._holdTimer);
+      this._holdTimer = null;
+    }
+    this._holdAnchor = null;
+  }
+
+  /** Fires while the pointer is still down: fits the live stroke once. */
+  private onHoldFire(): void {
+    this._holdTimer = null;
+    if (!this._isPointerDown || (this._strokeTool ?? store.activeTool) !== 'pen') return;
+    if (this._holdFired) return;
+    const pts = penTool.getActivePoints();
+    if (pts.length < 8) return;
+    const box = computePointsBoundingBox([...pts]);
+    if (Math.hypot(box.width, box.height) < PointerHandler.HOLD_MIN_SIZE) return;
+    const fit = fitStroke(pts.map(p => ({ x: p.x, y: p.y })));
+    if (!fit) return;
+    this._holdFired = true;
+    this._holdShape = fit;
+    // Swap the live ink preview for the snapped shape immediately.
+    if (this._pageScratchCtx && this._pageScratchCanvas) {
+      const ctx = this._pageScratchCtx;
+      const dpr = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+      const preview = this.buildHoldShapeAnnotation(fit, this._activePageIndex, 'layer-default');
+      if (preview) annotationEngine.renderSingleAnnotation(ctx, preview, store.zoom * dpr);
+    }
+  }
+
+  /** Builds the snapped ShapeAnnotation with current shape styling. */
+  private buildHoldShapeAnnotation(fit: FittedShape, pageIndex: number, layerId: string): ShapeAnnotation | null {
+    const s = store.toolSettings;
+    const strokeWidth = this.lensWidth(s.shapeWidth);
+    const base = {
+      id: Math.random().toString(36).substring(2, 9),
+      pageIndex,
+      layerId,
+      strokeColor: s.shapeColor,
+      fillColor: s.shapeFillColor,
+      strokeWidth,
+      outline: s.shapeOutline !== false,
+      strokeStyle: s.shapeStyle,
+      opacity: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    } as const;
+    if (fit.kind === 'line' || fit.kind === 'arrow') {
+      const points = [{ ...fit.p0 }, { ...fit.p1 }];
+      return {
+        ...base,
+        type: fit.kind,
+        points,
+        box: computePointsBoundingBox(points, strokeWidth),
+        arrowEnd: fit.kind === 'arrow'
+      };
+    }
+    if (fit.kind === 'rectangle') {
+      return { ...base, type: 'rectangle', box: { ...fit.box } };
+    }
+    if (fit.kind === 'ellipse') {
+      const w = Math.max(4, fit.rx * 2);
+      const h = Math.max(4, fit.ry * 2);
+      return { ...base, type: 'ellipse', box: { x: fit.cx - w / 2, y: fit.cy - h / 2, width: w, height: h } };
+    }
+    if (fit.points.length < 3) return null;
+    return {
+      ...base,
+      type: 'polygon',
+      points: fit.points.map(p => ({ ...p })),
+      box: computePointsBoundingBox(fit.points, strokeWidth)
+    };
   }
 
   public handlePointerDown(
@@ -128,6 +227,7 @@ export class PointerHandler {
           tSettings.pressureSensitivityEnabled !== false,
           tSettings.pressureStrength || 'balanced'
         );
+        this.startHoldTimer({ x: pt.x, y: pt.y });
         break;
 
       case 'highlighter':
@@ -300,8 +400,15 @@ export class PointerHandler {
         if (ann) {
           store.selectAnnotation(ann.id, additive);
           onNeedRepaint();
+        } else if ((e as MouseEvent).altKey === true) {
+          // 3a. Alt+drag: freehand lasso loop around arbitrary ink/shapes.
+          this._lasso = {
+            pageIndex,
+            points: [{ x: pt.x, y: pt.y }],
+            additive
+          };
         } else {
-          // 3. Empty press: rubber-band region select (tiny drag = click).
+          // 3b. Empty press: rubber-band region select (tiny drag = click).
           this._marquee = {
             pageIndex,
             start: { x: pt.x, y: pt.y },
@@ -371,6 +478,16 @@ export class PointerHandler {
             }
           }
           onNeedRepaint();
+        } else if (this._lasso && this._lasso.pageIndex === pageIndex) {
+          for (const pt of pts) {
+            const path = this._lasso.points;
+            const prev = path[path.length - 1];
+            // Drop sub-pixel jitter so the loop stays lean.
+            if (!prev || Math.abs(pt.x - prev.x) + Math.abs(pt.y - prev.y) > 1.5) {
+              path.push({ x: pt.x, y: pt.y });
+            }
+          }
+          this.renderLassoPath(ctx, renderScale);
         } else if (this._marquee && this._marquee.pageIndex === pageIndex) {
           this._marquee.current = { ...lastPt };
           this.renderMarquee(ctx, renderScale);
@@ -385,7 +502,19 @@ export class PointerHandler {
 
       case 'pen':
         for (const pt of pts) penTool.move(pt);
-        penTool.renderScratchpad(ctx, renderScale);
+        // Draw-and-hold: moving past the hold radius restarts (or cancels a
+        // fired preview back to ink); stillness lets the timer snap.
+        if (this._holdAnchor && Math.hypot(lastPt.x - this._holdAnchor.x, lastPt.y - this._holdAnchor.y) > PointerHandler.HOLD_RADIUS) {
+          this._holdFired = false;
+          this._holdShape = null;
+          this.startHoldTimer({ x: lastPt.x, y: lastPt.y });
+        }
+        if (this._holdFired && this._holdShape) {
+          const preview = this.buildHoldShapeAnnotation(this._holdShape, pageIndex, 'layer-default');
+          if (preview) annotationEngine.renderSingleAnnotation(ctx, preview, renderScale);
+        } else {
+          penTool.renderScratchpad(ctx, renderScale);
+        }
         break;
 
       case 'highlighter':
@@ -494,7 +623,23 @@ export class PointerHandler {
     switch (tool) {
       case 'select':
         this.commitSelectDrag();
-        if (this._marquee) {
+        if (this._lasso) {
+          const lasso = this._lasso;
+          this._lasso = null;
+          const doc = store.activeDocument;
+          if (doc?.annotations[lasso.pageIndex]) {
+            const hits = selectionManager
+              .findAnnotationsInPolygon(lasso.points, doc.annotations[lasso.pageIndex])
+              .map(a => a.id);
+            if (hits.length === 0) {
+              if (!lasso.additive) store.clearSelection();
+            } else if (lasso.additive) {
+              store.setSelectedAnnotationIds([...new Set([...store.selectedAnnotationIds, ...hits])]);
+            } else {
+              store.setSelectedAnnotationIds(hits);
+            }
+          }
+        } else if (this._marquee) {
           const mq = this._marquee;
           this._marquee = null;
           const w = Math.abs(mq.current.x - mq.start.x);
@@ -516,12 +661,29 @@ export class PointerHandler {
         }
         break;
 
-      case 'pen':
-        const penAnn = penTool.finish(defaultLayerId);
-        if (penAnn) {
-          history.execute(new AddAnnotationCommand(pageIndex, penAnn));
+      case 'pen': {
+        const snapped = this._holdFired ? this._holdShape : null;
+        const holdPage = this._activePageIndex;
+        this.clearHoldTimer();
+        if (snapped) {
+          const shapeAnn = this.buildHoldShapeAnnotation(snapped, holdPage, defaultLayerId);
+          penTool.cancel();
+          this._holdFired = false;
+          this._holdShape = null;
+          if (shapeAnn) {
+            history.execute(new AddAnnotationCommand(holdPage, shapeAnn));
+            // Expose transform handles immediately, like text/stamp placement.
+            store.setActiveTool('select');
+            store.selectAnnotation(shapeAnn.id);
+          }
+        } else {
+          const penAnn = penTool.finish(defaultLayerId);
+          if (penAnn) {
+            history.execute(new AddAnnotationCommand(pageIndex, penAnn));
+          }
         }
         break;
+      }
 
       case 'highlighter':
         const highAnn = highlighterTool.finish(defaultLayerId);
@@ -593,6 +755,21 @@ export class PointerHandler {
       }
     }
     return false;
+  }
+
+  /** Aborts an in-progress lasso loop without selecting. Returns true if one was active. */
+  public cancelLasso(): boolean {
+    if (!this._lasso) return false;
+    this._lasso = null;
+    if (this._pageScratchCtx && this._pageScratchCanvas) {
+      this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+    }
+    this._isPointerDown = false;
+    this._strokeTool = null;
+    this._activePageIndex = -1;
+    this._pageScratchCanvas = null;
+    this._pageScratchCtx = null;
+    return true;
   }
 
   /** Aborts an in-progress zoom marquee without zooming. Returns true if one was active. */
@@ -737,6 +914,25 @@ export class PointerHandler {
     ctx.restore();
   }
 
+  /** Renders the freehand lasso loop for region selection. */
+  private renderLassoPath(ctx: CanvasRenderingContext2D, scale: number): void {
+    if (!this._lasso || this._lasso.points.length < 2) return;
+    const pts = this._lasso.points;
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(79, 70, 229, 0.08)';
+    ctx.fill();
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.5 / scale;
+    ctx.setLineDash([5 / scale, 4 / scale]);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   /** Renders the dashed marquee rect for the zoom-lens drag. */
   private renderZoomMarquee(ctx: CanvasRenderingContext2D, scale: number): void {
     const s = this._zoomMarqueeStart;
@@ -785,6 +981,9 @@ export class PointerHandler {
   public cancelActiveStroke(): void {
     if (!this._isPointerDown) return;
     const tool = this._strokeTool ?? store.activeTool;
+    this.clearHoldTimer();
+    this._holdFired = false;
+    this._holdShape = null;
 
     if (tool === 'eraser' && this._eraserSession) {
       eraserTool.finish();
@@ -793,9 +992,10 @@ export class PointerHandler {
       this._zoomMarqueeStart = null;
       this._zoomMarqueeCurrent = null;
       // A gesture takeover commits (never silently drops) a selection drag;
-      // an uncommitted marquee is just a rubber band, safe to discard.
+      // an uncommitted marquee/lasso is just a rubber band, safe to discard.
       this.commitSelectDrag();
       this._marquee = null;
+      this._lasso = null;
       penTool.cancel();
       highlighterTool.cancel();
       // Keep finished polygon vertices; a mid-click rubber band is harmless

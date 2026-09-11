@@ -38,6 +38,11 @@ export class PenTool {
     this._activePoints.push(point);
   }
 
+  /** Live stroke points for draw-and-hold recognition (read-only snapshot). */
+  public getActivePoints(): readonly StrokePoint[] {
+    return this._activePoints;
+  }
+
   public renderScratchpad(ctx: CanvasRenderingContext2D, scale: number): void {
     if (this._activePoints.length === 0) return;
 

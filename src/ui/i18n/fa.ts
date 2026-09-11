@@ -31,7 +31,8 @@ export const fa = {
     laser: 'اشاره‌گر لیزری (Z)',
     callout: 'حباب یادداشت (C)',
     signature: 'امضای الکترونیکی (K)',
-    redaction: 'پوشاندن امن اطلاعات (X)'
+    redaction: 'پوشاندن امن اطلاعات (X)',
+    scratchpad: 'دفترچه یادداشت شناور (N)'
   },
   sidebar: {
     thumbnails: 'صفحات',

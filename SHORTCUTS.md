@@ -21,6 +21,9 @@
 | `K` | **Signature** | Digital ink signature pad |
 | `X` | **Redaction** | Permanent blackout / whiteout redaction box |
 | `Z` | **Laser Pointer** | Ephemeral glowing presentation pointer |
+| `N` | **Scratchpad** | Floating draft overlay: move/resize, Insert sends strokes to the page |
+| `Alt + drag` *(Select)* | **Lasso Select** | Freehand loop selects ink, shapes, and annotations |
+| `P` + hold | **Shape Snap** | Draw then hold ~400ms to snap into line, arrow, rectangle, ellipse, or polygon |
 
 ---
 
@@ -30,6 +33,7 @@
 | `Cmd + K` / `Ctrl + K` | **Command Palette** | Instant search for all tools, commands, and settings |
 | `Cmd + Z` / `Ctrl + Z` | **Undo** | Revert previous action |
 | `Cmd + Shift + Z` / `Ctrl + Y` | **Redo** | Redo reverted action |
+| `Cmd + D` / `Ctrl + D` | **Duplicate** | Duplicate the current selection |
 | `Cmd + +` / `Ctrl + +` | **Zoom In** | Increase canvas zoom by 15% |
 | `Cmd + -` / `Ctrl + -` | **Zoom Out** | Decrease canvas zoom by 15% |
 | `0` | **Fit to Width** | Fit page to window width |

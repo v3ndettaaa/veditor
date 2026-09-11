@@ -4,7 +4,7 @@
  */
 
 import { Point, BoundingBox, Annotation } from '../core/types';
-import { isPointInBox, distance, mergeBoundingBoxes, boxesIntersect } from '../utils/geometry';
+import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect } from '../utils/geometry';
 
 /**
  * Rotates point `p` around `center` by `angle` radians (counter-clockwise in
@@ -181,6 +181,122 @@ export class SelectionManager {
       0
     );
     return annotations.filter(a => !a.locked && boxesIntersect(norm, a.box));
+  }
+
+  /**
+   * Freehand lasso selection: all unlocked annotations intersecting an
+   * arbitrary closed loop (page units). Stroke-like annotations hit on ink
+   * (vertices inside the loop or within half stroke width of its edges);
+   * box-like annotations hit on corners/edges like the rect marquee.
+   * Degenerate loops (<3 points or tiny area) return [] — callers fall back
+   * to click/clear behavior.
+   */
+  public findAnnotationsInPolygon(poly: Point[], annotations: Annotation[], strokePad = 0): Annotation[] {
+    if (poly.length < 3 || polygonArea(poly) < 25) return [];
+    const lassoBox = mergeBoundingBoxes(poly.map(p => ({ x: p.x, y: p.y, width: 0, height: 0 })));
+    const hits: Annotation[] = [];
+    for (const ann of annotations) {
+      if (ann.locked) continue;
+      if (!boxesIntersect(lassoBox, ann.box)) continue;
+      // Test in the annotation's unrotated frame (boxes stay unrotated).
+      const center = boxCenter(ann.box);
+      const rot = ann.rotation || 0;
+      const local: Point[] = rot ? poly.map(p => rotatePoint(p, center, -rot)) : poly;
+      if (this.annotationIntersectsPolygon(ann, local, strokePad)) hits.push(ann);
+    }
+    return hits;
+  }
+
+  private annotationIntersectsPolygon(ann: Annotation, poly: Point[], strokePad: number): boolean {
+    const corners = [
+      { x: ann.box.x, y: ann.box.y },
+      { x: ann.box.x + ann.box.width, y: ann.box.y },
+      { x: ann.box.x + ann.box.width, y: ann.box.y + ann.box.height },
+      { x: ann.box.x, y: ann.box.y + ann.box.height }
+    ];
+    const boxHitsPoly = corners.some(c => isPointInPolygon(c, poly));
+    const polyHitsBox = poly.some(p => isPointInBox(p, ann.box));
+    const edgesCross = this.loopEdgesCrossBox(poly, ann.box);
+    if (boxHitsPoly || polyHitsBox || edgesCross) {
+      // Box-like annotations are decided by box overlap alone.
+      if (ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'text' ||
+          ann.type === 'stamp' || ann.type === 'redaction' || ann.type === 'callout' ||
+          ann.type === 'signature') {
+        return true;
+      }
+    }
+    // Stroke-like annotations: require ink contact, not just box overlap.
+    const paths = this.annotationPaths(ann);
+    if (paths.length === 0) return boxHitsPoly || polyHitsBox || edgesCross;
+    const pad = (ann as any).strokeWidth ? (ann as any).strokeWidth / 2 + strokePad : strokePad;
+    for (const path of paths) {
+      for (const pt of path) {
+        if (isPointInPolygon(pt, poly)) return true;
+      }
+      for (let i = 0; i + 1 < path.length; i++) {
+        if (this.segmentNearLoop(path[i], path[i + 1], poly, pad)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Point arrays of stroke-like annotations (unrotated frame). */
+  private annotationPaths(ann: Annotation): Point[][] {
+    switch (ann.type) {
+      case 'pen':
+      case 'highlighter':
+        return [(ann as any).points as Point[]];
+      case 'measure-distance':
+      case 'measure-angle':
+      case 'measure-area':
+      case 'line':
+      case 'arrow':
+      case 'polygon':
+      case 'freeform-shape':
+        return (ann as any).points ? [(ann as any).points as Point[]] : [];
+      case 'signature':
+        return ((ann as any).points as Point[][]) || [];
+      default:
+        return [];
+    }
+  }
+
+  /** True when segment ab is within pad of any lasso edge (or crosses one). */
+  private segmentNearLoop(a: Point, b: Point, poly: Point[], pad: number): boolean {
+    for (let i = 0; i < poly.length; i++) {
+      const c = poly[i];
+      const d = poly[(i + 1) % poly.length];
+      if (this.segmentsCross(a, b, c, d)) return true;
+      if (pad > 0 && (distanceToSegment(a, c, d) <= pad || distanceToSegment(b, c, d) <= pad)) return true;
+    }
+    return false;
+  }
+
+  private loopEdgesCrossBox(poly: Point[], box: BoundingBox): boolean {
+    const corners = [
+      { x: box.x, y: box.y },
+      { x: box.x + box.width, y: box.y },
+      { x: box.x + box.width, y: box.y + box.height },
+      { x: box.x, y: box.y + box.height }
+    ];
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i];
+      const b = corners[(i + 1) % 4];
+      for (let j = 0; j < poly.length; j++) {
+        if (this.segmentsCross(a, b, poly[j], poly[(j + 1) % poly.length])) return true;
+      }
+    }
+    return false;
+  }
+
+  private segmentsCross(a: Point, b: Point, c: Point, d: Point): boolean {
+    const dir = (p: Point, q: Point, r: Point) =>
+      (r.x - p.x) * (q.y - p.y) - (r.y - p.y) * (q.x - p.x);
+    const d1 = dir(c, d, a);
+    const d2 = dir(c, d, b);
+    const d3 = dir(a, b, c);
+    const d4 = dir(a, b, d);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
   }
 
   /**

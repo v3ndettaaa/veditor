@@ -132,10 +132,13 @@ class StateStore {
   private _activeSidebarTab: SidebarTab = 'thumbnails';
   private _propertiesPanelOpen: boolean = false;
   private _focusMode: boolean = false;
+  private _viewControlsCollapsed: boolean = false;
   private _commandPaletteOpen: boolean = false;
   private _shortcutsModalOpen: boolean = false;
   private _settingsModalOpen: boolean = false;
   private _signatureModalOpen: boolean = false;
+  private _scratchpadOpen: boolean = false;
+  private _scratchpadMinimized: boolean = false;
 
   // Listeners
   private _listeners: Set<StoreListener> = new Set();
@@ -249,10 +252,13 @@ class StateStore {
   get activeSidebarTab() { return this._activeSidebarTab; }
   get propertiesPanelOpen() { return this._propertiesPanelOpen; }
   get focusMode() { return this._focusMode; }
+  get viewControlsCollapsed() { return this._viewControlsCollapsed; }
   get commandPaletteOpen() { return this._commandPaletteOpen; }
   get shortcutsModalOpen() { return this._shortcutsModalOpen; }
   get settingsModalOpen() { return this._settingsModalOpen; }
   get signatureModalOpen() { return this._signatureModalOpen; }
+  get scratchpadOpen() { return this._scratchpadOpen; }
+  get scratchpadMinimized() { return this._scratchpadMinimized; }
 
   // Setters & Actions
   public onTabClosed(listener: (tabId: string) => void) {
@@ -613,6 +619,18 @@ class StateStore {
     this.notify();
   }
 
+  public toggleViewControlsCollapsed() {
+    this._viewControlsCollapsed = !this._viewControlsCollapsed;
+    this.notify();
+  }
+
+  public setViewControlsCollapsed(collapsed: boolean) {
+    if (this._viewControlsCollapsed !== collapsed) {
+      this._viewControlsCollapsed = collapsed;
+      this.notify();
+    }
+  }
+
   public setCommandPaletteOpen(open: boolean) {
     this._commandPaletteOpen = open;
     this.notify();
@@ -639,6 +657,24 @@ class StateStore {
   public setSignatureModalOpen(open: boolean) {
     this._signatureModalOpen = open;
     this.notify();
+  }
+
+  public setScratchpadOpen(open: boolean) {
+    if (this._scratchpadOpen !== open) {
+      this._scratchpadOpen = open;
+      if (open) this._scratchpadMinimized = false;
+      this.notify();
+    } else if (open && this._scratchpadMinimized) {
+      this._scratchpadMinimized = false;
+      this.notify();
+    }
+  }
+
+  public setScratchpadMinimized(minimized: boolean) {
+    if (this._scratchpadMinimized !== minimized) {
+      this._scratchpadMinimized = minimized;
+      this.notify();
+    }
   }
 }
 

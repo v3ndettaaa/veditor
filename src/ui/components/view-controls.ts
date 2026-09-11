@@ -15,6 +15,8 @@ export class ViewControlsComponent {
   private _isInitialized: boolean = false;
   /** Lens state the current DOM was built for (chip visibility). */
   private _lensActiveRendered: boolean = false;
+  /** Collapsed state the current DOM was built for. */
+  private _collapsedRendered: boolean = false;
   /** Document the bound listeners / clamped totals belong to. */
   private _boundDocId: string | null = null;
   /** Set while Enter commits, so the ensuing blur doesn't commit twice. */
@@ -23,6 +25,14 @@ export class ViewControlsComponent {
   constructor(container: HTMLElement) {
     this._container = container;
     store.subscribe(() => this.render());
+    // Collapse on outside tap (toolbar pinned-card pattern): pointerdown so
+    // input blur-commits still run first.
+    document.addEventListener('pointerdown', (e) => {
+      if (store.viewControlsCollapsed || !store.activeDocument) return;
+      if (!this._container.contains(e.target as Node)) {
+        store.setViewControlsCollapsed(true);
+      }
+    });
     this.render();
   }
 
@@ -30,7 +40,9 @@ export class ViewControlsComponent {
     const doc = store.activeDocument;
     if (!doc) {
       this._container.style.display = 'none';
+      this._container.classList.remove('is-collapsed');
       this._isInitialized = false;
+      this._collapsedRendered = false;
       this._boundDocId = null;
       return;
     }
@@ -48,12 +60,40 @@ export class ViewControlsComponent {
     const totalPages = doc.pageCount;
     const currentRot = store.pageRotations[store.activePageIndex] || 0;
 
+    // Collapsed: compact loupe button showing live zoom; tap to expand.
+    if (store.viewControlsCollapsed) {
+      this._container.classList.add('is-collapsed');
+      if (this._collapsedRendered && this._isInitialized) {
+        const label = this._container.querySelector<HTMLElement>('#view-expand-label');
+        if (label) label.textContent = `${zoomPct}%`;
+        return;
+      }
+      this._container.innerHTML = `
+        <button id="view-expand-btn" class="view-btn" title="Expand zoom controls">
+          ${getIconSvg('zoomIn', 15)}
+          <span id="view-expand-label" style="font-size:11px; font-weight:700;">${zoomPct}%</span>
+        </button>
+      `;
+      this._container.querySelector('#view-expand-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        store.setViewControlsCollapsed(false);
+      });
+      this._isInitialized = true;
+      this._collapsedRendered = true;
+      this._lensActiveRendered = store.zoomLensActive;
+      this._boundDocId = doc.id;
+      return;
+    }
+    this._container.classList.remove('is-collapsed');
+
     // If already initialized in DOM, update selectively to avoid interrupting active user typing
-    if (this._isInitialized && this._container.querySelector('#view-page-input') &&
+    if (this._isInitialized && this._collapsedRendered === false &&
+        this._container.querySelector('#view-page-input') &&
         this._lensActiveRendered === store.zoomLensActive) {
       this.updateState(currentPage, totalPages, zoomPct, currentRot);
       return;
     }
+    this._collapsedRendered = false;
 
     const inputWidth = Math.max(34, (String(totalPages).length + 1) * 9 + 10);
 
@@ -149,6 +189,12 @@ export class ViewControlsComponent {
       <!-- OLED Dark Document Inversion Toggle -->
       <button id="view-invert-doc" class="view-btn ${this._invertDocument ? 'active' : ''}" title="Toggle Dark OLED Document Reading Mode">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z"/></svg>
+      </button>
+
+      <div class="toolbar-separator" style="height:16px;"></div>
+
+      <button id="view-collapse-btn" class="view-btn" title="Collapse zoom controls">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
     `;
 
@@ -366,6 +412,11 @@ export class ViewControlsComponent {
       document.body.classList.toggle('invert-pdf-document', this._invertDocument);
       const invertBtn = this._container.querySelector<HTMLElement>('#view-invert-doc');
       invertBtn?.classList.toggle('active', this._invertDocument);
+    });
+
+    this._container.querySelector('#view-collapse-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      store.setViewControlsCollapsed(true);
     });
   }
 }

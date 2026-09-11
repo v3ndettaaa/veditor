@@ -31,7 +31,8 @@ export const en = {
     laser: 'Laser Pointer (Z)',
     callout: 'Callout Bubble (C)',
     signature: 'Signature (K)',
-    redaction: 'Redaction (X)'
+    redaction: 'Redaction (X)',
+    scratchpad: 'Floating Scratchpad (N)'
   },
   sidebar: {
     thumbnails: 'Pages',

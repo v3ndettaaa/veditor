@@ -23,7 +23,8 @@ export type ToolType =
   | 'laser'
   | 'callout'
   | 'signature'
-  | 'redaction';
+  | 'redaction'
+  | 'scratchpad';
 
 export type EraserMode = 'stroke' | 'object' | 'pixel';
 
@@ -234,7 +235,7 @@ export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
   'select', 'hand', 'zoom-lens',
   'pen', 'highlighter', 'eraser',
   'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
-  'text', 'stamp', 'measure-distance', 'callout', 'signature', 'redaction', 'laser'
+  'text', 'stamp', 'measure-distance', 'callout', 'signature', 'redaction', 'laser', 'scratchpad'
 ];
 
 /** Visual family per toolbar tool; separators render between families. */

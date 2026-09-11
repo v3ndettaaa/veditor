@@ -27,6 +27,7 @@ export class ShortcutsModalComponent {
         icon: 'pen',
         items: [
           { key: 'V', desc: 'Select & transform' },
+          { key: 'Alt + drag', desc: 'Lasso select' },
           { key: 'Space (hold)', desc: 'Hand — drag to pan' },
           { key: 'Esc', desc: 'Exit zoom lens / cancel marquee' },
           { key: 'P', desc: 'Freehand pen' },
@@ -36,6 +37,7 @@ export class ShortcutsModalComponent {
           { key: 'M', desc: 'Stamp / image' },
           { key: 'C', desc: 'Callout bubble' },
           { key: 'K', desc: 'Signature' },
+          { key: 'N', desc: 'Scratchpad' },
           { key: 'X', desc: 'Redaction' },
           { key: 'Z', desc: 'Laser pointer' }
         ]
@@ -70,6 +72,7 @@ export class ShortcutsModalComponent {
           { key: 'Ctrl / Cmd  ⇧ Z', desc: 'Redo' },
           { key: 'Ctrl / Cmd  S', desc: 'Save' },
           { key: 'Ctrl / Cmd  ⇧ S', desc: 'Save As' },
+          { key: 'Ctrl / Cmd  D', desc: 'Duplicate selection' },
           { key: 'Ctrl / Cmd  K', desc: 'Command palette' },
           { key: '?', desc: 'This reference' },
           { key: 'Esc', desc: 'Dismiss / deselect' },

@@ -7,6 +7,7 @@ import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
 import { pdfExporter } from '../../io/export-pdf';
 import { saveActiveDocument, saveActiveDocumentAs } from '../../io/save';
+import { duplicateSelectedAnnotations } from '../../annotations/duplicate';
 import { dataExporter } from '../../io/export-data';
 import { showToast } from './toast';
 import { getIconSvg } from '../../utils/icons';
@@ -59,6 +60,7 @@ export class CommandPaletteComponent {
       { id: 'tool-measure', title: 'Measure Distance Tool', category: 'Tools', action: () => store.setActiveTool('measure-distance') },
       { id: 'tool-laser', title: 'Presentation Laser Pointer', category: 'Tools', shortcut: 'Z', action: () => store.setActiveTool('laser') },
       { id: 'tool-redaction', title: 'Redaction Tool', category: 'Tools', shortcut: 'X', action: () => store.setActiveTool('redaction') },
+      { id: 'tool-scratchpad', title: 'Floating Scratchpad', category: 'Tools', shortcut: 'N', action: () => { store.setActiveTool('scratchpad'); store.setScratchpadOpen(true); } },
 
       { id: 'view-customize-toolbar', title: 'Customize toolbar layout', category: 'View', action: () => { store.setSettingsModalOpen(true); store.settingsTabRequest = 'toolbar'; } },
       { id: 'view-fit-width', title: 'Fit to Width', category: 'View', action: () => viewportManager.fitToWidth() },
@@ -132,6 +134,7 @@ export class CommandPaletteComponent {
         }
       },
       { id: 'shortcuts-modal', title: 'Keyboard Shortcuts Reference', category: 'Help', shortcut: '?', action: () => store.setShortcutsModalOpen(true) },
+      { id: 'edit-duplicate', title: 'Duplicate Selection', category: 'Edit', shortcut: 'Ctrl+D', action: () => { duplicateSelectedAnnotations(); } },
       { id: 'settings-modal', title: 'Open Settings', category: 'Help', action: () => store.setSettingsModalOpen(true) }
     ];
   }

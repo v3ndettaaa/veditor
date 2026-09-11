@@ -42,6 +42,32 @@ describe('Region selection helpers', () => {
     );
     expect(hits.map(a => a.id)).toEqual(['a']);
   });
+
+  it('lasso-selects ink inside a freehand loop', () => {
+    const inside = pen('a', 30, 30, 20, 20);
+    const outside = pen('b', 500, 500);
+    const loop = [
+      { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+    ];
+    const hits = selectionManager.findAnnotationsInPolygon(loop, [inside, outside]);
+    expect(hits.map(a => a.id)).toEqual(['a']);
+  });
+
+  it('lasso ignores degenerate loops', () => {
+    const inside = pen('a', 10, 10);
+    expect(selectionManager.findAnnotationsInPolygon(
+      [{ x: 0, y: 0 }, { x: 1, y: 1 }], [inside]
+    )).toEqual([]);
+    expect(selectionManager.findAnnotationsInPolygon([], [inside])).toEqual([]);
+  });
+
+  it('lasso skips locked annotations', () => {
+    const locked = { ...pen('c', 12, 12, 20, 20), locked: true };
+    const loop = [
+      { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+    ];
+    expect(selectionManager.findAnnotationsInPolygon(loop, [locked])).toEqual([]);
+  });
 });
 
 describe('Annotation transforms', () => {

@@ -13,6 +13,7 @@ import { ToolbarComponent } from './ui/components/toolbar';
 import { SidePanelsComponent } from './ui/components/side-panels';
 import { PropertiesPanelComponent } from './ui/components/properties-panel';
 import { ViewControlsComponent } from './ui/components/view-controls';
+import { ScratchpadComponent } from './ui/components/scratchpad';
 import { CommandPaletteComponent } from './ui/components/command-palette';
 import { ShortcutsModalComponent } from './ui/components/shortcuts-modal';
 import { SettingsModalComponent } from './ui/components/settings-modal';
@@ -27,6 +28,7 @@ import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
 import { history, DeleteAnnotationsCommand } from './core/history';
+import { duplicateSelectedAnnotations } from './annotations/duplicate';
 import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
 import { gestureEngine } from './input/gestures';
@@ -113,6 +115,7 @@ class VeditorApp {
     new SidePanelsComponent(document.getElementById('app-sidebar') as HTMLElement);
     new PropertiesPanelComponent(document.getElementById('app-properties-panel') as HTMLElement);
     new ViewControlsComponent(document.getElementById('app-view-controls') as HTMLElement);
+    new ScratchpadComponent(document.getElementById('app-scratchpad') as HTMLElement);
 
     if (!store.activeDocument) {
       const tb = document.getElementById('app-floating-toolbar');
@@ -1135,6 +1138,13 @@ class VeditorApp {
     }
   }
 
+  /** Duplicates the current selection offset by 12pt (one undo step per page). */
+  public duplicateSelection(): void {
+    if (duplicateSelectedAnnotations().length > 0) {
+      this.repaintAllRenderedAnnotations();
+    }
+  }
+
   private setupGlobalShortcuts() {
     // Hold Space for a temporary hand tool (Figma-style); release restores.
     window.addEventListener('keyup', (e) => {
@@ -1169,8 +1179,9 @@ class VeditorApp {
           return;
         }
       } else if (e.key === 'Escape') {
-        // Mid-drag marquee first, then an active lens, then polygons.
+        // Mid-drag marquee/lasso first, then an active lens, then polygons.
         if (pointerHandler.cancelZoomMarquee()) return;
+        if (pointerHandler.cancelLasso()) { this.repaintAllRenderedAnnotations(); return; }
         if (store.zoomLensActive) {
           store.exitZoomLens();
           return;
@@ -1207,6 +1218,10 @@ class VeditorApp {
           } else {
             void saveActiveDocument();
           }
+          return;
+        } else if (key === 'd') {
+          e.preventDefault();
+          this.duplicateSelection();
           return;
         }
         return;
@@ -1247,6 +1262,10 @@ class VeditorApp {
       else if (key === 'm') store.setActiveTool('stamp');
       else if (key === 'c') store.setActiveTool('callout');
       else if (key === 'k') store.setSignatureModalOpen(true);
+      else if (key === 'n') {
+        store.setActiveTool('scratchpad');
+        store.setScratchpadOpen(true);
+      }
       else if (key === 'x') store.setActiveTool('redaction');
       else if (key === 'z') store.setActiveTool('laser');
       else if (key === 'f') store.toggleFocusMode();

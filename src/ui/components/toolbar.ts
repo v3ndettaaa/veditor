@@ -29,7 +29,8 @@ export const TOOL_SHORT_LABELS: Record<string, string> = {
   callout: 'Callout',
   signature: 'Signature',
   redaction: 'Redaction',
-  laser: 'Laser'
+  laser: 'Laser',
+  scratchpad: 'Scratchpad'
 };
 
 /** Parses free-typed numeric input, falling back when empty/invalid. */
@@ -483,6 +484,11 @@ export class ToolbarComponent {
           <button class="tool-btn ${activeTool === 'laser' ? 'active' : ''}" data-tool="laser" title="${t('tools.laser')} (Z)">
             ${getIconSvg('laser')}
           </button>
+
+          <!-- Floating Scratchpad -->
+          <button class="tool-btn ${activeTool === 'scratchpad' ? 'active' : ''}" data-tool="scratchpad" title="${t('tools.scratchpad')} (N)">
+            ${getIconSvg('scratchpad')}
+          </button>
         </div>
 
         <div class="toolbar-separator"></div>
@@ -868,6 +874,11 @@ export class ToolbarComponent {
 
         if (tool === 'signature') {
           store.setSignatureModalOpen(true);
+          return;
+        }
+
+        if (tool === 'scratchpad') {
+          store.setScratchpadOpen(true);
           return;
         }
 
