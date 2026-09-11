@@ -30,7 +30,8 @@ export const TOOL_SHORT_LABELS: Record<string, string> = {
   signature: 'Signature',
   redaction: 'Redaction',
   laser: 'Laser',
-  scratchpad: 'Scratchpad'
+  scratchpad: 'Scratchpad',
+  'sticky-note': 'Sticky note'
 };
 
 /** Parses free-typed numeric input, falling back when empty/invalid. */
@@ -489,6 +490,19 @@ export class ToolbarComponent {
           <button class="tool-btn ${activeTool === 'scratchpad' ? 'active' : ''}" data-tool="scratchpad" title="${t('tools.scratchpad')} (N)">
             ${getIconSvg('scratchpad')}
           </button>
+
+          <!-- Handwritten Sticky Note with Paper Card -->
+          <div class="tool-btn-wrapper ${this._pinnedTool === 'sticky-note' ? 'is-pinned' : ''}" data-wrapper-tool="sticky-note">
+            <button class="tool-btn ${activeTool === 'sticky-note' ? 'active' : ''}" data-tool="sticky-note" title="${t('tools.stickyNote')} (U)">
+              ${getIconSvg('stickyNote')}
+            </button>
+            <div class="tool-hover-card">
+              <span class="sub-row-label">Paper</span>
+              <button class="mode-toggle-btn ${s.stickyPaper === 'blank' ? 'active' : ''}" data-sticky-paper="blank">Blank</button>
+              <button class="mode-toggle-btn ${s.stickyPaper === 'grid' ? 'active' : ''}" data-sticky-paper="grid">Grid</button>
+              <button class="mode-toggle-btn ${s.stickyPaper === 'lined' ? 'active' : ''}" data-sticky-paper="lined">Lined</button>
+            </div>
+          </div>
         </div>
 
         <div class="toolbar-separator"></div>
@@ -761,6 +775,12 @@ export class ToolbarComponent {
     this._container.querySelectorAll('[data-redact-color]').forEach(el => {
       const rc = el.getAttribute('data-redact-color');
       el.classList.toggle('active', rc === (s.redactionColor || '#000000'));
+    });
+
+    // 8b. Sticky-note Paper Indicators
+    this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
+      const p = el.getAttribute('data-sticky-paper');
+      el.classList.toggle('active', p === (s.stickyPaper || 'lined'));
     });
 
     // 9. Undo / Redo buttons reactive state
@@ -1370,6 +1390,40 @@ export class ToolbarComponent {
           store.updateToolSettings({ redactionColor: color });
           this.updateIndicators();
         }
+      });
+    });
+
+    // Sticky-note paper listeners (new cards + selected notes)
+    this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pattern = el.getAttribute('data-sticky-paper') as any;
+        if (!pattern) return;
+        store.updateToolSettings({ stickyPaper: pattern });
+        const doc = store.activeDocument;
+        if (doc) {
+          const ids = new Set(store.selectedAnnotationIds);
+          for (const pageIdx in doc.annotations) {
+            for (const ann of doc.annotations[pageIdx]) {
+              if (ann.type === 'sticky-note' && ids.has(ann.id)) {
+                const prev = ann as any;
+                const paperColors: Record<string, { paperColor: string; lineColor: string }> = {
+                  blank: { paperColor: '#fef9c3', lineColor: '#d9c66c' },
+                  grid: { paperColor: '#fef9c3', lineColor: '#d9c66c' },
+                  lined: { paperColor: '#fef9c3', lineColor: '#d9c66c' }
+                };
+                const c = paperColors[pattern] || paperColors.lined;
+                const next = {
+                  ...prev,
+                  paper: { ...(prev as any).paper, pattern, paperColor: c.paperColor, lineColor: c.lineColor },
+                  updatedAt: Date.now()
+                };
+                history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+              }
+            }
+          }
+        }
+        this.updateIndicators();
       });
     });
 

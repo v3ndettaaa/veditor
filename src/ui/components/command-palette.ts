@@ -60,6 +60,7 @@ export class CommandPaletteComponent {
       { id: 'tool-measure', title: 'Measure Distance Tool', category: 'Tools', action: () => store.setActiveTool('measure-distance') },
       { id: 'tool-laser', title: 'Presentation Laser Pointer', category: 'Tools', shortcut: 'Z', action: () => store.setActiveTool('laser') },
       { id: 'tool-redaction', title: 'Redaction Tool', category: 'Tools', shortcut: 'X', action: () => store.setActiveTool('redaction') },
+      { id: 'tool-sticky-note', title: 'Sticky Note Tool', category: 'Tools', shortcut: 'U', action: () => store.setActiveTool('sticky-note') },
       { id: 'tool-scratchpad', title: 'Floating Scratchpad', category: 'Tools', shortcut: 'N', action: () => { store.setActiveTool('scratchpad'); store.setScratchpadOpen(true); } },
 
       { id: 'view-customize-toolbar', title: 'Customize toolbar layout', category: 'View', action: () => { store.setSettingsModalOpen(true); store.settingsTabRequest = 'toolbar'; } },

@@ -24,7 +24,8 @@ export type ToolType =
   | 'callout'
   | 'signature'
   | 'redaction'
-  | 'scratchpad';
+  | 'scratchpad'
+  | 'sticky-note';
 
 export type EraserMode = 'stroke' | 'object' | 'pixel';
 
@@ -183,6 +184,35 @@ export interface RedactionAnnotation extends BaseAnnotation {
   applied?: boolean; // false = pending redaction mark, true = applied/scrubbed
 }
 
+export interface StickyNoteInkStroke {
+  kind: 'pen' | 'highlighter';
+  points: StrokePoint[]; // note-local coords (0..box.w/h)
+  color: string;
+  strokeWidth: number;
+}
+
+export interface StickyNoteText {
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  x: number; // note-local coords
+  y: number;
+  w: number;
+}
+
+export interface StickyNoteAnnotation extends BaseAnnotation {
+  type: 'sticky-note';
+  /** Pin tip in page coords — where the collapsed badge lives. */
+  anchor: Point;
+  /** Minimized into the pin badge (persists, undoes, exports). */
+  collapsed: boolean;
+  paper: PaperStyle;
+  /** Freehand content in note-local coords (0..box.w/h). */
+  ink: StickyNoteInkStroke[];
+  texts: StickyNoteText[];
+}
+
 export type Annotation =
   | PenAnnotation
   | HighlighterAnnotation
@@ -192,7 +222,8 @@ export type Annotation =
   | MeasurementAnnotation
   | CalloutAnnotation
   | SignatureAnnotation
-  | RedactionAnnotation;
+  | RedactionAnnotation
+  | StickyNoteAnnotation;
 
 export interface PageInfo {
   pageIndex: number;
@@ -235,7 +266,7 @@ export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
   'select', 'hand', 'zoom-lens',
   'pen', 'highlighter', 'eraser',
   'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
-  'text', 'stamp', 'measure-distance', 'callout', 'signature', 'redaction', 'laser', 'scratchpad'
+  'text', 'stamp', 'measure-distance', 'callout', 'signature', 'redaction', 'laser', 'scratchpad', 'sticky-note'
 ];
 
 /** Visual family per toolbar tool; separators render between families. */
@@ -323,6 +354,7 @@ export interface ToolSettings {
   drawingCursor: DrawingCursorType;
   stampPreset: string;
   redactionColor: string;
+  stickyPaper: PaperPattern;
 }
 
 export interface AppSettings {

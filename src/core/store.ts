@@ -95,7 +95,8 @@ class StateStore {
     stylusInvertedEraserEnabled: true,
     drawingCursor: 'pen',
     stampPreset: 'APPROVED',
-    redactionColor: '#000000'
+    redactionColor: '#000000',
+    stickyPaper: 'lined'
   };
 
   // App Settings
@@ -122,6 +123,8 @@ class StateStore {
   // Selection & Clipboard State
   private _selectedAnnotationIds: Set<string> = new Set();
   private _clipboardAnnotations: Annotation[] = [];
+  /** Note card currently open for inner ink/text editing (single, page-local). */
+  private _editingNoteId: string | null = null;
 
   // Toolbar customization (order + visibility persisted; arranged in Settings)
   private _toolbarOrder: ToolType[] = [...DEFAULT_TOOLBAR_ORDER];
@@ -248,6 +251,13 @@ class StateStore {
   get appSettings() { return this._appSettings; }
   get selectedAnnotationIds() { return this._selectedAnnotationIds; }
   get clipboardAnnotations() { return this._clipboardAnnotations; }
+  get editingNoteId() { return this._editingNoteId; }
+  public setEditingNote(id: string | null) {
+    if (this._editingNoteId !== id) {
+      this._editingNoteId = id;
+      this.notify();
+    }
+  }
   get sidebarOpen() { return this._sidebarOpen; }
   get activeSidebarTab() { return this._activeSidebarTab; }
   get propertiesPanelOpen() { return this._propertiesPanelOpen; }
@@ -281,6 +291,7 @@ class StateStore {
       this._activePageIndex = doc.activePageIndex || 0;
     }
     this._selectedAnnotationIds.clear();
+    this._editingNoteId = null;
     this.notify();
   }
 
@@ -297,6 +308,7 @@ class StateStore {
       this._activeDocument = targetDoc;
       this._activePageIndex = targetDoc.activePageIndex || 0;
       this._selectedAnnotationIds.clear();
+      this._editingNoteId = null;
       this.notify();
     }
   }
@@ -327,6 +339,7 @@ class StateStore {
       }
     }
     this._selectedAnnotationIds.clear();
+    this._editingNoteId = null;
     this.notify();
   }
 
@@ -337,6 +350,7 @@ class StateStore {
     this._activeDocument = null;
     this._activePageIndex = 0;
     this._selectedAnnotationIds.clear();
+    this._editingNoteId = null;
     this.notify();
   }
 
@@ -479,7 +493,8 @@ class StateStore {
       highlighterStraightLine: false,
       highlighterTipShape: 'round',
       stampPreset: 'APPROVED',
-      redactionColor: '#000000'
+      redactionColor: '#000000',
+    stickyPaper: 'lined'
     };
     this._appSettings = {
       theme: 'dark',

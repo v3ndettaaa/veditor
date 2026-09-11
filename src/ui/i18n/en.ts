@@ -32,7 +32,8 @@ export const en = {
     callout: 'Callout Bubble (C)',
     signature: 'Signature (K)',
     redaction: 'Redaction (X)',
-    scratchpad: 'Floating Scratchpad (N)'
+    scratchpad: 'Floating Scratchpad (N)',
+    stickyNote: 'Sticky Note (U)'
   },
   sidebar: {
     thumbnails: 'Pages',

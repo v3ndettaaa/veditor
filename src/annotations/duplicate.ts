@@ -30,6 +30,10 @@ export function duplicateSelectedAnnotations(): string[] {
         copy.points = shiftPts(copy.points);
       }
       if (copy.arrowPoint) copy.arrowPoint = { ...copy.arrowPoint, x: copy.arrowPoint.x + OFFSET, y: copy.arrowPoint.y + OFFSET };
+      if (copy.type === 'sticky-note') {
+        if (copy.anchor) copy.anchor = { ...copy.anchor, x: copy.anchor.x + OFFSET, y: copy.anchor.y + OFFSET };
+        // Ink/texts live in note-local coords — they move with the box.
+      }
       copy.createdAt = Date.now();
       copy.updatedAt = Date.now();
       history.execute(new AddAnnotationCommand(pageIndex, copy));

@@ -91,6 +91,36 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   if (ann.type === 'callout') {
     next.arrowPoint = mapPt(a.arrowPoint);
   }
+  if (ann.type === 'sticky-note') {
+    // Anchor rides with the box; ink/texts are note-local.
+    // On pure moves they stay valid; on resizes scale them with the box.
+    if (a.anchor) next.anchor = mapPt(a.anchor);
+    const localScale = (): { sx: number; sy: number } => {
+      const w = Math.max(1, ann.box.width);
+      const h = Math.max(1, ann.box.height);
+      const nw = Math.max(1, next.box.width);
+      const nh = Math.max(1, next.box.height);
+      return { sx: nw / w, sy: nh / h };
+    };
+    if (Array.isArray(a.ink)) {
+      const { sx, sy } = localScale();
+      next.ink = a.ink.map((s: any) => ({
+        ...s,
+        points: s.points.map((p: any) => ({ ...p, x: p.x * sx, y: p.y * sy })),
+        strokeWidth: Math.max(0.5, s.strokeWidth * ((sx + sy) / 2 || 1))
+      }));
+    }
+    if (Array.isArray(a.texts)) {
+      const { sx, sy } = localScale();
+      next.texts = a.texts.map((tx: any) => ({
+        ...tx,
+        x: tx.x * sx,
+        y: tx.y * sy,
+        w: tx.w * sx,
+        fontSize: Math.max(4, tx.fontSize * ((sx + sy) / 2 || 1))
+      }));
+    }
+  }
   if ('strokeWidth' in a && typeof a.strokeWidth === 'number') {
     next.strokeWidth = Math.max(0.5, a.strokeWidth * meanScale);
   }
@@ -162,6 +192,16 @@ export class SelectionManager {
     for (let i = annotations.length - 1; i >= 0; i--) {
       const ann = annotations[i];
       if (ann.locked) continue;
+      if (ann.type === 'sticky-note') {
+        // Collapsed pins live at the anchor, possibly outside the card box.
+        const note = ann as any;
+        if (note.collapsed && note.anchor) {
+          const dx = point.x - note.anchor.x;
+          const dy = point.y - (note.anchor.y - 11 * 0.4);
+          if (Math.hypot(dx, dy) > 14) continue;
+          return ann;
+        }
+      }
       // Rotated annotations hit-test in their unrotated frame.
       const local = ann.rotation ? rotatePoint(point, boxCenter(ann.box), -ann.rotation) : point;
       if (isPointInBox(local, ann.box)) {

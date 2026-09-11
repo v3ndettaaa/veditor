@@ -3,15 +3,16 @@
  * Handles 120/240Hz coalesced events, stylus pressure, palm rejection, and tool dispatching.
  */
 
-import { Point, StrokePoint, ToolType, Annotation, BoundingBox, ShapeAnnotation } from '../core/types';
+import { Point, StrokePoint, ToolType, Annotation, BoundingBox, ShapeAnnotation, StickyNoteAnnotation, PaperStyle } from '../core/types';
 import { store } from '../core/store';
-import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand } from '../core/history';
+import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand, ModifyAnnotationCommand } from '../core/history';
 import { mergeBoundingBoxes, computePointsBoundingBox } from '../utils/geometry';
 import { fitStroke, type FittedShape } from '../utils/shape-fit';
 import { annotationEngine } from '../annotations/engine';
 import { PressureEngine } from './pressure';
 import { palmRejection } from './palm-rejection';
 import { penTool } from '../annotations/tools/pen';
+import { stickyNoteTool } from '../annotations/tools/sticky-note';
 import { highlighterTool } from '../annotations/tools/highlighter';
 import { eraserTool } from '../annotations/tools/eraser';
 import { shapesTool } from '../annotations/tools/shapes';
@@ -72,6 +73,21 @@ export class PointerHandler {
   private _marquee: { pageIndex: number; start: Point; current: Point; additive: boolean } | null = null;
   /** Freehand lasso path (Alt+drag in Select): closed loop, page coordinates. */
   private _lasso: { pageIndex: number; points: Point[]; additive: boolean } | null = null;
+  /** Sticky-note card drag (tool creates sized cards like rectangle drags). */
+  private _noteDraft: { pageIndex: number; start: Point; current: Point } | null = null;
+  /** Live inner-note stroke (pen/highlighter routed into an editing note). */
+  private _noteStroke: {
+    noteId: string;
+    pageIndex: number;
+    kind: 'pen' | 'highlighter';
+    color: string;
+    width: number;
+    points: StrokePoint[];
+    prev: StickyNoteAnnotation;
+    dirty: boolean;
+  } | null = null;
+  /** Snapshot for inner-note eraser sessions (single undo step on lift). */
+  private _noteErasePrev: { noteId: string; pageIndex: number; prev: StickyNoteAnnotation; dirty: boolean } | null = null;
 
   /**
    * Draw-and-hold shape recognition (pen only): holding the pointer nearly
@@ -94,6 +110,87 @@ export class PointerHandler {
   private lensWidth(base: number): number {
     const f = store.zoomLensFactor;
     return f !== 1 ? base / f : base;
+  }
+
+  /** Default paper for new sticky notes from the toolbar paper choice. */
+  private defaultNotePaper(): PaperStyle {
+    const pattern = store.toolSettings.stickyPaper || 'lined';
+    return { pattern, spacing: 22, lineColor: '#d9c66c', paperColor: '#fef9c3', margin: false };
+  }
+
+  /** Any sticky note hit at a page point (pin-aware for collapsed notes). */
+  private findNoteAt(pageIndex: number, pt: Point): StickyNoteAnnotation | null {
+    const doc = store.activeDocument;
+    if (!doc) return null;
+    for (let i = (doc.annotations[pageIndex] || []).length - 1; i >= 0; i--) {
+      const a = doc.annotations[pageIndex][i];
+      if (a.type !== 'sticky-note' || a.locked) continue;
+      if (stickyNoteTool.hitTest(pt, a as StickyNoteAnnotation)) {
+        return a as StickyNoteAnnotation;
+      }
+    }
+    return null;
+  }
+
+  /** The editing note under a page point (expanded card body only). */
+  private editingNoteAt(pageIndex: number, pt: Point): StickyNoteAnnotation | null {
+    const id = store.editingNoteId;
+    if (!id) return null;
+    const doc = store.activeDocument;
+    if (!doc) return null;
+    const ann = (doc.annotations[pageIndex] || []).find(a => a.id === id);
+    if (!ann || ann.type !== 'sticky-note') return null;
+    const note = ann as StickyNoteAnnotation;
+    if (note.collapsed) return null;
+    const b = note.box;
+    if (pt.x < b.x || pt.x > b.x + b.width || pt.y < b.y || pt.y > b.y + b.height) return null;
+    return note;
+  }
+
+  private noteLocal(note: StickyNoteAnnotation, pt: Point): Point {
+    return { x: pt.x - note.box.x, y: pt.y - note.box.y };
+  }
+
+  /** Live (mutable) note reference for in-progress inner sessions. */
+  private liveNote(doc: { annotations: Record<number, Annotation[]> }, pageIndex: number, noteId: string): StickyNoteAnnotation | null {
+    const ann = (doc.annotations[pageIndex] || []).find(a => a.id === noteId);
+    if (!ann || ann.type !== 'sticky-note') return null;
+    return ann as StickyNoteAnnotation;
+  }
+
+  /** Replaces the live temp stroke view from the accumulated session points. */
+  private syncNoteStrokeLive(note: StickyNoteAnnotation): void {
+    const s = this._noteStroke;
+    if (!s) return;
+    const base = s.prev.ink;
+    note.ink = [...base, { kind: s.kind, points: [...s.points], color: s.color, strokeWidth: s.width }];
+    note.updatedAt = Date.now();
+  }
+
+  /**
+   * Erases inner-note ink/texts near a page point. Returns true when anything
+   * was removed. Coordinates: ink/texts are note-local, pt is page units.
+   */
+  private eraseNoteAt(note: StickyNoteAnnotation, pt: Point, radius: number): boolean {
+    const local = this.noteLocal(note, pt);
+    let changed = false;
+    const before = note.ink.length;
+    note.ink = note.ink.filter(s => {
+      for (const p of s.points) {
+        if (Math.hypot(p.x - local.x, p.y - local.y) <= radius + s.strokeWidth / 2) return false;
+      }
+      return true;
+    });
+    if (note.ink.length !== before) changed = true;
+    const tBefore = note.texts.length;
+    note.texts = note.texts.filter(t => {
+      const inX = local.x >= t.x - 4 && local.x <= t.x + t.w + 4;
+      const inY = local.y >= t.y - 4 && local.y <= t.y + t.fontSize * 1.5 + 4;
+      return !(inX && inY);
+    });
+    if (note.texts.length !== tBefore) changed = true;
+    if (changed) note.updatedAt = Date.now();
+    return changed;
   }
 
   /** (Re)starts the draw-and-hold snap timer anchored at the given point. */
@@ -217,7 +314,24 @@ export class PointerHandler {
         this._zoomMarqueeCurrent = { x: pt.x, y: pt.y };
         break;
 
-      case 'pen':
+      case 'pen': {
+        const target = this.editingNoteAt(pageIndex, pt);
+        if (target) {
+          const local = this.noteLocal(target, pt);
+          this._noteStroke = {
+            noteId: target.id,
+            pageIndex,
+            kind: 'pen',
+            color: tSettings.penColor,
+            width: this.lensWidth(tSettings.penWidth),
+            points: [{ ...local, pressure: 0.5 }],
+            prev: cloneAnnotation(target),
+            dirty: false
+          };
+          this.syncNoteStrokeLive(target);
+          onNeedRepaint();
+          break;
+        }
         penTool.start(
           pt,
           pageIndex,
@@ -229,8 +343,26 @@ export class PointerHandler {
         );
         this.startHoldTimer({ x: pt.x, y: pt.y });
         break;
+      }
 
-      case 'highlighter':
+      case 'highlighter': {
+        const target = this.editingNoteAt(pageIndex, pt);
+        if (target) {
+          const local = this.noteLocal(target, pt);
+          this._noteStroke = {
+            noteId: target.id,
+            pageIndex,
+            kind: 'highlighter',
+            color: tSettings.highlighterColor,
+            width: this.lensWidth(tSettings.highlighterWidth),
+            points: [{ ...local, pressure: 0.5 }],
+            prev: cloneAnnotation(target),
+            dirty: false
+          };
+          this.syncNoteStrokeLive(target);
+          onNeedRepaint();
+          break;
+        }
         highlighterTool.start(
           pt,
           pageIndex,
@@ -241,13 +373,22 @@ export class PointerHandler {
           tSettings.highlighterTipShape
         );
         break;
+      }
 
-      case 'eraser':
+      case 'eraser': {
+        const target = this.editingNoteAt(pageIndex, pt);
+        if (target) {
+          this._noteErasePrev = { noteId: target.id, pageIndex, prev: cloneAnnotation(target), dirty: false };
+          this.eraseNoteAt(target, pt, this.lensWidth(tSettings.eraserWidth) / 2);
+          onNeedRepaint();
+          break;
+        }
         eraserTool.start(pt, this.lensWidth(tSettings.eraserWidth) / 2, tSettings.eraserMode);
         this.beginEraserSession(pageIndex);
         this.applyEraserDirect([pt], pageIndex);
         onNeedRepaint();
         break;
+      }
 
       case 'polygon': {
         if (shapesTool.isPolygonActive()) {
@@ -300,7 +441,26 @@ export class PointerHandler {
         );
         break;
 
-      case 'text':
+      case 'text': {
+        const noteTarget = this.editingNoteAt(pageIndex, pt);
+        if (noteTarget) {
+          const prev = cloneAnnotation(noteTarget);
+          const local = this.noteLocal(noteTarget, pt);
+          const next = cloneAnnotation(noteTarget);
+          next.texts = [...next.texts, {
+            text: 'Note...',
+            fontFamily: tSettings.fontFamily,
+            fontSize: this.lensWidth(tSettings.fontSize),
+            color: tSettings.textColor,
+            x: Math.max(0, local.x),
+            y: Math.max(0, local.y),
+            w: Math.max(20, noteTarget.box.width - local.x - 8)
+          }];
+          next.updatedAt = Date.now();
+          history.execute(new ModifyAnnotationCommand(pageIndex, prev, next));
+          onNeedRepaint();
+          break;
+        }
         const textAnn = textTool.createTextAnnotation(
           pt,
           pageIndex,
@@ -317,6 +477,7 @@ export class PointerHandler {
         store.selectAnnotation(textAnn.id);
         onNeedRepaint();
         break;
+      }
 
       case 'stamp':
         const stampBase = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
@@ -358,6 +519,25 @@ export class PointerHandler {
       case 'redaction':
         redactionTool.start(pt, pageIndex, tSettings.redactionColor || '#000000');
         break;
+
+      case 'sticky-note': {
+        // Click an expanded note to edit inside it; otherwise start a card drag.
+        const existing = this.findNoteAt(pageIndex, pt);
+        if (existing && !existing.collapsed) {
+          store.setEditingNote(existing.id);
+          store.selectAnnotation(existing.id);
+          onNeedRepaint();
+          // End the press immediately: editing strokes start on the next press.
+          this._isPointerDown = false;
+          this._strokeTool = null;
+          this._activePageIndex = -1;
+          this._pageScratchCanvas = null;
+          this._pageScratchCtx = null;
+          return;
+        }
+        this._noteDraft = { pageIndex, start: { x: pt.x, y: pt.y }, current: { x: pt.x, y: pt.y } };
+        break;
+      }
 
       case 'select': {
         const doc = store.activeDocument;
@@ -449,6 +629,38 @@ export class PointerHandler {
     if (pts.length === 0) return;
     const lastPt = pts[pts.length - 1];
     const shiftKey = (e as MouseEvent).shiftKey === true;
+
+    // Inner-note sessions bypass the page tool switch entirely.
+    if (this._noteStroke && this._noteStroke.pageIndex === pageIndex) {
+      const doc = store.activeDocument;
+      const note = doc ? this.liveNote(doc, pageIndex, this._noteStroke.noteId) : null;
+      if (note) {
+        for (const pt of pts) {
+          const local = this.noteLocal(note, pt);
+          this._noteStroke.points.push({ ...local, pressure: 0.5 });
+        }
+        this._noteStroke.dirty = true;
+        this.syncNoteStrokeLive(note);
+        doc!.lastModifiedAt = Date.now();
+        onNeedRepaint();
+      }
+      return;
+    }
+    if (this._noteErasePrev && this._noteErasePrev.pageIndex === pageIndex) {
+      const doc = store.activeDocument;
+      const note = doc ? this.liveNote(doc, pageIndex, this._noteErasePrev.noteId) : null;
+      if (note) {
+        const r = this.lensWidth(store.toolSettings.eraserWidth) / 2;
+        for (const pt of pts) {
+          if (this.eraseNoteAt(note, pt, r)) this._noteErasePrev.dirty = true;
+        }
+        if (this._noteErasePrev.dirty) {
+          doc!.lastModifiedAt = Date.now();
+          onNeedRepaint();
+        }
+      }
+      return;
+    }
 
     switch (tool) {
       case 'select': {
@@ -561,6 +773,22 @@ export class PointerHandler {
         for (const pt of pts) redactionTool.move(pt);
         redactionTool.renderScratchpad(ctx, renderScale);
         break;
+
+      case 'sticky-note':
+        if (this._noteDraft && this._noteDraft.pageIndex === pageIndex) {
+          this._noteDraft.current = { ...lastPt };
+          const box = normalizeDragBox(this._noteDraft.start, this._noteDraft.current, 4);
+          ctx.save();
+          ctx.scale(renderScale, renderScale);
+          ctx.fillStyle = 'rgba(254, 249, 195, 0.5)';
+          ctx.fillRect(box.x, box.y, box.width, box.height);
+          ctx.strokeStyle = '#b45309';
+          ctx.lineWidth = 1.5 / renderScale;
+          ctx.setLineDash([5 / renderScale, 4 / renderScale]);
+          ctx.strokeRect(box.x, box.y, box.width, box.height);
+          ctx.restore();
+        }
+        break;
     }
   }
 
@@ -662,6 +890,19 @@ export class PointerHandler {
         break;
 
       case 'pen': {
+        // Inner-note stroke commits as one Modify step on the note.
+        if (this._noteStroke && this._noteStroke.pageIndex === pageIndex) {
+          const s = this._noteStroke;
+          this._noteStroke = null;
+          const doc = store.activeDocument;
+          const note = doc ? this.liveNote(doc, pageIndex, s.noteId) : null;
+          if (doc && note && s.dirty) {
+            const next = cloneAnnotation(note);
+            doc.lastModifiedAt = Date.now();
+            history.pushCommitted(new ModifyAnnotationCommand(pageIndex, s.prev, next));
+          }
+          break;
+        }
         const snapped = this._holdFired ? this._holdShape : null;
         const holdPage = this._activePageIndex;
         this.clearHoldTimer();
@@ -685,17 +926,43 @@ export class PointerHandler {
         break;
       }
 
-      case 'highlighter':
+      case 'highlighter': {
+        if (this._noteStroke && this._noteStroke.pageIndex === pageIndex) {
+          const s = this._noteStroke;
+          this._noteStroke = null;
+          const doc = store.activeDocument;
+          const note = doc ? this.liveNote(doc, pageIndex, s.noteId) : null;
+          if (doc && note && s.dirty) {
+            const next = cloneAnnotation(note);
+            doc.lastModifiedAt = Date.now();
+            history.pushCommitted(new ModifyAnnotationCommand(pageIndex, s.prev, next));
+          }
+          break;
+        }
         const highAnn = highlighterTool.finish(defaultLayerId);
         if (highAnn) {
           history.execute(new AddAnnotationCommand(pageIndex, highAnn));
         }
         break;
+      }
 
-      case 'eraser':
+      case 'eraser': {
+        if (this._noteErasePrev && this._noteErasePrev.pageIndex === pageIndex) {
+          const s = this._noteErasePrev;
+          this._noteErasePrev = null;
+          const doc = store.activeDocument;
+          const note = doc ? this.liveNote(doc, pageIndex, s.noteId) : null;
+          if (doc && note && s.dirty) {
+            const next = cloneAnnotation(note);
+            doc.lastModifiedAt = Date.now();
+            history.pushCommitted(new ModifyAnnotationCommand(pageIndex, s.prev, next));
+          }
+          break;
+        }
         eraserTool.finish();
         this.commitEraserSession(pageIndex);
         break;
+      }
 
       case 'rectangle':
       case 'ellipse':
@@ -727,6 +994,33 @@ export class PointerHandler {
           history.execute(new AddAnnotationCommand(pageIndex, redAnn));
         }
         break;
+
+      case 'sticky-note': {
+        const draft = this._noteDraft;
+        this._noteDraft = null;
+        if (draft && draft.pageIndex === pageIndex) {
+          const raw = normalizeDragBox(draft.start, draft.current, 4);
+          const box = {
+            x: raw.x,
+            y: raw.y,
+            width: Math.max(80, raw.width),
+            height: Math.max(60, raw.height)
+          };
+          const note = stickyNoteTool.createNote(
+            { x: box.x, y: box.y },
+            pageIndex,
+            defaultLayerId,
+            this.defaultNotePaper(),
+            box.width,
+            box.height
+          );
+          history.execute(new AddAnnotationCommand(pageIndex, note));
+          // Open for inner editing right away + select for transform handles.
+          store.setEditingNote(note.id);
+          store.selectAnnotation(note.id);
+        }
+        break;
+      }
     }
 
     if (this._pageScratchCtx && this._pageScratchCanvas) {
@@ -769,6 +1063,55 @@ export class PointerHandler {
     this._activePageIndex = -1;
     this._pageScratchCanvas = null;
     this._pageScratchCtx = null;
+    return true;
+  }
+
+  /**
+   * Double-click on a sticky note: pin toggles collapse/expand, a text entry
+   * inside an editing note opens a prompt editor, otherwise the note opens
+   * for inner editing. Returns true when a note consumed the event
+   * (caller must skip polygon-close / dblclick-zoom).
+   */
+  public handleNoteDoubleClick(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement, onRepaint: () => void): boolean {
+    const doc = store.activeDocument;
+    if (!doc) return false;
+    const pt = this.getPointInPage(e, canvas);
+    const note = this.findNoteAt(pageIndex, pt);
+    if (!note) return false;
+    if (!note.collapsed && store.editingNoteId === note.id) {
+      // Edit the text entry under the cursor, if any.
+      const local = this.noteLocal(note, pt);
+      const hit = note.texts.findIndex(t =>
+        local.x >= t.x - 2 && local.x <= t.x + t.w + 2 &&
+        local.y >= t.y - 2 && local.y <= t.y + t.fontSize * 1.6 + 2
+      );
+      if (hit !== -1) {
+        const current = note.texts[hit].text;
+        const nextText = window.prompt('Edit note text:', current);
+        if (nextText !== null && nextText !== current) {
+          const prev = cloneAnnotation(note);
+          const next = cloneAnnotation(note);
+          next.texts[hit] = { ...next.texts[hit], text: nextText };
+          next.updatedAt = Date.now();
+          history.execute(new ModifyAnnotationCommand(pageIndex, prev, next));
+          onRepaint();
+        }
+        return true;
+      }
+    }
+    // Toggle collapse (pin <-> card) as one undo step + select the note.
+    const prev = cloneAnnotation(note);
+    const next = cloneAnnotation(note);
+    next.collapsed = !next.collapsed;
+    next.updatedAt = Date.now();
+    history.execute(new ModifyAnnotationCommand(pageIndex, prev, next));
+    if (next.collapsed) {
+      if (store.editingNoteId === next.id) store.setEditingNote(null);
+    } else {
+      store.setEditingNote(next.id);
+    }
+    store.selectAnnotation(next.id);
+    onRepaint();
     return true;
   }
 
@@ -992,10 +1335,13 @@ export class PointerHandler {
       this._zoomMarqueeStart = null;
       this._zoomMarqueeCurrent = null;
       // A gesture takeover commits (never silently drops) a selection drag;
-      // an uncommitted marquee/lasso is just a rubber band, safe to discard.
+      // an uncommitted marquee/lasso/note-draft is just a rubber band.
       this.commitSelectDrag();
       this._marquee = null;
       this._lasso = null;
+      this._noteDraft = null;
+      // Restore inner-note sessions to their snapshots (no partial marks).
+      this.restoreNoteSessions();
       penTool.cancel();
       highlighterTool.cancel();
       // Keep finished polygon vertices; a mid-click rubber band is harmless
@@ -1014,6 +1360,27 @@ export class PointerHandler {
     this._activePageIndex = -1;
     this._pageScratchCanvas = null;
     this._pageScratchCtx = null;
+  }
+
+  /** Restores inner-note snapshots, discarding uncommitted live changes. */
+  private restoreNoteSessions(): void {
+    const doc = store.activeDocument;
+    if (this._noteStroke && doc) {
+      const list = doc.annotations[this._noteStroke.pageIndex];
+      if (list) {
+        const idx = list.findIndex(a => a.id === this._noteStroke!.noteId);
+        if (idx !== -1) list[idx] = this._noteStroke.prev as any;
+      }
+    }
+    if (this._noteErasePrev && doc) {
+      const list = doc.annotations[this._noteErasePrev.pageIndex];
+      if (list) {
+        const idx = list.findIndex(a => a.id === this._noteErasePrev!.noteId);
+        if (idx !== -1) list[idx] = this._noteErasePrev.prev as any;
+      }
+    }
+    this._noteStroke = null;
+    this._noteErasePrev = null;
   }
 
   private beginEraserSession(pageIndex: number): void {

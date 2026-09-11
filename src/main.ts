@@ -1059,7 +1059,12 @@ class VeditorApp {
 
     canvas.addEventListener('dblclick', (e) => {
       e.preventDefault();
-      // Polygon tool owns dblclick to close shapes; every other tool zooms.
+      // Sticky notes own dblclick (collapse/edit); everything else keeps
+      // polygon-close, then focal zoom for non-polygon tools.
+      if (pointerHandler.handleNoteDoubleClick(e, pageIndex, canvas, onRepaint)) {
+        this.repaintAllRenderedAnnotations();
+        return;
+      }
       const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
       if (finished) return;
       if (store.activeTool === 'polygon') return;
@@ -1186,6 +1191,10 @@ class VeditorApp {
           store.exitZoomLens();
           return;
         }
+        if (store.editingNoteId) {
+          store.setEditingNote(null);
+          return;
+        }
         pointerHandler.cancelPolygon();
         return;
       }
@@ -1262,6 +1271,7 @@ class VeditorApp {
       else if (key === 'm') store.setActiveTool('stamp');
       else if (key === 'c') store.setActiveTool('callout');
       else if (key === 'k') store.setSignatureModalOpen(true);
+      else if (key === 'u') store.setActiveTool('sticky-note');
       else if (key === 'n') {
         store.setActiveTool('scratchpad');
         store.setScratchpadOpen(true);

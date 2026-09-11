@@ -22,6 +22,7 @@ import { measureTool } from './tools/measure';
 import { calloutTool } from './tools/callout';
 import { signatureTool } from './tools/signature';
 import { redactionTool } from './tools/redaction';
+import { stickyNoteTool } from './tools/sticky-note';
 import { layerManager } from './layers';
 
 export class AnnotationEngine {
@@ -222,6 +223,10 @@ export class AnnotationEngine {
 
       case 'redaction':
         redactionTool.renderToCanvas(ctx, ann, scale);
+        break;
+
+      case 'sticky-note':
+        stickyNoteTool.renderToCanvas(ctx, ann as any, scale);
         break;
     }
   }

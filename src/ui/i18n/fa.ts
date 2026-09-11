@@ -32,7 +32,8 @@ export const fa = {
     callout: 'حباب یادداشت (C)',
     signature: 'امضای الکترونیکی (K)',
     redaction: 'پوشاندن امن اطلاعات (X)',
-    scratchpad: 'دفترچه یادداشت شناور (N)'
+    scratchpad: 'دفترچه یادداشت شناور (N)',
+    stickyNote: 'یادداشت چسبان (U)'
   },
   sidebar: {
     thumbnails: 'صفحات',

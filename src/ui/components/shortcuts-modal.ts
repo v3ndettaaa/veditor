@@ -39,6 +39,7 @@ export class ShortcutsModalComponent {
           { key: 'K', desc: 'Signature' },
           { key: 'N', desc: 'Scratchpad' },
           { key: 'X', desc: 'Redaction' },
+          { key: 'U', desc: 'Sticky note (drag to create, double-click to collapse)' },
           { key: 'Z', desc: 'Laser pointer' }
         ]
       },
