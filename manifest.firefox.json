@@ -36,6 +36,8 @@
     {
       "resources": [
         "pdf.worker.min.mjs",
+        "cmaps/*",
+        "standard_fonts/*",
         "icons/*",
         "assets/*"
       ],

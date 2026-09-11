@@ -18,7 +18,7 @@ import { ShortcutsModalComponent } from './ui/components/shortcuts-modal';
 import { SettingsModalComponent } from './ui/components/settings-modal';
 import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { showToast } from './ui/components/toast';
-import { openDocumentSession, getDocumentSession } from './io/storage';
+import { openDocumentSession, getDocumentSession, createDocumentId } from './io/storage';
 import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { t } from './ui/i18n';
@@ -46,6 +46,9 @@ class VeditorApp {
   private _lastZoom: number = 1.0;
   private _lastDocId: string | null = null;
   private _lastViewMode: string = 'continuous';
+  private _lastRotationSig: string = '';
+  /** Generation token: concurrent tab switches invalidate stale async work. */
+  private _docSwitchSeq: number = 0;
 
   /**
    * Lag-free zoom preview: while pinching (touch or trackpad) the pages
@@ -129,6 +132,23 @@ class VeditorApp {
       (visibleIndices) => this.renderVisiblePages(visibleIndices)
     );
 
+    // Background dimension fills (true page sizes arriving after first paint)
+    // correct the layout so mixed-size docs stop overlapping. Preserve the
+    // user's scroll offset across the correction.
+    pdfEngine.onDimensionsUpdated((docId) => {
+      if (store.activeDocument?.id !== docId) return;
+      if (store.isDocSwitching || this._zoomPreviewActive) return;
+      const top = this._scrollContainer.scrollTop;
+      const left = this._scrollContainer.scrollLeft;
+      viewportManager.updateLayout(true);
+      // updateLayout's handleScroll may have nudged activePage; restore exact
+      // pixel offset so the correction doesn't visibly jump.
+      if (Math.abs(this._scrollContainer.scrollTop - top) > 2) {
+        this._scrollContainer.scrollTop = top;
+        this._scrollContainer.scrollLeft = left;
+      }
+    });
+
     // Rebuilding a notebook replaces its PDF bytes, so every mounted page has
     // to be dropped and re-rendered from the new document.
     notebookController.init(() => {
@@ -183,8 +203,13 @@ class VeditorApp {
         }
         const session = await getDocumentSession(docId);
         if (session && session.fileData) {
-          // Carry the notebook spec through so a reopened notebook stays one.
-          await this.loadPDF(session.name, session.fileData, docId, session.notebook);
+          // Carry the notebook spec + last-viewed position so reopening
+          // restores where the user left off instead of page 1.
+          await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+            activePageIndex: session.activePageIndex || 0,
+            savedScrollTop: session.savedScrollTop,
+            savedScrollLeft: session.savedScrollLeft
+          });
         }
       }
     });
@@ -244,7 +269,11 @@ class VeditorApp {
         }
         const session = await getDocumentSession(docId);
         if (session && session.fileData) {
-          await this.loadPDF(session.name, session.fileData, docId, session.notebook);
+          await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+            activePageIndex: session.activePageIndex || 0,
+            savedScrollTop: session.savedScrollTop,
+            savedScrollLeft: session.savedScrollLeft
+          });
         }
       }
     });
@@ -287,13 +316,21 @@ class VeditorApp {
     name: string,
     bytes: Uint8Array,
     existingDocId?: string,
-    notebook?: NotebookSpec
+    notebook?: NotebookSpec,
+    initialState?: { activePageIndex?: number; savedScrollTop?: number; savedScrollLeft?: number }
   ) {
     showToast(`Loading ${name}…`, 'progress');
     try {
-      const masterBytes = new Uint8Array(bytes);
-      const docId = existingDocId || await openDocumentSession(name, masterBytes.slice(0));
-      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes.slice(0), docId);
+      // Caller hands us a fresh buffer (file.arrayBuffer); take ownership with
+      // zero extra copies. pdfEngine slices internally before worker transfer.
+      const masterBytes = bytes;
+      const docId = existingDocId || createDocumentId();
+      if (!existingDocId) {
+        // Persist in background: IDB structured-clone of large bytes must not
+        // block first paint.
+        void openDocumentSession(name, masterBytes, undefined, docId).catch(() => {});
+      }
+      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
 
       const session: DocumentSession = {
         id: docId,
@@ -304,7 +341,9 @@ class VeditorApp {
         bookmarks,
         annotations: {},
         layers: {},
-        activePageIndex: 0,
+        activePageIndex: initialState?.activePageIndex ?? 0,
+        savedScrollTop: initialState?.savedScrollTop,
+        savedScrollLeft: initialState?.savedScrollLeft,
         createdAt: Date.now(),
         lastModifiedAt: Date.now(),
         notebook
@@ -312,12 +351,30 @@ class VeditorApp {
 
       this._lastDocId = docId;
       history.switchDocument(docId);
-      store.setActiveDocument(session);
-      this.clearRenderedPages();
-      this.renderEmptyState();
-      viewportManager.updateLayout(true);
+      // Suppress scroll tracking while the fresh layout builds so the initial
+      // handleScroll can't clobber the restored position.
+      store.beginDocSwitch();
+      try {
+        this.resetZoomPreviewState();
+        this._scrollContainer.scrollTop = 0;
+        this._scrollContainer.scrollLeft = 0;
+        viewportManager.clearVisible();
+        store.setActiveDocument(session);
+        this.clearRenderedPages();
+        this.renderEmptyState();
+        viewportManager.updateLayout(true);
+        if (typeof session.savedScrollTop === 'number' && session.savedScrollTop > 0) {
+          this._scrollContainer.scrollTo({ top: session.savedScrollTop, left: session.savedScrollLeft ?? 0, behavior: 'auto' });
+        } else if (session.activePageIndex > 0) {
+          viewportManager.scrollToPage(session.activePageIndex, { behavior: 'auto' });
+        }
+      } finally {
+        store.endDocSwitch();
+        viewportManager.handleScroll(true);
+      }
       showToast(`${name} loaded (${pageCount} pages)`, 'success');
     } catch (err: any) {
+      store.endDocSwitch();
       console.error('Error opening PDF:', err);
       showToast(`Error opening PDF: ${err.message}`, 'error');
     }
@@ -367,32 +424,94 @@ class VeditorApp {
     const viewModeChanged = store.viewMode !== this._lastViewMode;
 
     if (docChanged) {
-      this._lastDocId = store.activeDocument.id;
+      const mySeq = ++this._docSwitchSeq;
+      // scrollContainer still holds the OUTGOING doc position: snapshot it
+      // into the outgoing session before we lose it.
+      const prevDoc = this._lastDocId ? store.openDocuments.get(this._lastDocId) : undefined;
+      if (prevDoc) {
+        prevDoc.savedScrollTop = this._scrollContainer.scrollTop;
+        prevDoc.savedScrollLeft = this._scrollContainer.scrollLeft;
+      }
+      const targetDoc = store.activeDocument;
+      const targetPage = store.activePageIndex;
+      const targetScrollTop = targetDoc.savedScrollTop;
+      const targetScrollLeft = targetDoc.savedScrollLeft ?? 0;
+
+      this._lastDocId = targetDoc.id;
       this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
-      history.switchDocument(store.activeDocument.id);
+      try {
+        const rots = store.pageRotations;
+        this._lastRotationSig = Object.keys(rots).sort().map(k => `${k}:${rots[Number(k)]}`).join(',');
+      } catch (_) { this._lastRotationSig = ''; }
+      history.switchDocument(targetDoc.id);
 
-      // Instant switch: activate cached document proxy in pdfEngine
-      if (store.activeDocument.fileData) {
-        await pdfEngine.loadFromBytes(store.activeDocument.fileData, store.activeDocument.id);
-      }
-      this.clearRenderedPages();
-      viewportManager.updateLayout(true);
-      if (store.activePageIndex > 0) {
-        viewportManager.scrollToPage(store.activePageIndex);
+      store.beginDocSwitch();
+      try {
+        this.resetZoomPreviewState();
+        // Reset scroll synchronously BEFORE layout so handleScroll can't map
+        // the stale offset onto the new document's page rects.
+        this._scrollContainer.scrollTop = 0;
+        this._scrollContainer.scrollLeft = 0;
+        viewportManager.clearVisible();
+
+        // Instant switch: activate cached document proxy in pdfEngine
+        if (targetDoc.fileData) {
+          await pdfEngine.loadFromBytes(targetDoc.fileData, targetDoc.id);
+        }
+        if (mySeq !== this._docSwitchSeq) return; // superseded by newer switch
+        if (store.activeDocument?.id !== targetDoc.id) return;
+
+        this.clearRenderedPages();
+        viewportManager.updateLayout(true);
+        // Instant restore (never smooth): smooth would animate through
+        // intermediates and walk activePageIndex 0->1->2 via handleScroll.
+        if (typeof targetScrollTop === 'number' && targetScrollTop > 0) {
+          this._scrollContainer.scrollTo({ top: targetScrollTop, left: targetScrollLeft, behavior: 'auto' });
+        } else if (targetPage > 0) {
+          viewportManager.scrollToPage(targetPage, { behavior: 'auto' });
+        } else {
+          this._scrollContainer.scrollTop = 0;
+        }
+      } finally {
+        store.endDocSwitch();
+        // One sync pass so center-page tracking matches the restored offset.
+        viewportManager.handleScroll(true);
       }
       return;
     }
 
-    if (zoomChanged || viewModeChanged) {
+    // Rotation changes alter page boxes; detect via signature since the
+    // rotate buttons already call updateLayout explicitly (this is the safety net).
+    let rotationSig = '';
+    try {
+      const rots = store.pageRotations;
+      rotationSig = Object.keys(rots).sort().map(k => `${k}:${rots[Number(k)]}`).join(',');
+    } catch (_) {}
+    const rotationChanged = rotationSig !== this._lastRotationSig;
+
+    if (zoomChanged || viewModeChanged || rotationChanged) {
       this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
+      this._lastRotationSig = rotationSig;
+      if (viewModeChanged || rotationChanged) {
+        // Spread-only modes keep stale continuous containers at wrong tops;
+        // rotation swaps w/h so every top below shifts. Start clean.
+        this.resetZoomPreviewState();
+        if (viewModeChanged) {
+          this._scrollContainer.scrollTop = 0;
+          this._scrollContainer.scrollLeft = 0;
+        }
+        viewportManager.clearVisible();
+        this.clearRenderedPages();
+      }
       // The size-indicating cursors are drawn at the on-screen brush size, so
       // they have to be refreshed on zoom as well as on tool changes.
       this.updateCanvasCursors();
       viewportManager.updateLayout(true);
       return;
     }
+    this._lastRotationSig = rotationSig;
 
     // Update drawing cursors
     this.updateCanvasCursors();
@@ -445,6 +564,21 @@ class VeditorApp {
     // Commit shortly after the last tick/finger move: one layout + one render
     // pass for the entire gesture instead of dozens per second mid-gesture.
     this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), 160);
+  }
+
+  /** Drops any in-flight pinch/trackpad preview so a tab switch starts 1:1. */
+  private resetZoomPreviewState(): void {
+    if (this._zoomCommitTimer !== null) {
+      window.clearTimeout(this._zoomCommitTimer);
+      this._zoomCommitTimer = null;
+    }
+    this._zoomPreviewScale = 1;
+    this._zoomPreviewActive = false;
+    if (this._pagesWrapper) {
+      this._pagesWrapper.style.transform = '';
+      this._pagesWrapper.style.transformOrigin = '';
+    }
+    viewportManager.setPreviewScale(1);
   }
 
   private commitZoomPreview(): void {
@@ -506,16 +640,20 @@ class VeditorApp {
    * Virtualization: Mounts and renders only visible pages into the scroll container.
    */
   private async renderVisiblePages(visibleIndices: number[]) {
+    // During a tab-switch rebuild the layout is torn down; mounting now would
+    // place old-doc pages at new-doc tops. The post-switch updateLayout does
+    // the one true mount pass.
+    if (store.isDocSwitching) return;
     const doc = store.activeDocument;
     if (!doc) return;
-
-    const visibleSet = new Set(visibleIndices);
+    const docId = doc.id;
 
     // 1. Warm windowing: only evict pages that are more than 4 pages away to prevent scroll blinking.
     // Never evict mid-preview: the commit 160ms later re-renders sharp anyway,
     // and evicting scaled-but-correct pages is what flashed blank cracks.
     const maxKeepDistance = 4;
     for (const [pageIndex, p] of this._renderedPages) {
+      if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
       let minDistance = Infinity;
       for (const v of visibleIndices) {
         const d = Math.abs(pageIndex - v);
@@ -535,20 +673,33 @@ class VeditorApp {
 
     // 2. Mount and render newly visible pages
     for (const pageIndex of visibleIndices) {
+      if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
       const layout = viewportManager.getLayout(pageIndex);
       if (!layout) continue;
 
       let pageElements = this._renderedPages.get(pageIndex);
+      // Stale container from a previous document (same index, different doc):
+      // never reuse — remount so dataset guards + geometry stay correct.
+      if (pageElements && pageElements.container.dataset.docId !== undefined && pageElements.container.dataset.docId !== docId) {
+        pdfEngine.cancelPageRender(pageIndex);
+        if (pageElements.container.parentNode === this._pagesWrapper) {
+          this._pagesWrapper.removeChild(pageElements.container);
+        }
+        this._renderedPages.delete(pageIndex);
+        pageElements = undefined;
+      }
 
       if (!pageElements) {
         // Create container and 4-layer canvas architecture
         const container = document.createElement('div');
         container.className = 'pdf-page-container';
         container.dataset.pageIndex = String(pageIndex);
+        container.dataset.docId = docId;
 
         const pdfCanvas = document.createElement('canvas');
         pdfCanvas.className = 'pdf-page-canvas';
         pdfCanvas.dataset.pageIndex = String(pageIndex);
+        pdfCanvas.dataset.docId = docId;
         pdfCanvas.style.width = `${layout.width}px`;
         pdfCanvas.style.height = `${layout.height}px`;
 
@@ -581,12 +732,14 @@ class VeditorApp {
       }
 
       // Update position and dimensions from viewport layout
+      pageElements.container.dataset.docId = docId;
       pageElements.container.style.top = `${layout.top}px`;
       pageElements.container.style.left = `${layout.left}px`;
       pageElements.container.style.width = `${layout.width}px`;
       pageElements.container.style.height = `${layout.height}px`;
 
       pageElements.pdfCanvas.dataset.pageIndex = String(pageIndex);
+      pageElements.pdfCanvas.dataset.docId = docId;
       pageElements.pdfCanvas.style.width = `${layout.width}px`;
       pageElements.pdfCanvas.style.height = `${layout.height}px`;
 
@@ -606,7 +759,7 @@ class VeditorApp {
 
       // Render PDF page base
       const rot = store.pageRotations[pageIndex] || 0;
-      pdfEngine.renderPageToCanvas(pageIndex, pageElements.pdfCanvas, store.zoom, rot);
+      void pdfEngine.renderPageToCanvas(pageIndex, pageElements.pdfCanvas, store.zoom, rot);
 
       // Render pattern & annotations
       this.repaintPageAnnotations(pageIndex, pageElements);
@@ -978,7 +1131,11 @@ class VeditorApp {
     if (docId) {
       const session = await getDocumentSession(docId);
       if (session && session.fileData) {
-        await this.loadPDF(session.name, session.fileData);
+        await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+          activePageIndex: session.activePageIndex || 0,
+          savedScrollTop: session.savedScrollTop,
+          savedScrollLeft: session.savedScrollLeft
+        });
       }
     } else if (pdfUrl) {
       try {

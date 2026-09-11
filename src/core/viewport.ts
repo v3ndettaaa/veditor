@@ -60,6 +60,11 @@ export class ViewportManager {
     window.addEventListener('resize', () => this.updateLayout(), { passive: true });
   }
 
+  /** Drops visible-set tracking (tab switch / mode change needs a clean pass). */
+  public clearVisible(): void {
+    this._visiblePages.clear();
+  }
+
   /**
    * Recalculates page dimensions and positions based on zoom, viewMode, and container size.
    */
@@ -182,7 +187,8 @@ export class ViewportManager {
     if (!this._scrollContainer || this._pageLayouts.length === 0) return;
 
     // Map scroller space back into layout space when a zoom preview is active.
-    const scrollTop = this._scrollContainer.scrollTop / this._previewScale;
+    const rawTop = this._scrollContainer.scrollTop;
+    const scrollTop = rawTop / this._previewScale;
     const viewH = this._scrollContainer.clientHeight / this._previewScale;
     const buffer = viewH * 1.5; // 150% buffer ahead and behind to preload visible pages smoothly
 
@@ -205,8 +211,17 @@ export class ViewportManager {
       }
     }
 
+    // Persist exact scroll offset per-document for instant tab restore.
+    // Skipped while a tab switch rebuild is in flight (stale offset would
+    // clobber the just-restored page before scrollToPage runs).
+    const doc = store.activeDocument;
+    if (doc && !store.isDocSwitching) {
+      doc.savedScrollTop = rawTop;
+      doc.savedScrollLeft = this._scrollContainer.scrollLeft;
+    }
+
     // Update active page index based on scroll position
-    if (centerPage !== store.activePageIndex && store.viewMode === 'continuous') {
+    if (!store.isDocSwitching && centerPage !== store.activePageIndex && store.viewMode === 'continuous') {
       store.setActivePageIndex(centerPage);
     }
 
@@ -227,7 +242,7 @@ export class ViewportManager {
     }
   }
 
-  public scrollToPage(pageIndex: number) {
+  public scrollToPage(pageIndex: number, opts?: { behavior?: ScrollBehavior }) {
     if (!this._scrollContainer) return;
     const doc = store.activeDocument;
     if (doc) {
@@ -243,9 +258,11 @@ export class ViewportManager {
       layout = this._pageLayouts.find(p => p.pageIndex === pageIndex);
     }
     if (layout) {
+      const behavior = opts?.behavior
+        ?? (store.appSettings.smoothScroll !== false ? 'smooth' : 'auto');
       this._scrollContainer.scrollTo({
         top: Math.max(0, layout.top - 20),
-        behavior: store.appSettings.smoothScroll !== false ? 'smooth' : 'auto'
+        behavior
       });
       store.setActivePageIndex(pageIndex);
     }
@@ -260,8 +277,9 @@ export class ViewportManager {
     if (!doc || !this._scrollContainer) return;
     const activePage = doc.pages[store.activePageIndex || 0] || doc.pages[0];
     if (!activePage) return;
+    const { width: baseW } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
     const containerW = this._scrollContainer.clientWidth - 64;
-    const newZoom = Math.max(0.2, Math.min(3.0, containerW / activePage.originalWidth));
+    const newZoom = Math.max(0.2, Math.min(3.0, containerW / baseW));
     store.setZoom(newZoom);
     this.updateLayout();
   }
@@ -271,8 +289,10 @@ export class ViewportManager {
     if (!doc || !this._scrollContainer) return;
     const activePage = doc.pages[store.activePageIndex || 0] || doc.pages[0];
     if (!activePage) return;
+    const { width: baseW, height: baseH } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
+    const containerW = this._scrollContainer.clientWidth - 64;
     const containerH = this._scrollContainer.clientHeight - 80;
-    const newZoom = Math.max(0.2, Math.min(3.0, containerH / activePage.originalHeight));
+    const newZoom = Math.max(0.2, Math.min(3.0, Math.min(containerW / baseW, containerH / baseH)));
     store.setZoom(newZoom);
     this.updateLayout();
   }

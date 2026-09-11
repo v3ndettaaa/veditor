@@ -63,6 +63,28 @@ export default defineConfig(({ mode }) => {
             fs.copyFileSync(workerSrc, `${outDir}/pdf.worker.min.mjs`);
             console.log(`Copied PDF.js worker to ${outDir}/pdf.worker.min.mjs`);
           }
+
+          // Copy PDF.js cMaps + standard fonts for 100% offline rendering.
+          // Without these, CJK / standard-font PDFs hit the network (or stall
+          // under extension CSP) on the critical load path.
+          const copyDirRecursive = (src: string, dest: string) => {
+            if (!fs.existsSync(src)) return;
+            fs.mkdirSync(dest, { recursive: true });
+            for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+              const s = resolve(src, entry.name);
+              const d = resolve(dest, entry.name);
+              if (entry.isDirectory()) copyDirRecursive(s, d);
+              else fs.copyFileSync(s, d);
+            }
+          };
+          copyDirRecursive(
+            resolve(import.meta.dirname, 'node_modules/pdfjs-dist/cmaps'),
+            resolve(import.meta.dirname, `${outDir}/cmaps`)
+          );
+          copyDirRecursive(
+            resolve(import.meta.dirname, 'node_modules/pdfjs-dist/standard_fonts'),
+            resolve(import.meta.dirname, `${outDir}/standard_fonts`)
+          );
         }
       }
     ],

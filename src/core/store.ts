@@ -48,7 +48,13 @@ class StateStore {
   private _zoomLensBase: number | null = null;
   private _viewMode: ViewMode = 'continuous';
   private _activePageIndex: number = 0;
-  private _pageRotations: Record<number, number> = {}; // pageIndex -> rotation
+  /** Per-document user rotations: docId -> (pageIndex -> degrees). */
+  private _pageRotationsByDoc: Map<string, Record<number, number>> = new Map();
+  /**
+   * True while main.ts is rebuilding layout for a tab switch. Viewport scroll
+   * tracking must not overwrite the restored page in this window.
+   */
+  private _docSwitching: boolean = false;
 
   // Tool State
   private _activeTool: ToolType = 'pen';
@@ -212,7 +218,19 @@ class StateStore {
   }
   get viewMode() { return this._viewMode; }
   get activePageIndex() { return this._activePageIndex; }
-  get pageRotations() { return this._pageRotations; }
+  /** Rotations for the currently active document (empty when none). */
+  get pageRotations(): Record<number, number> {
+    if (!this._activeDocument) return {};
+    let rec = this._pageRotationsByDoc.get(this._activeDocument.id);
+    if (!rec) {
+      rec = {};
+      this._pageRotationsByDoc.set(this._activeDocument.id, rec);
+    }
+    return rec;
+  }
+  get isDocSwitching() { return this._docSwitching; }
+  public beginDocSwitch() { this._docSwitching = true; }
+  public endDocSwitch() { this._docSwitching = false; }
   get activeTool() { return this._activeTool; }
   get toolSettings() { return this._toolSettings; }
   get appSettings() { return this._appSettings; }
@@ -271,6 +289,7 @@ class StateStore {
   public closeDocumentTab(tabId: string) {
     this._documentTabs = this._documentTabs.filter(t => t.id !== tabId);
     this._openDocuments.delete(tabId);
+    this._pageRotationsByDoc.delete(tabId);
 
     // Notify listeners (e.g. pdfEngine and history to clean up cache)
     for (const listener of this._closeTabListeners) {
@@ -299,6 +318,7 @@ class StateStore {
   public closeAllDocumentTabs() {
     this._documentTabs = [];
     this._openDocuments.clear();
+    this._pageRotationsByDoc.clear();
     this._activeDocument = null;
     this._activePageIndex = 0;
     this._selectedAnnotationIds.clear();
@@ -342,13 +362,19 @@ class StateStore {
       if (this._activeDocument) {
         this._activeDocument.activePageIndex = index;
       }
-      this.notify();
+      // During a tab-switch layout rebuild, scroll tracking must stay silent
+      // or the stale scrollTop clobbers the just-restored page.
+      if (!this._docSwitching) {
+        this.notify();
+      }
     }
   }
 
   public rotatePage(pageIndex: number, deltaDeg = 90) {
-    const current = this._pageRotations[pageIndex] || 0;
-    this._pageRotations[pageIndex] = (current + deltaDeg) % 360;
+    const rotations = this.pageRotations;
+    const current = rotations[pageIndex] || 0;
+    // Normalize to [0,360) so -90 becomes 270 (consistent badge + geometry).
+    rotations[pageIndex] = ((current + deltaDeg) % 360 + 360) % 360;
     this.notify();
   }
 

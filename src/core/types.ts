@@ -275,6 +275,9 @@ export interface DocumentSession {
   annotations: Record<number, Annotation[]>; // pageIndex -> annotations
   layers: Record<number, Layer[]>;           // pageIndex -> layers
   activePageIndex: number;
+  /** Exact pixel scroll offsets for per-tab restore (layout space, CSS px). */
+  savedScrollTop?: number;
+  savedScrollLeft?: number;
   createdAt: number;
   lastModifiedAt: number;
   /** Present only for generated notebooks; see NotebookSpec. */

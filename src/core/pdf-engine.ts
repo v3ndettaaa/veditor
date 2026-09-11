@@ -37,6 +37,19 @@ export class PDFEngine {
   private _renderedBitmaps = new Map<number, { width: number; height: number; scale: number; rotation: number; canvas: HTMLCanvasElement }>();
   private _docSessions: Map<string, CachedDocSession> = new Map();
   private _currentDocId: string | null = null;
+  private _dimListeners: Set<(docId: string) => void> = new Set();
+
+  /** Main subscribes so background dimension fills can re-lay-out without polling. */
+  public onDimensionsUpdated(listener: (docId: string) => void): () => void {
+    this._dimListeners.add(listener);
+    return () => this._dimListeners.delete(listener);
+  }
+
+  private emitDimensionsUpdated(docId: string): void {
+    for (const l of this._dimListeners) {
+      try { l(docId); } catch (e) { console.warn('dimension listener failed', e); }
+    }
+  }
 
   /**
    * Loads a PDF document from raw binary bytes, with multi-document tab caching.
@@ -91,11 +104,16 @@ export class PDFEngine {
     // Pass a fresh slice so PDF.js worker transfer never detaches the original buffer!
     const dataCopy = data.slice(0);
 
+    const localBase = (() => {
+      try { return extensionApi.runtime.getURL(''); } catch (_) { return './'; }
+    })();
     const loadingTask = pdfjsLib.getDocument({
       data: dataCopy,
-      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/cmaps/',
+      // Bundled locally (vite copies cmaps/ + standard_fonts/) so offline
+      // and extension CSP never hit the network on the critical path.
+      cMapUrl: `${localBase}cmaps/`,
       cMapPacked: true,
-      standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/standard_fonts/'
+      standardFontDataUrl: `${localBase}standard_fonts/`
     });
 
     this._pdfDoc = await loadingTask.promise;
@@ -104,7 +122,9 @@ export class PDFEngine {
     const pageCount = this._pdfDoc.numPages;
     const pages: PageInfo[] = [];
 
-    // Extract first page dimensions for instant layout initialization (<50ms)
+    // Extract first page dimensions for instant layout initialization (<50ms).
+    // Remaining pages start as placeholders and heal in the background so
+    // first paint never waits for 49 worker round-trips.
     let defaultWidth = 612;
     let defaultHeight = 792;
     let defaultRotation = 0;
@@ -132,41 +152,7 @@ export class PDFEngine {
       });
     }
 
-    // Pre-extract individual page dimensions for pages up to 50 pages so mixed-orientation/size PDFs never scramble
-    const fetchLimit = Math.min(pageCount, 50);
-    const pagePromises: Promise<any>[] = [];
-    for (let i = 2; i <= fetchLimit; i++) {
-      pagePromises.push(this._pdfDoc.getPage(i).catch(() => null));
-    }
-    const fetchedPages = await Promise.all(pagePromises);
-    for (let idx = 0; idx < fetchedPages.length; idx++) {
-      const p = fetchedPages[idx];
-      if (p) {
-        const pageIdx = idx + 1;
-        this._pageCache.set(pageIdx, p);
-        const vp = p.getViewport({ scale: 1.0 });
-        if (pages[pageIdx]) {
-          pages[pageIdx].width = vp.width;
-          pages[pageIdx].height = vp.height;
-          pages[pageIdx].originalWidth = vp.width;
-          pages[pageIdx].originalHeight = vp.height;
-          pages[pageIdx].rotation = vp.rotation;
-        }
-      }
-    }
-
-    // Extract bookmarks / outline cleanly
-    let bookmarks: PDFBookmarkItem[] = [];
-    try {
-      const outline = await this._pdfDoc.getOutline();
-      if (outline && Array.isArray(outline)) {
-        bookmarks = this.formatOutline(outline);
-      }
-    } catch (err) {
-      console.warn('Could not extract outline:', err);
-    }
-
-    const meta = { pageCount, pages, bookmarks };
+    const meta = { pageCount, pages, bookmarks: [] as PDFBookmarkItem[] };
     if (docId) {
       this._docSessions.set(docId, {
         doc: this._pdfDoc,
@@ -175,9 +161,93 @@ export class PDFEngine {
         meta
       });
       this._currentDocId = docId;
+      // Fill true sizes + outline off the critical path; listeners re-layout.
+      void this.fillMetadataBackground(docId);
+    } else {
+      void this.fillMetadataBackground(null, { doc: this._pdfDoc, meta } as any);
     }
 
     return meta;
+  }
+
+  /**
+   * Background pass: true per-page sizes (prevents overlap of mixed-size docs)
+   * + outline. Mutates the already-returned meta in place so callers that hold
+   * the reference (store sessions) see corrections without re-parse.
+   */
+  private async fillMetadataBackground(docId: string | null, ephemeral?: { doc: pdfjsLib.PDFDocumentProxy; meta: { pageCount: number; pages: PageInfo[]; bookmarks: PDFBookmarkItem[] } }): Promise<void> {
+    try {
+      const session = docId ? this._docSessions.get(docId) : undefined;
+      const doc = session?.doc ?? ephemeral?.doc ?? null;
+      const meta = session?.meta ?? ephemeral?.meta ?? null;
+      if (!doc || !meta) return;
+      const pageCount = meta.pageCount;
+
+      // Near pages first (visible viewport heals fastest), then the tail in
+      // small batches with yields so scrolling stays at 60fps.
+      const headLimit = Math.min(pageCount, 30);
+      let dimsChanged = false;
+      const fetchOne = async (pageNum: number): Promise<void> => {
+        if (docId && !this._docSessions.has(docId)) return;
+        try {
+          const cached = session?.pageCache.get(pageNum - 1);
+          const p = cached ?? await doc.getPage(pageNum);
+          if (session && !session.pageCache.has(pageNum - 1)) {
+            if (session.pageCache.size >= 60) {
+              const oldest = session.pageCache.keys().next().value;
+              if (oldest !== undefined && oldest !== pageNum - 1) session.pageCache.delete(oldest);
+            }
+            session.pageCache.set(pageNum - 1, p);
+          }
+          const vp = p.getViewport({ scale: 1.0 });
+          const info = meta.pages[pageNum - 1];
+          if (info && (Math.abs(info.originalWidth - vp.width) > 0.5 || Math.abs(info.originalHeight - vp.height) > 0.5 || info.rotation !== vp.rotation)) {
+            info.width = vp.width;
+            info.height = vp.height;
+            info.originalWidth = vp.width;
+            info.originalHeight = vp.height;
+            info.rotation = vp.rotation;
+            dimsChanged = true;
+          }
+        } catch (_) {}
+      };
+
+      const batch = async (from: number, to: number) => {
+        const jobs: Promise<void>[] = [];
+        for (let n = from; n <= to; n++) jobs.push(fetchOne(n));
+        await Promise.all(jobs);
+      };
+
+      if (pageCount >= 2) {
+        await batch(2, headLimit);
+        if (dimsChanged && docId) this.emitDimensionsUpdated(docId);
+      }
+      // Tail in chunks of 20 with a macrotask yield between chunks.
+      for (let start = headLimit + 1; start <= pageCount; start += 20) {
+        if (docId && !this._docSessions.has(docId)) return;
+        const end = Math.min(pageCount, start + 19);
+        await batch(start, end);
+        await new Promise(r => setTimeout(r, 0));
+        if (dimsChanged && docId) {
+          this.emitDimensionsUpdated(docId);
+          dimsChanged = false;
+        }
+      }
+      if (dimsChanged && docId) this.emitDimensionsUpdated(docId);
+
+      // Outline last: never blocks paint.
+      try {
+        const outline = await doc.getOutline();
+        if (outline && Array.isArray(outline)) {
+          meta.bookmarks = this.formatOutline(outline);
+          if (docId) this.emitDimensionsUpdated(docId);
+        }
+      } catch (err) {
+        console.warn('Could not extract outline:', err);
+      }
+    } catch (e) {
+      console.warn('Background metadata fill failed:', e);
+    }
   }
 
   private formatOutline(items: any[]): PDFBookmarkItem[] {
@@ -185,7 +255,7 @@ export class PDFEngine {
     return items.map(item => ({
       title: typeof item.title === 'string' ? item.title : String(item.title || ''),
       pageIndex: typeof item.pageIndex === 'number' ? item.pageIndex : undefined,
-      items: item.items && Array.isArray(items.items) ? this.formatOutline(item.items) : undefined
+      items: item.items && Array.isArray(item.items) ? this.formatOutline(item.items) : undefined
     }));
   }
 
@@ -214,14 +284,22 @@ export class PDFEngine {
     rotation: number = 0
   ): Promise<void> {
     if (!this._pdfDoc) return;
+    const renderDocId = this._currentDocId;
 
     const dpr = window.devicePixelRatio || 1;
 
     let page = this._pageCache.get(pageIndex);
     if (!page) {
-      page = await this._pdfDoc.getPage(pageIndex + 1);
+      try {
+        page = await this._pdfDoc.getPage(pageIndex + 1);
+      } catch (e) {
+        return;
+      }
+      // Stale fetch after a tab switch must not pollute the new doc's cache.
+      if (renderDocId !== this._currentDocId) return;
+      if (!canvas.isConnected) return;
       // Evict oldest page when cache gets large without killing active document
-      if (this._pageCache.size >= 50) {
+      if (this._pageCache.size >= 60) {
         for (const k of this._pageCache.keys()) {
           if (k !== pageIndex) {
             this._pageCache.delete(k);
@@ -230,6 +308,24 @@ export class PDFEngine {
         }
       }
       this._pageCache.set(pageIndex, page);
+      // Heal placeholder geometry: a lazy fetch is proof the layout used a
+      // wrong size (pages beyond the background head). Correct the session
+      // meta so tops below stop overlapping.
+      try {
+        const session = renderDocId ? this._docSessions.get(renderDocId) : undefined;
+        const info = session?.meta.pages[pageIndex];
+        if (info) {
+          const vp1 = page.getViewport({ scale: 1.0 });
+          if (Math.abs(info.originalWidth - vp1.width) > 0.5 || Math.abs(info.originalHeight - vp1.height) > 0.5) {
+            info.width = vp1.width;
+            info.height = vp1.height;
+            info.originalWidth = vp1.width;
+            info.originalHeight = vp1.height;
+            info.rotation = vp1.rotation;
+            if (renderDocId) this.emitDimensionsUpdated(renderDocId);
+          }
+        }
+      } catch (_) {}
     }
 
     // NOTE: getViewport's `rotation` already defaults to the PDF's native
@@ -285,8 +381,15 @@ export class PDFEngine {
     try {
       await task.promise;
 
-      // Verify canvas is still mounted and bound to this pageIndex before committing blit
+      // Verify canvas is still mounted and bound to this page/doc before blit.
+      // Same pageIndex is reused across docs/zooms, so doc + connection checks
+      // stop a stale render from painting into a recycled canvas (ghost pages).
+      if (!canvas.isConnected) return;
+      if (renderDocId !== this._currentDocId) return;
       if (canvas.dataset.pageIndex && canvas.dataset.pageIndex !== String(pageIndex)) {
+        return;
+      }
+      if (canvas.dataset.docId && renderDocId && canvas.dataset.docId !== renderDocId) {
         return;
       }
 

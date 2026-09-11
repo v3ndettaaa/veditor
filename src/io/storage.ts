@@ -68,15 +68,20 @@ function getDB() {
   return dbPromise;
 }
 
-export async function openDocumentSession(name: string, fileData: Uint8Array, folderId?: string | null): Promise<string> {
-  const id = `doc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+export function createDocumentId(): string {
+  return `doc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+}
+
+export async function openDocumentSession(name: string, fileData: Uint8Array, folderId?: string | null, existingId?: string): Promise<string> {
+  const id = existingId || createDocumentId();
 
   try {
     const db = await getDB();
     const session: DocumentSession = {
       id,
       name,
-      fileData: fileData ? new Uint8Array(fileData) : undefined,
+      // Note: idb structured-clones on put; no extra JS copy needed here.
+      fileData,
       pageCount: 0,
       pages: [],
       bookmarks: [],
@@ -112,12 +117,23 @@ export async function getDocumentSession(id: string): Promise<DocumentSession | 
   }
 }
 
-export async function saveDocumentSession(session: DocumentSession): Promise<void> {
+export async function saveDocumentSession(session: DocumentSession, opts?: { includeBytes?: boolean }): Promise<void> {
   try {
     const db = await getDB();
+    let fileData = session.fileData;
+    if (!opts?.includeBytes) {
+      // Autosave / metadata path: never rewrite large PDF bytes. Preserve
+      // whatever is already stored so annotation saves stay cheap.
+      try {
+        const existing = await db.get('documents', session.id);
+        if (existing?.fileData) fileData = existing.fileData;
+        else if (fileData && existing && !('fileData' in existing)) fileData = fileData;
+        // If no existing bytes and caller omitted them, keep current (may be undefined).
+      } catch (_) {}
+    }
     const cleanSession: DocumentSession = {
       ...session,
-      fileData: session.fileData ? new Uint8Array(session.fileData) : undefined
+      fileData
     };
     await db.put('documents', cleanSession);
 

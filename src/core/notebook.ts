@@ -63,7 +63,7 @@ export class NotebookController {
       doc.pages = meta.pages;
       doc.lastModifiedAt = Date.now();
 
-      await saveDocumentSession(doc);
+      await saveDocumentSession(doc, { includeBytes: true });
 
       store.notify();
       viewportManager.updateLayout(true);
