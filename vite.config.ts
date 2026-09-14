@@ -3,8 +3,17 @@ import { resolve } from 'path';
 import fs from 'fs';
 
 export default defineConfig(({ mode }) => {
+  const isDesktop = mode === 'desktop';
   const isFirefox = mode === 'firefox';
-  const outDir = isFirefox ? 'dist/firefox' : 'dist/chrome';
+  const outDir = isDesktop ? 'dist/desktop' : (isFirefox ? 'dist/firefox' : 'dist/chrome');
+
+  const input = isDesktop
+    ? { main: resolve(import.meta.dirname, 'index.html') }
+    : {
+        main: resolve(import.meta.dirname, 'index.html'),
+        popup: resolve(import.meta.dirname, 'popup.html'),
+        'service-worker': resolve(import.meta.dirname, 'src/background/service-worker.ts')
+      };
 
   return {
     base: './',
@@ -13,11 +22,7 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       target: 'esnext',
       rollupOptions: {
-        input: {
-          main: resolve(import.meta.dirname, 'index.html'),
-          popup: resolve(import.meta.dirname, 'popup.html'),
-          'service-worker': resolve(import.meta.dirname, 'src/background/service-worker.ts')
-        },
+        input,
         output: {
           entryFileNames: (chunkInfo) => {
             if (chunkInfo.name === 'service-worker') {
@@ -39,11 +44,13 @@ export default defineConfig(({ mode }) => {
       {
         name: 'copy-extension-manifest-and-assets',
         closeBundle() {
-          // Copy appropriate manifest
-          const manifestSource = isFirefox ? 'manifest.firefox.json' : 'manifest.chrome.json';
-          if (fs.existsSync(manifestSource)) {
-            fs.copyFileSync(manifestSource, `${outDir}/manifest.json`);
-            console.log(`Copied ${manifestSource} -> ${outDir}/manifest.json`);
+          // Copy appropriate manifest if building an extension
+          if (!isDesktop) {
+            const manifestSource = isFirefox ? 'manifest.firefox.json' : 'manifest.chrome.json';
+            if (fs.existsSync(manifestSource)) {
+              fs.copyFileSync(manifestSource, `${outDir}/manifest.json`);
+              console.log(`Copied ${manifestSource} -> ${outDir}/manifest.json`);
+            }
           }
 
           // Ensure icons directory is copied

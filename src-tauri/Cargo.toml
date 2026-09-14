@@ -1,0 +1,18 @@
+[package]
+name = "veditor"
+version = "1.0.0"
+description = "Veditor - Fast, beautiful PDF editor and annotator"
+authors = ["v3ndettaaa"]
+edition = "2021"
+
+[lib]
+name = "veditor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
