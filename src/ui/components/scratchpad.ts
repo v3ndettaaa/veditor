@@ -1,20 +1,17 @@
 /**
- * Floating Scratchpad / Draft Overlay.
- * Viewport-fixed panel (sibling of the scroll container, never inside the
- * zoom-scaled pages wrapper) for quick rough notes, formulas, and scribbles.
- * Strokes are normalized (0..1) so panel resizes never distort content, and
- * are scoped per document tab. Explicit Insert sends them to the active page
- * as real pen annotations (single undo step per stroke); PNG export downloads
- * the pad as an image.
+ * Floating Infinite Scratchpad / Draft Overlay.
+ * Viewport-fixed panel for quick rough notes, formulas, and scribbles.
+ * Features:
+ * - Persistent memory across sessions until explicitly cleared.
+ * - Infinite canvas with pan/scroll (mouse wheel, drag-to-pan, middle-click).
+ * - Auto-close when clicking outside anywhere on the page (no X close button needed).
+ * - Free resizing (enlarge and shrink) without distorting strokes.
  */
 
 import { store } from '../../core/store';
-import { history, AddAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
 import { showToast } from './toast';
 import { t } from '../i18n';
-import type { PenAnnotation, StrokePoint } from '../../core/types';
-import { computePointsBoundingBox } from '../../utils/geometry';
 
 interface PadStroke {
   color: string;
@@ -30,9 +27,10 @@ interface PadGeom {
 }
 
 const GEOM_KEY = 'veditor_scratchpad_geom';
-const DEFAULT_GEOM: PadGeom = { x: -340, y: 70, w: 300, h: 380 };
-const MIN_W = 200;
-const MIN_H = 160;
+const STROKES_KEY = 'veditor_scratchpad_strokes_v2';
+const DEFAULT_GEOM: PadGeom = { x: -360, y: 70, w: 340, h: 420 };
+const MIN_W = 180;
+const MIN_H = 140;
 
 function loadGeom(): PadGeom {
   try {
@@ -53,28 +51,47 @@ function loadGeom(): PadGeom {
 export class ScratchpadComponent {
   private _container: HTMLElement;
   private _built = false;
-  private _docId: string | null = null;
-  private _strokesByDoc = new Map<string, PadStroke[]>();
-  private _mode: 'pen' | 'eraser' = 'pen';
+  private _strokes: PadStroke[] = [];
+  private _mode: 'pen' | 'eraser' | 'pan' = 'pen';
   private _drawing = false;
+  private _isPanning = false;
+  private _panStartX = 0;
+  private _panStartY = 0;
+  private _panOriginX = 0;
+  private _panOriginY = 0;
+  private _panX = 0;
+  private _panY = 0;
   private _activeStroke: Array<{ x: number; y: number }> | null = null;
   private _geom: PadGeom = loadGeom();
+  private _padWidth = 4;
+  private _padColor = '#f8fafc';
+  private _spacePressed = false;
 
   constructor(container: HTMLElement) {
     this._container = container;
+    this.loadStrokes();
     store.subscribe(() => this.sync());
     this.render();
   }
 
-  private get strokes(): PadStroke[] {
-    const id = store.activeDocument?.id;
-    if (!id) return [];
-    let list = this._strokesByDoc.get(id);
-    if (!list) {
-      list = [];
-      this._strokesByDoc.set(id, list);
-    }
-    return list;
+  private loadStrokes(): void {
+    try {
+      const raw = localStorage.getItem(STROKES_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this._strokes = parsed;
+          return;
+        }
+      }
+    } catch (_) {}
+    this._strokes = [];
+  }
+
+  private persistStrokes(): void {
+    try {
+      localStorage.setItem(STROKES_KEY, JSON.stringify(this._strokes));
+    } catch (_) {}
   }
 
   public render(): void {
@@ -89,13 +106,13 @@ export class ScratchpadComponent {
           <div class="scratchpad-header-btns">
             <button id="scratchpad-pen-btn" class="view-btn active" title="Pen">${getIconSvg('pen', 14)}</button>
             <button id="scratchpad-eraser-btn" class="view-btn" title="Eraser">${getIconSvg('eraser', 14)}</button>
+            <button id="scratchpad-pan-btn" class="view-btn" title="Pan / Scroll">${getIconSvg('hand', 14)}</button>
+            <button id="scratchpad-recenter-btn" class="view-btn" title="Recenter">${getIconSvg('recenter', 14)}</button>
             <button id="scratchpad-min-btn" class="view-btn" title="Minimize">–</button>
-            <button id="scratchpad-close-btn" class="view-btn" title="Close">✕</button>
           </div>
         </div>
         <div class="scratchpad-body">
           <canvas id="scratchpad-canvas" class="scratchpad-canvas"></canvas>
-          <div id="scratchpad-resize" class="scratchpad-resize" title="Resize"></div>
         </div>
         <div class="scratchpad-footer">
           <div class="scratchpad-widths">
@@ -106,8 +123,14 @@ export class ScratchpadComponent {
           <div class="scratchpad-actions">
             <button id="scratchpad-clear-btn" class="header-btn" title="Clear pad">${getIconSvg('trash', 13)}</button>
             <button id="scratchpad-export-btn" class="header-btn" title="Export as PNG">${getIconSvg('download', 13)}</button>
-            <button id="scratchpad-insert-btn" class="header-btn primary" title="Insert into active page">Insert</button>
           </div>
+        </div>
+        <div id="scratchpad-resize" class="scratchpad-resize" title="Resize">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="8.5" y1="4.5" x2="4.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="8.5" y1="7.5" x2="7.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
         </div>
       </div>
     `;
@@ -126,9 +149,6 @@ export class ScratchpadComponent {
     return this._container.querySelector<HTMLCanvasElement>('#scratchpad-canvas');
   }
 
-  private _padWidth = 4;
-  private _padColor = '#f8fafc';
-
   /** Visibility + button states only — never rebuilds the canvas element. */
   private sync(): void {
     const panel = this.panel;
@@ -137,15 +157,13 @@ export class ScratchpadComponent {
     const visible = store.scratchpadOpen && !store.scratchpadMinimized && !!doc;
     panel.style.display = visible ? 'flex' : 'none';
     if (!visible) return;
-    if (this._docId !== (doc?.id ?? null)) {
-      this._docId = doc?.id ?? null;
-      this._activeStroke = null;
-      this._drawing = false;
-      this.fitCanvas();
-      this.redraw();
-    }
+
+    this.fitCanvas();
+    this.redraw();
+
     this._container.querySelector('#scratchpad-pen-btn')?.classList.toggle('active', this._mode === 'pen');
     this._container.querySelector('#scratchpad-eraser-btn')?.classList.toggle('active', this._mode === 'eraser');
+    this._container.querySelector('#scratchpad-pan-btn')?.classList.toggle('active', this._mode === 'pan');
   }
 
   private persistGeom(): void {
@@ -159,7 +177,7 @@ export class ScratchpadComponent {
     if (!panel) return;
     const host = this._container.parentElement;
     const hostW = host?.clientWidth || window.innerWidth;
-    // Negative x docks from the right edge (robust across viewport sizes).
+    // Negative x docks from the right edge.
     const left = this._geom.x < 0 ? Math.max(8, hostW + this._geom.x - this._geom.w) : this._geom.x;
     panel.style.left = `${Math.max(0, left)}px`;
     panel.style.top = `${Math.max(0, this._geom.y)}px`;
@@ -187,15 +205,18 @@ export class ScratchpadComponent {
     canvas.style.height = `${Math.max(1, Math.floor(rect.height))}px`;
   }
 
-  private toNorm(e: PointerEvent): { x: number; y: number } | null {
+  private updateCursor(): void {
     const canvas = this.canvas;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    return {
-      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
-    };
+    if (!canvas) return;
+    if (this._isPanning) {
+      canvas.style.cursor = 'grabbing';
+    } else if (this._mode === 'pan' || this._spacePressed) {
+      canvas.style.cursor = 'grab';
+    } else if (this._mode === 'eraser') {
+      canvas.style.cursor = 'cell';
+    } else {
+      canvas.style.cursor = 'crosshair';
+    }
   }
 
   private redraw(): void {
@@ -205,36 +226,62 @@ export class ScratchpadComponent {
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Draw subtle infinite dot grid that scrolls with panning
+    const gridSize = 24 * dpr;
+    const offsetX = (((this._panX * dpr) % gridSize) + gridSize) % gridSize;
+    const offsetY = (((this._panY * dpr) % gridSize) + gridSize) % gridSize;
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.2)';
+    for (let x = offsetX; x < canvas.width; x += gridSize) {
+      for (let y = offsetY; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.arc(x, y, 1 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // 2. Render all strokes in world coordinates offset by pan
+    ctx.save();
+    ctx.translate(this._panX * dpr, this._panY * dpr);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+
     const draw = (pts: Array<{ x: number; y: number }>, color: string, width: number) => {
       if (pts.length === 0) return;
       ctx.strokeStyle = color;
       ctx.lineWidth = width * dpr;
       ctx.beginPath();
       if (pts.length === 1) {
-        const x = pts[0].x * canvas.width;
-        const y = pts[0].y * canvas.height;
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + 0.01, y + 0.01);
+        ctx.moveTo(pts[0].x * dpr, pts[0].y * dpr);
+        ctx.lineTo(pts[0].x * dpr + 0.1, pts[0].y * dpr + 0.1);
       } else {
-        ctx.moveTo(pts[0].x * canvas.width, pts[0].y * canvas.height);
+        ctx.moveTo(pts[0].x * dpr, pts[0].y * dpr);
         for (let i = 1; i < pts.length; i++) {
-          ctx.lineTo(pts[i].x * canvas.width, pts[i].y * canvas.height);
+          const xc = ((pts[i - 1].x + pts[i].x) / 2) * dpr;
+          const yc = ((pts[i - 1].y + pts[i].y) / 2) * dpr;
+          ctx.quadraticCurveTo(pts[i - 1].x * dpr, pts[i - 1].y * dpr, xc, yc);
         }
+        const last = pts[pts.length - 1];
+        ctx.lineTo(last.x * dpr, last.y * dpr);
       }
       ctx.stroke();
     };
-    for (const s of this.strokes) draw(s.points, s.color, s.width);
+
+    for (const s of this._strokes) {
+      draw(s.points, s.color, s.width);
+    }
     if (this._drawing && this._activeStroke && this._activeStroke.length > 0) {
       draw(this._activeStroke, this._padColor, this._padWidth);
     }
+
+    ctx.restore();
   }
 
   private bindChrome(): void {
     const header = this._container.querySelector<HTMLElement>('#scratchpad-header');
     const panel = this.panel;
-    // Drag to move (header only so canvas strokes never move the panel).
+
+    // Drag header to reposition scratchpad panel
     header?.addEventListener('pointerdown', (e) => {
       if (!panel || (e.target as HTMLElement).closest('button')) return;
       e.preventDefault();
@@ -257,7 +304,6 @@ export class ScratchpadComponent {
         header.removeEventListener('pointermove', move);
         header.removeEventListener('pointerup', up);
         header.removeEventListener('pointercancel', up);
-        // Store docked-from-right when near it so resizes keep it docked.
         const left = panel.offsetLeft;
         this._geom.x = left + this._geom.w > hostW - 60 ? left - hostW + this._geom.w : left;
         this._geom.y = panel.offsetTop;
@@ -268,7 +314,7 @@ export class ScratchpadComponent {
       header.addEventListener('pointercancel', up);
     });
 
-    // Corner resize.
+    // Free Corner resize (enlarge and shrink without distorting canvas contents)
     const grip = this._container.querySelector<HTMLElement>('#scratchpad-resize');
     grip?.addEventListener('pointerdown', (e) => {
       if (!panel) return;
@@ -289,7 +335,10 @@ export class ScratchpadComponent {
         this.fitCanvas();
         this.redraw();
       };
-      const up = () => {
+      const up = (ev: PointerEvent) => {
+        try {
+          grip.releasePointerCapture(ev.pointerId);
+        } catch (_) {}
         grip.removeEventListener('pointermove', move);
         grip.removeEventListener('pointerup', up);
         grip.removeEventListener('pointercancel', up);
@@ -300,34 +349,54 @@ export class ScratchpadComponent {
       grip.addEventListener('pointercancel', up);
     });
 
+    // Tool buttons
     this._container.querySelector('#scratchpad-pen-btn')?.addEventListener('click', () => {
       this._mode = 'pen';
+      this.updateCursor();
       this.sync();
     });
     this._container.querySelector('#scratchpad-eraser-btn')?.addEventListener('click', () => {
       this._mode = 'eraser';
+      this.updateCursor();
       this.sync();
+    });
+    this._container.querySelector('#scratchpad-pan-btn')?.addEventListener('click', () => {
+      this._mode = 'pan';
+      this.updateCursor();
+      this.sync();
+    });
+    this._container.querySelector('#scratchpad-recenter-btn')?.addEventListener('click', () => {
+      this._panX = 0;
+      this._panY = 0;
+      this.redraw();
+      showToast('Scratchpad view centered', 'info');
     });
     this._container.querySelector('#scratchpad-min-btn')?.addEventListener('click', () => {
       store.setScratchpadMinimized(true);
     });
-    this._container.querySelector('#scratchpad-close-btn')?.addEventListener('click', () => {
-      store.setScratchpadOpen(false);
-    });
+
+    // Width pills
     this._container.querySelectorAll('[data-pad-w]').forEach(btn => {
       btn.addEventListener('click', () => {
         this._padWidth = Number((btn as HTMLElement).dataset.padW) || 4;
         this._container.querySelectorAll('[data-pad-w]').forEach(b => b.classList.toggle('active', b === btn));
         this._mode = 'pen';
+        this.updateCursor();
         this.sync();
       });
     });
+
+    // Clear Pad with confirmation & storage wipe
     this._container.querySelector('#scratchpad-clear-btn')?.addEventListener('click', () => {
-      if (this.strokes.length === 0) return;
-      if (!window.confirm('Clear the scratchpad?')) return;
-      this.strokes.length = 0;
+      if (this._strokes.length === 0) return;
+      if (!window.confirm('Clear all scratchpad drawings?')) return;
+      this._strokes = [];
+      this.persistStrokes();
       this.redraw();
+      showToast('Scratchpad cleared', 'info');
     });
+
+    // Export as PNG
     this._container.querySelector('#scratchpad-export-btn')?.addEventListener('click', () => {
       const canvas = this.canvas;
       if (!canvas) return;
@@ -347,140 +416,181 @@ export class ScratchpadComponent {
         showToast('Scratchpad exported as PNG', 'success');
       }, 'image/png');
     });
-    this._container.querySelector('#scratchpad-insert-btn')?.addEventListener('click', () => {
-      this.insertIntoPage();
+
+    // Auto-close on click outside anywhere on the page
+    window.addEventListener('pointerdown', (e) => {
+      const p = this.panel;
+      if (!p || p.style.display === 'none') return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // If clicking inside the scratchpad panel, keep open
+      if (p.contains(target)) return;
+      // If clicking on the toolbar scratchpad toggle button, let toolbar handle toggle
+      if (target.closest('#tool-scratchpad, [data-tool="scratchpad"], .scratchpad-toggle')) return;
+      // Clicked outside -> close scratchpad automatically
+      store.setScratchpadOpen(false);
     });
+
+    // Spacebar temporary pan shortcut
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !this._spacePressed && (e.target as HTMLElement)?.tagName !== 'INPUT' && (e.target as HTMLElement)?.tagName !== 'TEXTAREA') {
+        const p = this.panel;
+        if (p && p.style.display !== 'none') {
+          this._spacePressed = true;
+          this.updateCursor();
+        }
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') {
+        this._spacePressed = false;
+        this.updateCursor();
+      }
+    });
+  }
+
+  private getWorldPos(e: PointerEvent): { x: number; y: number } | null {
+    const canvas = this.canvas;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    return {
+      x: localX - this._panX,
+      y: localY - this._panY
+    };
   }
 
   private bindCanvas(): void {
     const canvas = this.canvas;
     if (!canvas) return;
+
+    // Mouse wheel / trackpad 2-finger scroll for infinite canvas navigation
+    canvas.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._panX -= e.deltaX;
+        this._panY -= e.deltaY;
+        this.redraw();
+      },
+      { passive: false }
+    );
+
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       try {
         canvas.setPointerCapture(e.pointerId);
       } catch (_) {}
-      const pt = this.toNorm(e);
+
+      // Middle click (button 1) or pan mode or space held -> pan
+      if (e.button === 1 || this._mode === 'pan' || this._spacePressed) {
+        this._isPanning = true;
+        this._panStartX = e.clientX;
+        this._panStartY = e.clientY;
+        this._panOriginX = this._panX;
+        this._panOriginY = this._panY;
+        this.updateCursor();
+        return;
+      }
+
+      const pt = this.getWorldPos(e);
       if (!pt) return;
+
       if (this._mode === 'eraser') {
         this._drawing = true;
         this.eraseAt(pt);
         return;
       }
+
       this._drawing = true;
       this._activeStroke = [pt];
       this.redraw();
     });
+
     canvas.addEventListener('pointermove', (e) => {
-      if (!this._drawing) return;
       e.preventDefault();
+      if (this._isPanning) {
+        this._panX = this._panOriginX + (e.clientX - this._panStartX);
+        this._panY = this._panOriginY + (e.clientY - this._panStartY);
+        this.redraw();
+        return;
+      }
+
+      if (!this._drawing) return;
+
       const events = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e];
+
       if (this._mode === 'eraser') {
         for (const ev of events) {
-          const pt = this.toNorm(ev);
+          const pt = this.getWorldPos(ev);
           if (pt) this.eraseAt(pt);
         }
         return;
       }
+
       if (!this._activeStroke) return;
       for (const ev of events) {
-        const pt = this.toNorm(ev);
+        const pt = this.getWorldPos(ev);
         if (!pt) continue;
         const prev = this._activeStroke[this._activeStroke.length - 1];
-        if (!prev || Math.abs(pt.x - prev.x) + Math.abs(pt.y - prev.y) > 0.0015) {
+        if (!prev || Math.hypot(pt.x - prev.x, pt.y - prev.y) > 1.2) {
           this._activeStroke.push(pt);
         }
       }
       this.redraw();
     });
+
     const finish = (e: PointerEvent) => {
-      if (!this._drawing) return;
       e.preventDefault();
       try {
         canvas.releasePointerCapture(e.pointerId);
       } catch (_) {}
-      this._drawing = false;
-      if (this._mode === 'pen' && this._activeStroke && this._activeStroke.length > 0) {
-        this.strokes.push({ color: this._padColor, width: this._padWidth, points: this._activeStroke });
+
+      if (this._isPanning) {
+        this._isPanning = false;
+        this.updateCursor();
+        return;
       }
+
+      if (!this._drawing) return;
+      this._drawing = false;
+
+      if (this._mode === 'pen' && this._activeStroke && this._activeStroke.length > 0) {
+        this._strokes.push({
+          color: this._padColor,
+          width: this._padWidth,
+          points: this._activeStroke
+        });
+        this.persistStrokes();
+      }
+
       this._activeStroke = null;
       this.redraw();
     };
+
     canvas.addEventListener('pointerup', finish);
     canvas.addEventListener('pointercancel', finish);
   }
 
   private eraseAt(pt: { x: number; y: number }): void {
-    const canvas = this.canvas;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const list = this.strokes;
+    const list = this._strokes;
+    let erased = false;
     for (let i = list.length - 1; i >= 0; i--) {
       const s = list[i];
       for (const p of s.points) {
-        const dx = (p.x - pt.x) * rect.width;
-        const dy = (p.y - pt.y) * rect.height;
-        if (Math.hypot(dx, dy) <= 12) {
+        if (Math.hypot(p.x - pt.x, p.y - pt.y) <= 14) {
           list.splice(i, 1);
+          erased = true;
           break;
         }
       }
     }
-    this.redraw();
-  }
-
-  /** Sends pad strokes to the active page as real pen annotations. */
-  private insertIntoPage(): void {
-    const doc = store.activeDocument;
-    if (!doc) {
-      showToast('Open a PDF first', 'error');
-      return;
-    }
-    const list = this.strokes;
-    if (list.length === 0) {
-      showToast('Scratchpad is empty', 'error');
-      return;
-    }
-    const pageIndex = Math.min(doc.pageCount - 1, Math.max(0, store.activePageIndex));
-    const page = doc.pages[pageIndex];
-    if (!page) return;
-    // Fit the pad rect into the page with a 24pt inset, preserving aspect.
-    const margin = 24;
-    const availW = Math.max(32, page.originalWidth - margin * 2);
-    const availH = Math.max(32, page.originalHeight - margin * 2);
-    const s = Math.min(availW, availH);
-    const ox = (page.originalWidth - s) / 2;
-    const oy = margin;
-    const canvas = this.canvas;
-    const padW = canvas ? Math.max(1, canvas.getBoundingClientRect().width) : 300;
-    let inserted = 0;
-    for (const stroke of list) {
-      if (stroke.points.length === 0) continue;
-      const pts: StrokePoint[] = stroke.points.map(p => ({
-        x: ox + p.x * s,
-        y: oy + p.y * s,
-        pressure: 0.5
-      }));
-      const width = Math.max(0.5, stroke.width * (s / padW));
-      const ann: PenAnnotation = {
-        id: Math.random().toString(36).substring(2, 9),
-        pageIndex,
-        layerId: 'layer-default',
-        type: 'pen',
-        box: computePointsBoundingBox(pts, width),
-        points: pts,
-        color: stroke.color === '#f8fafc' ? '#0f172a' : stroke.color,
-        strokeWidth: width,
-        opacity: 1.0,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      };
-      history.execute(new AddAnnotationCommand(pageIndex, ann));
-      inserted++;
-    }
-    if (inserted > 0) {
-      doc.lastModifiedAt = Date.now();
-      showToast(`Inserted ${inserted} stroke${inserted === 1 ? '' : 's'} into page ${pageIndex + 1}`, 'success');
+    if (erased) {
+      this.persistStrokes();
+      this.redraw();
     }
   }
 }

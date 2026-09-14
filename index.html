@@ -49,6 +49,17 @@
 
         <!-- Floating Scratchpad / Draft Overlay -->
         <div id="app-scratchpad"></div>
+
+        <!-- Centered PDF Loading Overlay -->
+        <div id="pdf-loading-overlay" class="pdf-loading-overlay is-hidden" aria-live="polite">
+          <div class="pdf-loading-card">
+            <div class="pdf-loading-spinner-ring"></div>
+            <div class="pdf-loading-info">
+              <div class="pdf-loading-title" id="pdf-loading-filename">Opening PDF…</div>
+              <div class="pdf-loading-subtitle" id="pdf-loading-status">Parsing document structure…</div>
+            </div>
+          </div>
+        </div>
       </main>
 
       <!-- Right Collapsible Properties Inspector -->

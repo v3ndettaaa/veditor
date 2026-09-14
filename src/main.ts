@@ -18,6 +18,7 @@ import { CommandPaletteComponent } from './ui/components/command-palette';
 import { ShortcutsModalComponent } from './ui/components/shortcuts-modal';
 import { SettingsModalComponent } from './ui/components/settings-modal';
 import { SignatureDialogComponent } from './ui/components/signature-dialog';
+import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { showToast } from './ui/components/toast';
 import { openDocumentSession, getDocumentSession, createDocumentId } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle } from './io/save';
@@ -116,16 +117,19 @@ class VeditorApp {
     new PropertiesPanelComponent(document.getElementById('app-properties-panel') as HTMLElement);
     new ViewControlsComponent(document.getElementById('app-view-controls') as HTMLElement);
     new ScratchpadComponent(document.getElementById('app-scratchpad') as HTMLElement);
+    new FloatingPropsBarComponent(document.getElementById('app-viewport-container') as HTMLElement);
+
+    const pp = document.getElementById('app-properties-panel');
+    if (pp) pp.style.display = 'none';
 
     if (!store.activeDocument) {
       const tb = document.getElementById('app-floating-toolbar');
       if (tb) tb.style.display = 'none';
       const vc = document.getElementById('app-view-controls');
       if (vc) vc.style.display = 'none';
-      const pp = document.getElementById('app-properties-panel');
-      if (pp) pp.style.display = 'none';
     }
 
+    const modalContainer = (document.getElementById('modal-container') || document.body) as HTMLElement;
     const commandPaletteEl = document.getElementById('command-palette-container') || modalContainer;
     const shortcutsModalEl = document.getElementById('shortcuts-modal-container') || modalContainer;
     const settingsModalEl = document.getElementById('settings-modal-container') || modalContainer;
@@ -324,6 +328,24 @@ class VeditorApp {
     });
   }
 
+  private showPdfLoading(filename: string, statusText: string = 'Parsing document structure…'): void {
+    const overlay = document.getElementById('pdf-loading-overlay');
+    const titleEl = document.getElementById('pdf-loading-filename');
+    const statusEl = document.getElementById('pdf-loading-status');
+    if (titleEl) titleEl.textContent = filename;
+    if (statusEl) statusEl.textContent = statusText;
+    if (overlay) {
+      overlay.classList.remove('is-hidden');
+    }
+  }
+
+  private hidePdfLoading(): void {
+    const overlay = document.getElementById('pdf-loading-overlay');
+    if (overlay) {
+      overlay.classList.add('is-hidden');
+    }
+  }
+
   public async loadPDF(
     name: string,
     bytes: Uint8Array,
@@ -331,6 +353,7 @@ class VeditorApp {
     notebook?: NotebookSpec,
     initialState?: { activePageIndex?: number; savedScrollTop?: number; savedScrollLeft?: number }
   ) {
+    this.showPdfLoading(name, 'Opening document…');
     showToast(`Loading ${name}…`, 'progress');
     try {
       // Caller hands us a fresh buffer (file.arrayBuffer); take ownership with
@@ -342,6 +365,7 @@ class VeditorApp {
         // block first paint.
         void openDocumentSession(name, masterBytes, undefined, docId).catch(() => {});
       }
+      this.showPdfLoading(name, 'Parsing PDF structure & pages…');
       const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
 
       const session: DocumentSession = {
@@ -395,6 +419,11 @@ class VeditorApp {
       store.endDocSwitch();
       console.error('Error opening PDF:', err);
       showToast(`Error opening PDF: ${err.message}`, 'error');
+    } finally {
+      // Smooth fade out of the loading overlay
+      window.setTimeout(() => {
+        this.hidePdfLoading();
+      }, 180);
     }
   }
 
@@ -432,7 +461,7 @@ class VeditorApp {
 
     if (floatingToolbar) floatingToolbar.style.display = '';
     if (viewControls) viewControls.style.display = '';
-    if (propertiesPanel) propertiesPanel.style.display = '';
+    if (propertiesPanel) propertiesPanel.style.display = 'none';
 
     this._emptyStateView.style.display = 'none';
 
@@ -657,10 +686,35 @@ class VeditorApp {
     viewportManager.setPreviewScale(1);
     if (Math.abs(finalZoom - store.zoom) > 0.0005) {
       // Single commit: setZoom's notify path does the one layout + render pass
-      // (updateLayout recomputes the wrapper box, discarding preview scaling).
       this._previewBaseHeight = null;
       this._previewBaseWidth = null;
-      store.setZoom(finalZoom);
+
+      // Robust focal page anchoring to prevent page jumps:
+      const anchorPageIndex = store.activePageIndex;
+      const viewH = this._scrollContainer.clientHeight;
+      const viewW = this._scrollContainer.clientWidth;
+      const centerScrollerY = this._scrollContainer.scrollTop + viewH / 2;
+      const centerScrollerX = this._scrollContainer.scrollLeft + viewW / 2;
+      const oldLayout = viewportManager.getLayout(anchorPageIndex);
+      let relY = 0.5;
+      let relX = 0.5;
+      if (oldLayout && oldLayout.height > 0 && oldLayout.width > 0) {
+        relY = Math.max(0, Math.min(1, (centerScrollerY - oldLayout.top) / oldLayout.height));
+        relX = Math.max(0, Math.min(1, (centerScrollerX - oldLayout.left) / oldLayout.width));
+      }
+
+      store.beginZoomAdjust();
+      try {
+        store.setZoom(finalZoom);
+        const newLayout = viewportManager.getLayout(anchorPageIndex);
+        if (newLayout) {
+          this._scrollContainer.scrollTop = Math.max(0, newLayout.top + relY * newLayout.height - viewH / 2);
+          this._scrollContainer.scrollLeft = Math.max(0, newLayout.left + relX * newLayout.width - viewW / 2);
+        }
+      } finally {
+        store.endZoomAdjust();
+      }
+      viewportManager.handleScroll(true);
     } else {
       // Net-zero gesture: restore the unscaled box, then one clean pass so
       // preview-era mounts settle (no eviction happened mid-preview by design).
@@ -999,8 +1053,16 @@ class VeditorApp {
         this._scrollContainer.scrollTop = this._handPan.scrollT - (e.clientY - this._handPan.startY);
         return;
       }
+      if (!pointerHandler.isPointerDown) {
+        pointerHandler.handleHover(e, pageIndex, canvas);
+        return;
+      }
       e.preventDefault();
       pointerHandler.handlePointerMove(e, pageIndex, canvas, onRepaint);
+    });
+
+    canvas.addEventListener('pointerleave', () => {
+      floatingPropsBar?.setHoverState(false);
     });
 
     canvas.addEventListener('pointerup', (e) => {

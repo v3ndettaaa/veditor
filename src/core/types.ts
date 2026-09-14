@@ -94,9 +94,11 @@ export interface PenAnnotation extends BaseAnnotation {
   color: string;
   strokeWidth: number;
   smoothing?: boolean;
+  strokeSmoothing?: 'none' | 'subtle' | 'medium' | 'high';
   taper?: boolean;
   pressureEnabled?: boolean;
   pressureCurve?: 'linear' | 'soft' | 'firm' | 'exponential';
+  pressureStrength?: 'light' | 'balanced' | 'strong';
 }
 
 export interface HighlighterAnnotation extends BaseAnnotation {
@@ -330,6 +332,8 @@ export interface ToolSettings {
   highlighterBlendMode: 'multiply' | 'source-over';
   highlighterStraightLine: boolean;
   highlighterTipShape: 'chisel' | 'round';
+  highlighterOpacity: number;
+  highlighterCursor: 'rectangle' | 'chisel' | 'circle' | 'crosshair' | 'dot';
   eraserMode: EraserMode;
   eraserWidth: number;
   shapeColor: string;
@@ -355,6 +359,7 @@ export interface ToolSettings {
   stampPreset: string;
   redactionColor: string;
   stickyPaper: PaperPattern;
+  stickyColor: string;
 }
 
 export interface AppSettings {

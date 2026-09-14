@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { selectionManager, transformAnnotation } from '../src/annotations/selection';
+import { selectionManager, transformAnnotation, getAnnotationSelectionBox } from '../src/annotations/selection';
 import { stickyNoteTool } from '../src/annotations/tools/sticky-note';
 import type { StickyNoteAnnotation } from '../src/core/types';
 
@@ -65,5 +65,23 @@ describe('sticky notes', () => {
     const n = note();
     expect(selectionManager.findAnnotationAtPoint({ x: 150, y: 150 }, [n])?.id).toBe('n1');
     expect(selectionManager.findAnnotationAtPoint({ x: 10, y: 10 }, [n])).toBeNull();
+  });
+
+  it('selects icon badge when collapsed and full card box when expanded', () => {
+    const n = note();
+    n.collapsed = true;
+    const selBox = getAnnotationSelectionBox(n);
+    // Anchor is { x: 100, y: 100 }
+    expect(selBox.width).toBe(26);
+    expect(selBox.height).toBe(26);
+    expect(selBox.x).toBe(100 - 13);
+    expect(selBox.y).toBe(100 - 13);
+
+    n.collapsed = false;
+    const expandedBox = getAnnotationSelectionBox(n);
+    expect(expandedBox.width).toBe(180);
+    expect(expandedBox.height).toBe(140);
+    expect(expandedBox.x).toBe(100);
+    expect(expandedBox.y).toBe(100);
   });
 });

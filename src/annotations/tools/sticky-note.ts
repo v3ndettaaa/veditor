@@ -172,50 +172,87 @@ export class StickyNoteTool {
     ctx.restore();
   }
 
-  /** Collapsed pin badge at the anchor point. */
+  /** Stylish folded-note badge at the anchor point. */
   public renderPin(ctx: CanvasRenderingContext2D, ann: StickyNoteAnnotation, scale: number = 1.0): void {
-    const r = STICKY_PIN_RADIUS;
     ctx.save();
     ctx.scale(scale, scale);
     const { x, y } = ann.anchor;
-    ctx.shadowColor = 'rgba(15,23,42,0.3)';
-    ctx.shadowBlur = 6;
+    const size = 26;
+    const half = size / 2;
+    const bx = x - half;
+    const by = y - half;
+
+    // Soft drop shadow
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
+    ctx.shadowBlur = 8;
     ctx.shadowOffsetY = 2;
-    ctx.fillStyle = '#fbbf24';
+
+    // Rounded rectangle card badge
+    const color = ann.paper?.paperColor || '#fef08a';
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(x, y - r * 0.4, r, 0, Math.PI * 2);
+    if ((ctx as any).roundRect) {
+      (ctx as any).roundRect(bx, by, size, size, 5);
+    } else {
+      ctx.rect(bx, by, size, size);
+    }
     ctx.fill();
+
+    // Reset shadow for crisp inner details
     ctx.shadowColor = 'transparent';
-    // Pin needle.
-    ctx.fillStyle = '#b45309';
+
+    // Stylish folded corner at top-right
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.14)';
     ctx.beginPath();
-    ctx.moveTo(x - 3, y + r * 0.5);
-    ctx.lineTo(x + 3, y + r * 0.5);
-    ctx.lineTo(x, y + r * 0.5 + 7);
+    ctx.moveTo(bx + size - 8, by);
+    ctx.lineTo(bx + size, by + 8);
+    ctx.lineTo(bx + size - 8, by + 8);
     ctx.closePath();
     ctx.fill();
-    // Highlight + note glyph.
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.beginPath();
-    ctx.arc(x - r * 0.3, y - r * 0.7, r * 0.28, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#92400e';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(x - 4.5, y - r * 0.4 - 1);
-    ctx.lineTo(x + 4.5, y - r * 0.4 - 1);
-    ctx.moveTo(x - 4.5, y - r * 0.4 + 2.5);
-    ctx.lineTo(x + 2, y - r * 0.4 + 2.5);
+
+    // Fold highlight edge
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.25)';
+    ctx.lineWidth = 0.8;
     ctx.stroke();
+
+    // Elegant note lines
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.4)';
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(bx + 6, by + 9);
+    ctx.lineTo(bx + size - 10, by + 9);
+
+    ctx.moveTo(bx + 6, by + 14);
+    ctx.lineTo(bx + size - 6, by + 14);
+
+    ctx.moveTo(bx + 6, by + 19);
+    ctx.lineTo(bx + size - 11, by + 19);
+    ctx.stroke();
+
+    // Outer border
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if ((ctx as any).roundRect) {
+      (ctx as any).roundRect(bx, by, size, size, 5);
+    } else {
+      ctx.rect(bx, by, size, size);
+    }
+    ctx.stroke();
+
     ctx.restore();
   }
 
-  /** Hit test: pin circle when collapsed, card box when expanded. */
+  /** Hit test: badge when collapsed, card box when expanded. */
   public hitTest(pt: Point, ann: StickyNoteAnnotation): boolean {
+    const dx = pt.x - ann.anchor.x;
+    const dy = pt.y - ann.anchor.y;
+    if (Math.hypot(dx, dy) <= 16) {
+      return true;
+    }
     if (ann.collapsed) {
-      const dx = pt.x - ann.anchor.x;
-      const dy = pt.y - (ann.anchor.y - STICKY_PIN_RADIUS * 0.4);
-      return Math.hypot(dx, dy) <= STICKY_PIN_RADIUS + 3;
+      return false;
     }
     const b = ann.box;
     return pt.x >= b.x && pt.x <= b.x + b.width && pt.y >= b.y && pt.y <= b.y + b.height;

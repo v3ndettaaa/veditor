@@ -288,6 +288,31 @@ export class ToolbarComponent {
                 <button class="mode-toggle-btn hl-tip-btn ${s.highlighterTipShape === 'round' ? 'active' : ''}" data-hl-tip="round">Round</button>
                 <button class="mode-toggle-btn hl-tip-btn ${s.highlighterTipShape === 'chisel' ? 'active' : ''}" data-hl-tip="chisel">Chisel</button>
               </div>
+
+              <div class="sub-row-separator"></div>
+
+              <div class="sub-row-section">
+                <span class="sub-row-label">Opacity</span>
+                <div class="size-pills-group">
+                  ${[0.25, 0.45, 0.7].map(op => `
+                    <button class="size-pill hl-op-pill ${Math.abs((s.highlighterOpacity ?? 0.45) - op) < 0.05 ? 'active' : ''}" data-hl-opacity="${op}">${Math.round(op * 100)}%</button>
+                  `).join('')}
+                </div>
+                <div class="size-slider-wrapper">
+                  <input type="number" id="hover-hl-opacity-input" class="size-readout size-type-input hl-op-readout"
+                         min="10" max="90" step="5" value="${Math.round((s.highlighterOpacity ?? 0.45) * 100)}" title="Type opacity (10-90%)" aria-label="Highlighter opacity">
+                </div>
+              </div>
+
+              <div class="sub-row-separator"></div>
+
+              <div class="sub-row-section">
+                <span class="sub-row-label">Cursor</span>
+                <button class="mode-toggle-btn hl-cursor-btn ${(s.highlighterCursor || 'rectangle') === 'rectangle' ? 'active' : ''}" data-hl-cursor="rectangle">Rect</button>
+                <button class="mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'chisel' ? 'active' : ''}" data-hl-cursor="chisel">Chisel</button>
+                <button class="mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'circle' ? 'active' : ''}" data-hl-cursor="circle">Circle</button>
+                <button class="mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'crosshair' ? 'active' : ''}" data-hl-cursor="crosshair">Cross</button>
+              </div>
             </div>
           </div>
 
@@ -495,12 +520,32 @@ export class ToolbarComponent {
           <div class="tool-btn-wrapper ${this._pinnedTool === 'sticky-note' ? 'is-pinned' : ''}" data-wrapper-tool="sticky-note">
             <button class="tool-btn ${activeTool === 'sticky-note' ? 'active' : ''}" data-tool="sticky-note" title="${t('tools.stickyNote')} (U)">
               ${getIconSvg('stickyNote')}
+              <span class="tool-color-dot sticky-dot" style="background-color:${s.stickyColor || '#fef08a'};"></span>
             </button>
             <div class="tool-hover-card">
-              <span class="sub-row-label">Paper</span>
-              <button class="mode-toggle-btn ${s.stickyPaper === 'blank' ? 'active' : ''}" data-sticky-paper="blank">Blank</button>
-              <button class="mode-toggle-btn ${s.stickyPaper === 'grid' ? 'active' : ''}" data-sticky-paper="grid">Grid</button>
-              <button class="mode-toggle-btn ${s.stickyPaper === 'lined' ? 'active' : ''}" data-sticky-paper="lined">Lined</button>
+              <div class="sub-row-section">
+                <span class="sub-row-label">Color</span>
+                <div class="color-swatches-group">
+                  ${['#fef08a', '#bbf7d0', '#bae6fd', '#fbcfe8', '#e9d5ff', '#ffffff', '#fed7aa'].map(c => `
+                    <button type="button" class="color-swatch sticky-swatch ${(s.stickyColor || '#fef08a').toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+                            style="background-color:${c};" data-sticky-color="${c}"
+                            title="Sticky note ${c}" aria-label="Sticky note ${c}"
+                            aria-pressed="${(s.stickyColor || '#fef08a').toLowerCase() === c.toLowerCase()}"></button>
+                  `).join('')}
+                  <div class="color-picker-wrapper" title="Custom sticky note color">
+                    <input type="color" id="hover-sticky-color-picker" class="color-picker-input" value="${s.stickyColor || '#fef08a'}">
+                  </div>
+                </div>
+              </div>
+
+              <div class="sub-row-separator"></div>
+
+              <div class="sub-row-section">
+                <span class="sub-row-label">Paper</span>
+                <button class="mode-toggle-btn sticky-paper-btn ${s.stickyPaper === 'blank' ? 'active' : ''}" data-sticky-paper="blank">Blank</button>
+                <button class="mode-toggle-btn sticky-paper-btn ${s.stickyPaper === 'grid' ? 'active' : ''}" data-sticky-paper="grid">Grid</button>
+                <button class="mode-toggle-btn sticky-paper-btn ${s.stickyPaper === 'lined' ? 'active' : ''}" data-sticky-paper="lined">Lined</button>
+              </div>
             </div>
           </div>
         </div>
@@ -630,7 +675,10 @@ export class ToolbarComponent {
 
     // 2. Highlighter Indicators
     const hlDot = this._container.querySelector<HTMLElement>('.hl-dot');
-    if (hlDot) hlDot.style.backgroundColor = s.highlighterColor;
+    if (hlDot) {
+      hlDot.style.backgroundColor = s.highlighterColor;
+      hlDot.style.opacity = String(s.highlighterOpacity ?? 0.45);
+    }
 
     this._container.querySelectorAll('[data-hl-color]').forEach(el => {
       const c = el.getAttribute('data-hl-color');
@@ -661,7 +709,41 @@ export class ToolbarComponent {
       el.classList.toggle('active', tip === (s.highlighterTipShape || 'round'));
     });
 
-    // 3. Eraser Indicators
+    this._container.querySelectorAll('[data-hl-opacity]').forEach(el => {
+      const op = parseFloat(el.getAttribute('data-hl-opacity') || '0.45');
+      el.classList.toggle('active', Math.abs((s.highlighterOpacity ?? 0.45) - op) < 0.05);
+    });
+
+    const hlOpReadout = this._container.querySelector<HTMLInputElement>('.hl-op-readout');
+    if (hlOpReadout && document.activeElement !== hlOpReadout) {
+      hlOpReadout.value = String(Math.round((s.highlighterOpacity ?? 0.45) * 100));
+    }
+
+    this._container.querySelectorAll('[data-hl-cursor]').forEach(el => {
+      const cur = el.getAttribute('data-hl-cursor');
+      el.classList.toggle('active', cur === (s.highlighterCursor || 'rectangle'));
+    });
+
+    // 3. Sticky Note Indicators
+    const stickyDot = this._container.querySelector<HTMLElement>('.sticky-dot');
+    if (stickyDot) stickyDot.style.backgroundColor = s.stickyColor || '#fef08a';
+
+    this._container.querySelectorAll('[data-sticky-color]').forEach(el => {
+      const c = el.getAttribute('data-sticky-color');
+      el.classList.toggle('active', !!c && c.toLowerCase() === (s.stickyColor || '#fef08a').toLowerCase());
+    });
+
+    const stickyPicker = this._container.querySelector<HTMLInputElement>('#hover-sticky-color-picker');
+    if (stickyPicker && stickyPicker.value !== (s.stickyColor || '#fef08a')) {
+      stickyPicker.value = s.stickyColor || '#fef08a';
+    }
+
+    this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
+      const p = el.getAttribute('data-sticky-paper');
+      el.classList.toggle('active', p === (s.stickyPaper || 'lined'));
+    });
+
+    // 4. Eraser Indicators
     this._container.querySelectorAll('[data-eraser-mode]').forEach(el => {
       const m = el.getAttribute('data-eraser-mode');
       el.classList.toggle('active', m === s.eraserMode);
@@ -1025,6 +1107,26 @@ export class ToolbarComponent {
       });
     });
 
+    this._container.querySelectorAll('[data-hl-opacity]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const op = parseFloat(el.getAttribute('data-hl-opacity') || '0.45');
+        store.updateToolSettings({ highlighterOpacity: op });
+        this.updateIndicators();
+      });
+    });
+
+    this._container.querySelectorAll('[data-hl-cursor]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cur = el.getAttribute('data-hl-cursor') as any;
+        if (cur) {
+          store.updateToolSettings({ highlighterCursor: cur });
+          this.updateIndicators();
+        }
+      });
+    });
+
     // Eraser listeners
     this._container.querySelectorAll('[data-eraser-mode]').forEach(el => {
       el.addEventListener('click', (e) => {
@@ -1086,6 +1188,17 @@ export class ToolbarComponent {
         this.updateIndicators();
       } else {
         el.value = String(w);
+      }
+    });
+
+    bindTyped('#hover-hl-opacity-input', (el) => {
+      const pct = Math.round(clampTypedNumber(el.value, 10, 90, Math.round((store.toolSettings.highlighterOpacity ?? 0.45) * 100)));
+      const op = pct / 100;
+      if (Math.abs((store.toolSettings.highlighterOpacity ?? 0.45) - op) >= 0.01) {
+        store.updateToolSettings({ highlighterOpacity: op });
+        this.updateIndicators();
+      } else {
+        el.value = String(pct);
       }
     });
 
@@ -1393,6 +1506,26 @@ export class ToolbarComponent {
       });
     });
 
+    // Sticky-note color listeners (new cards + selected notes)
+    this._container.querySelectorAll('[data-sticky-color]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const color = el.getAttribute('data-sticky-color');
+        if (!color) return;
+        store.updateToolSettings({ stickyColor: color });
+        this.applyStickyColorToSelected(color);
+        this.updateIndicators();
+      });
+    });
+
+    const stickyColorPicker = this._container.querySelector<HTMLInputElement>('#hover-sticky-color-picker');
+    stickyColorPicker?.addEventListener('input', (e) => {
+      const color = (e.target as HTMLInputElement).value;
+      store.updateToolSettings({ stickyColor: color });
+      this.applyStickyColorToSelected(color);
+      this.updateIndicators();
+    });
+
     // Sticky-note paper listeners (new cards + selected notes)
     this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
       el.addEventListener('click', (e) => {
@@ -1407,15 +1540,10 @@ export class ToolbarComponent {
             for (const ann of doc.annotations[pageIdx]) {
               if (ann.type === 'sticky-note' && ids.has(ann.id)) {
                 const prev = ann as any;
-                const paperColors: Record<string, { paperColor: string; lineColor: string }> = {
-                  blank: { paperColor: '#fef9c3', lineColor: '#d9c66c' },
-                  grid: { paperColor: '#fef9c3', lineColor: '#d9c66c' },
-                  lined: { paperColor: '#fef9c3', lineColor: '#d9c66c' }
-                };
-                const c = paperColors[pattern] || paperColors.lined;
+                const cPaperColor = store.toolSettings.stickyColor || prev.paper?.paperColor || '#fef08a';
                 const next = {
                   ...prev,
-                  paper: { ...(prev as any).paper, pattern, paperColor: c.paperColor, lineColor: c.lineColor },
+                  paper: { ...(prev as any).paper, pattern, paperColor: cPaperColor },
                   updatedAt: Date.now()
                 };
                 history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
@@ -1441,5 +1569,24 @@ export class ToolbarComponent {
       }
       store.clearSelection();
     });
+  }
+
+  private applyStickyColorToSelected(color: string): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+    const ids = new Set(store.selectedAnnotationIds);
+    for (const pageIdx in doc.annotations) {
+      for (const ann of doc.annotations[pageIdx]) {
+        if (ann.type === 'sticky-note' && ids.has(ann.id)) {
+          const prev = ann as any;
+          const next = {
+            ...prev,
+            paper: { ...(prev as any).paper, paperColor: color },
+            updatedAt: Date.now()
+          };
+          history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+        }
+      }
+    }
   }
 }

@@ -29,8 +29,10 @@ import {
   rotatePoint,
   boxCenter,
   BoxTransform,
-  HandleType
+  HandleType,
+  getAnnotationSelectionBox
 } from '../annotations/selection';
+import { floatingPropsBar } from '../ui/components/floating-props';
 
 export class PointerHandler {
   private _isPointerDown: boolean = false;
@@ -339,7 +341,8 @@ export class PointerHandler {
           this.lensWidth(tSettings.penWidth),
           tSettings.pressureCurve,
           tSettings.pressureSensitivityEnabled !== false,
-          tSettings.pressureStrength || 'balanced'
+          tSettings.pressureStrength || 'balanced',
+          tSettings.strokeSmoothing || 'medium'
         );
         this.startHoldTimer({ x: pt.x, y: pt.y });
         break;
@@ -370,7 +373,8 @@ export class PointerHandler {
           this.lensWidth(tSettings.highlighterWidth),
           tSettings.highlighterBlendMode,
           tSettings.highlighterStraightLine,
-          tSettings.highlighterTipShape
+          tSettings.highlighterTipShape,
+          tSettings.highlighterOpacity ?? 0.45
         );
         break;
       }
@@ -551,7 +555,7 @@ export class PointerHandler {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         // 1. Grab a transform handle or the selection body to start a drag.
         if (selected.length > 0 && !additive) {
-          const merged = mergeBoundingBoxes(selected.map(a => a.box));
+          const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
           // Lone rotated annotations hit-test in their rotated frame.
           const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
           const hit = selectionManager.hitTestHandles(
@@ -681,7 +685,7 @@ export class PointerHandler {
                 const orig = [...drag.originals.values()][0];
                 if (orig.rotation) effLast = rotatePoint(lastPt, boxCenter(drag.merged), -orig.rotation);
               }
-              const t = this.selectTransformFor(drag, effLast);
+              const t = this.selectTransformFor(drag, effLast, shiftKey);
               doc.annotations[pageIndex] = doc.annotations[pageIndex].map(a => {
                 const orig = drag.originals.get(a.id);
                 return orig ? (transformAnnotation(orig, t) as typeof a) : a;
@@ -1018,6 +1022,7 @@ export class PointerHandler {
           // Open for inner editing right away + select for transform handles.
           store.setEditingNote(note.id);
           store.selectAnnotation(note.id);
+          store.setActiveTool('select');
         }
         break;
       }
@@ -1138,7 +1143,8 @@ export class PointerHandler {
    */
   private selectTransformFor(
     drag: NonNullable<PointerHandler['_selectDrag']>,
-    cur: Point
+    cur: Point,
+    shiftKey: boolean = false
   ): BoxTransform {
     const m = drag.merged;
     if (drag.mode === 'move') {
@@ -1159,10 +1165,30 @@ export class PointerHandler {
     let x2 = m.x + m.width;
     let y2 = m.y + m.height;
     const h = drag.handle;
-    if (h.includes('e')) x2 += dx;
-    if (h.includes('s')) y2 += dy;
-    if (h.includes('w')) x1 += dx;
-    if (h.includes('n')) y1 += dy;
+
+    if (shiftKey && (h === 'nw' || h === 'ne' || h === 'se' || h === 'sw')) {
+      const origAspect = m.width > 0 && m.height > 0 ? m.width / m.height : 1;
+      const primaryDelta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+      if (h === 'se') {
+        x2 = m.x + m.width + primaryDelta;
+        y2 = m.y + (x2 - m.x) / origAspect;
+      } else if (h === 'nw') {
+        x1 = m.x + primaryDelta;
+        y1 = (m.y + m.height) - (m.x + m.width - x1) / origAspect;
+      } else if (h === 'ne') {
+        x2 = m.x + m.width + primaryDelta;
+        y1 = (m.y + m.height) - (x2 - m.x) / origAspect;
+      } else if (h === 'sw') {
+        x1 = m.x + primaryDelta;
+        y2 = m.y + (m.x + m.width - x1) / origAspect;
+      }
+    } else {
+      if (h.includes('e')) x2 += dx;
+      if (h.includes('s')) y2 += dy;
+      if (h.includes('w')) x1 += dx;
+      if (h.includes('n')) y1 += dy;
+    }
+
     // Enforce minimum size by clamping the dragged edge.
     if (x2 - x1 < 8) {
       if (h.includes('w')) x1 = x2 - 8; else x2 = x1 + 8;
@@ -1310,6 +1336,36 @@ export class PointerHandler {
 
   public isStrokeActive(): boolean {
     return this._isPointerDown;
+  }
+
+  get isPointerDown(): boolean {
+    return this._isPointerDown;
+  }
+
+  public handleHover(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): void {
+    if (store.selectedAnnotationIds.size === 0 || !floatingPropsBar) return;
+
+    const doc = store.activeDocument;
+    if (!doc) return;
+    const pageAnns = doc.annotations[pageIndex] || [];
+    const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+    if (selected.length === 0) return;
+
+    const pt = this.getPointInPage(e, canvas);
+    const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
+    const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
+    const hit = selectionManager.hitTestHandles(
+      pt, merged, store.zoom * (window.devicePixelRatio || 1), singleRot
+    );
+
+    const isNearOrOver = hit !== null || (
+      pt.x >= merged.x - 10 &&
+      pt.x <= merged.x + merged.width + 10 &&
+      pt.y >= merged.y - 10 &&
+      pt.y <= merged.y + merged.height + 10
+    );
+
+    floatingPropsBar.setHoverState(isNearOrOver);
   }
 
   /**

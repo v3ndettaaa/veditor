@@ -72,6 +72,8 @@ class StateStore {
     highlighterBlendMode: 'source-over',
     highlighterStraightLine: false,
     highlighterTipShape: 'round',
+    highlighterOpacity: 0.45,
+    highlighterCursor: 'rectangle',
     eraserMode: 'stroke',
     eraserWidth: 24,
     shapeColor: '#ef4444',
@@ -96,7 +98,8 @@ class StateStore {
     drawingCursor: 'pen',
     stampPreset: 'APPROVED',
     redactionColor: '#000000',
-    stickyPaper: 'lined'
+    stickyPaper: 'lined',
+    stickyColor: '#fef08a'
   };
 
   // App Settings
@@ -492,9 +495,12 @@ class StateStore {
       drawingCursor: 'pen',
       highlighterStraightLine: false,
       highlighterTipShape: 'round',
+      highlighterOpacity: 0.45,
+      highlighterCursor: 'rectangle',
       stampPreset: 'APPROVED',
       redactionColor: '#000000',
-    stickyPaper: 'lined'
+      stickyPaper: 'lined',
+      stickyColor: '#fef08a'
     };
     this._appSettings = {
       theme: 'dark',
@@ -521,7 +527,6 @@ class StateStore {
   // Selection
   public setSelectedAnnotationIds(ids: string[]) {
     this._selectedAnnotationIds = new Set(ids);
-    this._propertiesPanelOpen = ids.length > 0;
     this.notify();
   }
 
@@ -535,7 +540,6 @@ class StateStore {
     } else {
       this._selectedAnnotationIds = new Set([id]);
     }
-    this._propertiesPanelOpen = this._selectedAnnotationIds.size > 0;
     this.notify();
   }
 

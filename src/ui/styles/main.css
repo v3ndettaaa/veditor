@@ -948,28 +948,44 @@ body.invert-pdf-document .pdf-page-canvas {
   cursor: crosshair;
 }
 
-.scratchpad-resize {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  width: 16px;
-  height: 16px;
-  cursor: nwse-resize;
-  border-right: 2px solid var(--text-muted);
-  border-bottom: 2px solid var(--text-muted);
-  border-bottom-right-radius: 4px;
-  opacity: 0.7;
-  z-index: 2;
-}
-
 .scratchpad-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 6px 8px;
+  padding-inline-end: 24px;
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
+}
+
+.scratchpad-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 3px;
+  color: var(--text-muted);
+  opacity: 0.75;
+  transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+  user-select: none;
+  touch-action: none;
+  z-index: 10;
+}
+
+.scratchpad-resize:hover {
+  color: var(--accent-primary, #6366f1);
+  opacity: 1;
+}
+
+.scratchpad-resize:active {
+  color: var(--accent-primary, #6366f1);
+  opacity: 1;
 }
 
 .scratchpad-widths {
@@ -1449,3 +1465,76 @@ input.prop-hex-input:focus {
   from { transform: translateY(10px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* Centered Glassmorphic PDF Loading Overlay */
+.pdf-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 1;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.22s;
+  pointer-events: all;
+}
+
+.pdf-loading-overlay.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pdf-loading-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 26px;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  max-width: 90vw;
+  animation: loadingCardPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes loadingCardPop {
+  from { transform: scale(0.94) translateY(6px); opacity: 0; }
+  to { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+.pdf-loading-spinner-ring {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: toastSpin 0.75s linear infinite;
+}
+
+.pdf-loading-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pdf-loading-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.pdf-loading-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+

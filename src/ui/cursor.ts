@@ -60,6 +60,49 @@ function dotCursor(diameter: number, ink: string): string {
   return svgCursor(svg, size);
 }
 
+/** A rectangular box matching the highlighter width and text coverage. */
+function rectangleCursor(hPx: number, ink: string, alpha: number): string {
+  const h = Math.max(6, Math.min(MAX_CURSOR_PX - 8, hPx));
+  const w = Math.max(12, Math.min(MAX_CURSOR_PX - 8, Math.round(h * 0.8)));
+  const sizeW = Math.ceil(w) + 8;
+  const sizeH = Math.ceil(h) + 8;
+  const x = 4;
+  const y = 4;
+  const cx = sizeW / 2;
+  const cy = sizeH / 2;
+  const fillAlpha = Math.min(0.8, Math.max(0.12, alpha));
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizeW}" height="${sizeH}" viewBox="0 0 ${sizeW} ${sizeH}">` +
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="${ink}" fill-opacity="${fillAlpha}" stroke="#ffffff" stroke-width="2.5" opacity="0.9"/>` +
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="none" stroke="#0f172a" stroke-width="1.2"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="1" fill="#0f172a"/>` +
+    `</svg>`;
+  return svgCursor(svg, sizeW);
+}
+
+/** A slanted chisel tip marker cursor. */
+function chiselCursor(hPx: number, ink: string, alpha: number): string {
+  const h = Math.max(8, Math.min(MAX_CURSOR_PX - 10, hPx));
+  const w = Math.max(8, Math.min(MAX_CURSOR_PX - 10, Math.round(h * 0.6)));
+  const sizeW = Math.ceil(w) + 8;
+  const sizeH = Math.ceil(h) + 8;
+  const cx = sizeW / 2;
+  const cy = sizeH / 2;
+  const fillAlpha = Math.min(0.8, Math.max(0.12, alpha));
+  const p1 = `${cx - w / 2},${cy + h / 2}`;
+  const p2 = `${cx + w / 2},${cy + h / 2 - 4}`;
+  const p3 = `${cx + w / 2},${cy - h / 2}`;
+  const p4 = `${cx - w / 2},${cy - h / 2 + 4}`;
+  const pts = `${p1} ${p2} ${p3} ${p4}`;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizeW}" height="${sizeH}" viewBox="0 0 ${sizeW} ${sizeH}">` +
+    `<polygon points="${pts}" fill="${ink}" fill-opacity="${fillAlpha}" stroke="#ffffff" stroke-width="2.5" opacity="0.9"/>` +
+    `<polygon points="${pts}" fill="none" stroke="#0f172a" stroke-width="1.2"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="1" fill="#0f172a"/>` +
+    `</svg>`;
+  return svgCursor(svg, sizeW);
+}
+
 /** Fixed-size pen nib. A nib points at the cursor, so it doesn't scale. */
 function penCursor(): string {
   const svg =
@@ -117,6 +160,26 @@ export function drawingCursorValue(
   // the on-screen size (width * baseZoom), not width * zoom.
   const effectiveZoom = store.zoomLensActive ? (store.zoomLensBase ?? zoom) : zoom;
   const onScreen = width * effectiveZoom;
+
+  if (tool === 'highlighter') {
+    const s = store.toolSettings;
+    const hlCursor = s.highlighterCursor || 'rectangle';
+    const opacity = s.highlighterOpacity ?? 0.45;
+    const color = s.highlighterColor || '#facc15';
+    switch (hlCursor) {
+      case 'rectangle':
+        return rectangleCursor(onScreen, color, opacity);
+      case 'chisel':
+        return chiselCursor(onScreen, color, opacity);
+      case 'circle':
+        return ringCursor(onScreen);
+      case 'dot':
+        return dotCursor(onScreen, color);
+      case 'crosshair':
+      default:
+        return 'crosshair';
+    }
+  }
 
   switch (style) {
     case 'circle': return ringCursor(onScreen);

@@ -3,7 +3,7 @@
  * Coordinates multi-layer rendering, background paper patterns, and tool dispatching.
  */
 
-import { Annotation, BackgroundPattern, ShapeAnnotation } from '../core/types';
+import { Annotation, BackgroundPattern, ShapeAnnotation, PenAnnotation } from '../core/types';
 
 /**
  * Whether a shape paints its outline stroke. Lines and arrows ARE their
@@ -177,7 +177,10 @@ export class AnnotationEngine {
           penAnn.strokeWidth,
           penAnn.pressureCurve || 'linear',
           false,
-          penAnn.pressureEnabled !== false
+          penAnn.pressureEnabled !== false,
+          penAnn.pressureStrength || 'balanced',
+          'round',
+          penAnn.strokeSmoothing || 'medium'
         );
         ctx.restore();
         break;

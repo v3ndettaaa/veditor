@@ -15,6 +15,7 @@ export class HighlighterTool {
   private _blendMode: 'multiply' | 'source-over' = 'multiply';
   private _straightLine: boolean = false;
   private _tipShape: 'chisel' | 'round' = 'round';
+  private _opacity: number = 0.45;
 
   public start(
     point: StrokePoint,
@@ -23,13 +24,15 @@ export class HighlighterTool {
     width: number,
     blendMode: 'multiply' | 'source-over' = 'multiply',
     straightLine: boolean = false,
-    tipShape: 'chisel' | 'round' = 'round'
+    tipShape: 'chisel' | 'round' = 'round',
+    opacity: number = 0.45
   ) {
     this._activePoints = [point];
     this._pageIndex = pageIndex;
+    this._opacity = opacity;
     // Always store a translucent color; toolbar swatches and the native color
     // picker yield opaque hex values which would otherwise paint solid blocks.
-    this._color = normalizeHighlighterColor(color);
+    this._color = normalizeHighlighterColor(color, opacity);
     this._width = width;
     // `multiply` cannot blend across the separate overlay/PDF canvases, so
     // force normal alpha compositing for predictable translucent highlights.
@@ -53,6 +56,13 @@ export class HighlighterTool {
         this._activePoints = [p0, { ...point, x: p0.x }];
       }
     } else {
+      const len = this._activePoints.length;
+      if (len > 0) {
+        const prev = this._activePoints[len - 1];
+        const dx = point.x - prev.x;
+        const dy = point.y - prev.y;
+        if (dx * dx + dy * dy < 1.0) return;
+      }
       this._activePoints.push(point);
     }
   }
@@ -88,12 +98,12 @@ export class HighlighterTool {
       type: 'highlighter',
       box,
       points: [...this._activePoints],
-      color: normalizeHighlighterColor(this._color),
+      color: normalizeHighlighterColor(this._color, this._opacity),
       strokeWidth: this._width,
       blendMode: 'source-over',
       straightLine: this._straightLine,
       tipShape: this._tipShape,
-      opacity: 1.0,
+      opacity: this._opacity,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };

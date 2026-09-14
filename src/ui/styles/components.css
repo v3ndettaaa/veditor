@@ -1074,3 +1074,154 @@ input[type="range"] {
 .thumbnail-card.is-active .thumbnail-label {
   color: var(--text-primary);
 }
+
+/* Floating Contextual Properties Toolbar */
+.floating-props-bar {
+  position: absolute;
+  z-index: 1200;
+  transform: translate(-50%, 0);
+  transition: opacity 0.16s cubic-bezier(0.16, 1, 0.3, 1), transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.16s;
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.floating-props-bar.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transform: translate(-50%, 4px);
+}
+
+.props-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-surface-elevated, #16161a);
+  border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.16));
+  border-radius: var(--radius-full);
+  box-shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.props-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.props-bar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border-subtle);
+  margin: 0 2px;
+}
+
+.props-color-bubble-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.props-color-bubble {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  display: block;
+}
+
+.props-native-color-picker {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.props-swatch-strip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.props-mini-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s;
+}
+
+.props-mini-swatch:hover {
+  transform: scale(1.25);
+}
+
+.props-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+}
+
+.props-icon-btn:hover {
+  background: var(--hover-surface);
+  color: var(--text-primary);
+}
+
+.props-icon-btn.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.props-icon-btn.is-danger:hover {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.props-size-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 28px;
+  text-align: center;
+}
+
+.props-pill-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.props-pill-btn:hover {
+  background: var(--hover-surface);
+  color: var(--text-primary);
+}
+
+.props-pill-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateStrokeWidth, generateSmoothSegments } from '../src/annotations/spline';
+import { calculateStrokeWidth, generateSmoothSegments, smoothStrokePoints } from '../src/annotations/spline';
 import { PressureEngine } from '../src/input/pressure';
 
 describe('Spline & Pressure Engine', () => {
@@ -70,5 +70,46 @@ describe('Spline & Pressure Engine', () => {
 
     // Strong dynamic range allows significantly thinner strokes at zero pressure
     expect(wStrongMin).toBeLessThan(wLightMin);
+  });
+
+  it('filters micro-jitter and smoothes pressure with smoothStrokePoints', () => {
+    const rawPoints = [
+      { x: 0, y: 0, pressure: 0.1 },
+      { x: 0.1, y: 0.1, pressure: 0.8 }, // jitter (<0.8px away) - should be filtered
+      { x: 10, y: 10, pressure: 0.2 },
+      { x: 20, y: 20, pressure: 0.9 },
+      { x: 30, y: 30, pressure: 0.4 }
+    ];
+
+    const smoothed = smoothStrokePoints(rawPoints, 'medium');
+    expect(smoothed.length).toBeLessThan(rawPoints.length);
+    expect(smoothed[0].x).toBe(0);
+    expect(smoothed[smoothed.length - 1].x).toBe(30);
+
+    // Pressure should not have wild jumps
+    for (let i = 1; i < smoothed.length - 1; i++) {
+      expect(smoothed[i].pressure).toBeGreaterThanOrEqual(0.1);
+      expect(smoothed[i].pressure).toBeLessThanOrEqual(0.9);
+    }
+  });
+
+  it('clamps bezier control points to at most half chord distance to prevent spikes and loops', () => {
+    // Sharp turn / hairpin test that previously blew up Catmull-Rom tangents
+    const points = [
+      { x: 0, y: 0, pressure: 0.5 },
+      { x: 100, y: 0, pressure: 0.5 },
+      { x: 101, y: 1, pressure: 0.5 }, // very close corner point
+      { x: 0, y: 100, pressure: 0.5 }
+    ];
+
+    const segments = generateSmoothSegments(points, 4, 'linear');
+    for (const seg of segments) {
+      const chord = Math.hypot(seg.p1.x - seg.p0.x, seg.p1.y - seg.p0.y);
+      const cp1Dist = Math.hypot(seg.cp1.x - seg.p0.x, seg.cp1.y - seg.p0.y);
+      const cp2Dist = Math.hypot(seg.cp2.x - seg.p1.x, seg.cp2.y - seg.p1.y);
+      // Control points must never overshoot chord * 0.51 (with float tolerance)
+      expect(cp1Dist).toBeLessThanOrEqual(chord * 0.501 + 0.001);
+      expect(cp2Dist).toBeLessThanOrEqual(chord * 0.501 + 0.001);
+    }
   });
 });

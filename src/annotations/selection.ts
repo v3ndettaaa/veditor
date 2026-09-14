@@ -42,6 +42,31 @@ export function cloneAnnotation<T extends Annotation>(ann: T): T {
   return JSON.parse(JSON.stringify(ann)) as T;
 }
 
+/**
+ * Returns the selection box for an annotation.
+ * For collapsed sticky notes, returns the pin badge anchor.
+ * For expanded sticky notes and all other annotations, returns the full bounding box
+ * enabling universal 8-handle resizing and rotation.
+ */
+export function getAnnotationSelectionBox(ann: Annotation): BoundingBox {
+  if (ann.type === 'sticky-note') {
+    const note = ann as any;
+    if (note.collapsed) {
+      const anchor = note.anchor || { x: ann.box.x, y: ann.box.y };
+      const size = 26;
+      return {
+        x: anchor.x - size / 2,
+        y: anchor.y - size / 2,
+        width: size,
+        height: size,
+        rotation: ann.rotation
+      };
+    }
+    return ann.box;
+  }
+  return ann.box;
+}
+
 export interface BoxTransform {
   dx: number;
   dy: number;
@@ -143,38 +168,53 @@ export class SelectionManager {
    */
   public hitTestHandles(point: Point, box: BoundingBox, scale: number = 1.0, rotation: number = 0): HandleType {
     const local = rotation ? rotatePoint(point, boxCenter(box), -rotation) : point;
-    // hs stays screen-constant (page units / scale), but the pin OFFSET must
-    // be raw page units: renderSelectionBox draws it at box.y - 24 unscaled,
-    // so dividing here moved the hit zone away from the visible pin at any
-    // zoom other than 100% and the pin could never be grabbed.
-    const hs = this._handleSize / scale;
+    // Scale handle size adaptively: on small boxes scale down from 8px to 5px so handles stay proportional
+    const minDim = Math.min(box.width, box.height) * scale;
+    const baseHs = Math.max(5, Math.min(this._handleSize, minDim / 4));
+    const hs = baseHs / scale;
     const rotDist = this._rotHandleDistance;
 
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
+    let bestHandle: HandleType | null = null;
+    let bestDist = hs * 1.5;
+
     // Rotation handle (tested in the unrotated frame like everything else)
     const rotPt: Point = { x: cx, y: box.y - rotDist };
-    if (distance(local, rotPt) <= hs * 1.5) {
-      return 'rot';
+    const dRot = distance(local, rotPt);
+    if (dRot <= hs * 1.6) {
+      bestHandle = 'rot';
+      bestDist = dRot;
     }
 
-    // 8 Corner & Edge Handles
+    // Corner handles (always active)
     const handles: Record<string, Point> = {
       nw: { x: box.x, y: box.y },
-      n: { x: cx, y: box.y },
       ne: { x: box.x + box.width, y: box.y },
-      e: { x: box.x + box.width, y: cy },
       se: { x: box.x + box.width, y: box.y + box.height },
-      s: { x: cx, y: box.y + box.height },
-      sw: { x: box.x, y: box.y + box.height },
-      w: { x: box.x, y: cy }
+      sw: { x: box.x, y: box.y + box.height }
     };
 
+    // Midpoint edge handles only if the box is wide and tall enough to prevent crowding
+    const isCompact = box.width < 36 || box.height < 36;
+    if (!isCompact) {
+      handles.n = { x: cx, y: box.y };
+      handles.e = { x: box.x + box.width, y: cy };
+      handles.s = { x: cx, y: box.y + box.height };
+      handles.w = { x: box.x, y: cy };
+    }
+
     for (const [key, pt] of Object.entries(handles)) {
-      if (distance(local, pt) <= hs * 1.2) {
-        return key as HandleType;
+      const d = distance(local, pt);
+      if (d <= hs * 1.4 && d < bestDist) {
+        bestDist = d;
+        bestHandle = key as HandleType;
       }
+    }
+
+    if (bestHandle) {
+      return bestHandle;
     }
 
     if (isPointInBox(local, box)) {
@@ -193,14 +233,13 @@ export class SelectionManager {
       const ann = annotations[i];
       if (ann.locked) continue;
       if (ann.type === 'sticky-note') {
-        // Collapsed pins live at the anchor, possibly outside the card box.
         const note = ann as any;
-        if (note.collapsed && note.anchor) {
+        if (note.anchor) {
           const dx = point.x - note.anchor.x;
-          const dy = point.y - (note.anchor.y - 11 * 0.4);
-          if (Math.hypot(dx, dy) > 14) continue;
-          return ann;
+          const dy = point.y - note.anchor.y;
+          if (Math.hypot(dx, dy) <= 16) return ann;
         }
+        if (note.collapsed) continue;
       }
       // Rotated annotations hit-test in their unrotated frame.
       const local = ann.rotation ? rotatePoint(point, boxCenter(ann.box), -ann.rotation) : point;
@@ -347,13 +386,26 @@ export class SelectionManager {
     // A lone rotated annotation gets a rotated box; groups use the merged
     // axis-aligned box.
     const rotation = annotations.length === 1 ? annotations[0].rotation || 0 : 0;
-    this.renderSelectionBox(ctx, mergeBoundingBoxes(annotations.map(a => a.box)), scale, rotation);
+    const isSingleCollapsedSticky = annotations.length === 1 && annotations[0].type === 'sticky-note' && !!(annotations[0] as any).collapsed;
+    this.renderSelectionBox(
+      ctx,
+      mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox)),
+      scale,
+      rotation,
+      isSingleCollapsedSticky
+    );
   }
 
   /**
-   * Renders selection bounding box, handles, and rotation pin on canvas.
+   * Renders selection bounding box, handles, rotation pin, and dimension badge on canvas.
    */
-  public renderSelectionBox(ctx: CanvasRenderingContext2D, box: BoundingBox, scale: number = 1.0, rotation: number = 0): void {
+  public renderSelectionBox(
+    ctx: CanvasRenderingContext2D,
+    box: BoundingBox,
+    scale: number = 1.0,
+    rotation: number = 0,
+    isIconOnly: boolean = false
+  ): void {
     ctx.save();
     ctx.scale(scale, scale);
     if (rotation) {
@@ -363,51 +415,126 @@ export class SelectionManager {
       ctx.translate(-c.x, -c.y);
     }
 
-    const hs = this._handleSize;
+    const minDim = Math.min(box.width, box.height);
+    const hs = Math.max(5, Math.min(this._handleSize, minDim / 4));
     const rotDist = this._rotHandleDistance;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
+    const isCompact = box.width < 36 || box.height < 36;
 
-    // Dashed selection border
+    // Elegant modern selection border with rounded corners
     ctx.strokeStyle = '#4f46e5';
     ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 3]);
-    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    if ((ctx as any).roundRect) {
+      (ctx as any).roundRect(box.x, box.y, box.width, box.height, 4);
+    } else {
+      ctx.rect(box.x, box.y, box.width, box.height);
+    }
+    ctx.stroke();
 
-    // Rotation stem line & handle
+    if (isIconOnly) {
+      // Icon-only selection (e.g. collapsed sticky note pin): show clean border without cluttering resize handles
+      ctx.restore();
+      return;
+    }
+
+    // Modern floating dimension badge below box (only when large enough to prevent clutter)
+    if (!isCompact && box.width >= 36 && box.height >= 36) {
+      const dimText = rotation
+        ? `${Math.round(box.width)} × ${Math.round(box.height)} • ${Math.round((rotation * 180) / Math.PI)}°`
+        : `${Math.round(box.width)} × ${Math.round(box.height)}`;
+      ctx.save();
+      ctx.font = '10px Inter, -apple-system, sans-serif';
+      const tw = ctx.measureText(dimText).width;
+      const pw = tw + 12;
+      const ph = 18;
+      const px = cx - pw / 2;
+      const py = box.y + box.height + 8;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.beginPath();
+      if ((ctx as any).roundRect) {
+        (ctx as any).roundRect(px, py, pw, ph, 4);
+      } else {
+        ctx.rect(px, py, pw, ph);
+      }
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(dimText, cx, py + ph / 2);
+      ctx.restore();
+    }
+
+    // Rotation stem line & pivot handle
     ctx.beginPath();
     ctx.setLineDash([]);
     ctx.moveTo(cx, box.y);
     ctx.lineTo(cx, box.y - rotDist);
     ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.4;
     ctx.stroke();
 
+    ctx.save();
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 1;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.arc(cx, box.y - rotDist, hs / 2, 0, Math.PI * 2);
+    ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.8;
     ctx.stroke();
 
-    // 8 handles
+    // Small pivot center dot
+    ctx.fillStyle = '#4f46e5';
+    ctx.beginPath();
+    ctx.arc(cx, box.y - rotDist, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Corner handles (always present)
     const handles = [
       { x: box.x, y: box.y, cursor: 'nwse-resize' },
-      { x: cx, y: box.y, cursor: 'ns-resize' },
       { x: box.x + box.width, y: box.y, cursor: 'nesw-resize' },
-      { x: box.x + box.width, y: cy, cursor: 'ew-resize' },
       { x: box.x + box.width, y: box.y + box.height, cursor: 'nwse-resize' },
-      { x: cx, y: box.y + box.height, cursor: 'ns-resize' },
-      { x: box.x, y: box.y + box.height, cursor: 'nesw-resize' },
-      { x: box.x, y: cy, cursor: 'ew-resize' }
+      { x: box.x, y: box.y + box.height, cursor: 'nesw-resize' }
     ];
 
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#4f46e5';
-    ctx.lineWidth = 1.5;
+    // Midpoint edge handles only if large enough to avoid collision
+    if (!isCompact) {
+      handles.push(
+        { x: cx, y: box.y, cursor: 'ns-resize' },
+        { x: box.x + box.width, y: cy, cursor: 'ew-resize' },
+        { x: cx, y: box.y + box.height, cursor: 'ns-resize' },
+        { x: box.x, y: cy, cursor: 'ew-resize' }
+      );
+    }
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.2)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 1;
 
     for (const h of handles) {
-      ctx.fillRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
-      ctx.strokeRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      if ((ctx as any).roundRect) {
+        (ctx as any).roundRect(h.x - hs / 2, h.y - hs / 2, hs, hs, 2);
+      } else {
+        ctx.rect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+      }
+      ctx.fill();
+
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
     }
+    ctx.restore();
 
     ctx.restore();
   }
