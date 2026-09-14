@@ -5,7 +5,6 @@
 
 import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
-import { pdfExporter } from '../../io/export-pdf';
 import { saveActiveDocument, saveActiveDocumentAs } from '../../io/save';
 import { duplicateSelectedAnnotations } from '../../annotations/duplicate';
 import { dataExporter } from '../../io/export-data';
@@ -86,21 +85,6 @@ export class CommandPaletteComponent {
         category: 'File',
         shortcut: 'Ctrl+Shift+S',
         action: () => { void saveActiveDocumentAs(); }
-      },
-      {
-        id: 'export-pdf',
-        title: 'Export Annotated PDF Document',
-        category: 'File',
-        action: async () => {
-          try {
-            showToast('Generating PDF export…', 'progress');
-            const bytes = await pdfExporter.exportPDF({ flatten: true, dpi: 150, applyRedactions: true });
-            await pdfExporter.saveToFile(bytes, store.activeDocument?.name || 'document.pdf');
-            showToast(t('toast.exported'), 'success');
-          } catch (e: any) {
-            showToast(`Export error: ${e.message}`, 'error');
-          }
-        }
       },
       {
         id: 'export-json',

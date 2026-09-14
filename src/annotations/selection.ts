@@ -451,7 +451,7 @@ export class SelectionManager {
       const pw = tw + 12;
       const ph = 18;
       const px = cx - pw / 2;
-      const py = box.y + box.height + 8;
+      const py = box.y + box.height + 6;
 
       ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
       ctx.beginPath();

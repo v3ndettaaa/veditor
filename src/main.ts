@@ -21,7 +21,7 @@ import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { showToast } from './ui/components/toast';
 import { openDocumentSession, getDocumentSession, createDocumentId } from './io/storage';
-import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle } from './io/save';
+import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle } from './io/save';
 import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { t } from './ui/i18n';
@@ -109,7 +109,7 @@ class VeditorApp {
     // 2. Initialize Components
     new HeaderComponent(
       document.getElementById('app-header') as HTMLElement,
-      () => this._fileInput.click(),
+      () => void this.requestOpenFile(),
       () => this.openAddTabLanding()
     );
     new ToolbarComponent(document.getElementById('app-floating-toolbar') as HTMLElement);
@@ -207,7 +207,7 @@ class VeditorApp {
     this._emptyStateView.style.display = 'flex';
     const landing = new LandingPageComponent(this._emptyStateView, {
       onOpenFile: () => {
-        this._fileInput.click();
+        void this.requestOpenFile();
       },
       onOpenBytes: async (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => {
         await this.loadPDF(name, bytes, undefined, notebook);
@@ -271,7 +271,7 @@ class VeditorApp {
     const host = overlay.querySelector('#add-tab-landing') as HTMLElement;
     const landing = new LandingPageComponent(host, {
       onOpenFile: () => {
-        this._fileInput.click();
+        void this.requestOpenFile();
       },
       onOpenBytes: async (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => {
         close();
@@ -296,6 +296,36 @@ class VeditorApp {
     void landing.render();
   }
 
+  public async requestOpenFile(): Promise<void> {
+    if ('showOpenFilePicker' in window) {
+      try {
+        const [handle] = await (window as any).showOpenFilePicker({
+          types: [
+            {
+              description: 'PDF Documents (*.pdf)',
+              accept: { 'application/pdf': ['.pdf'] }
+            }
+          ],
+          multiple: false
+        });
+        if (handle) {
+          const file = await handle.getFile();
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          (document.getElementById('close-add-tab-btn') as HTMLButtonElement | null)?.click();
+          const docId = await this.loadPDF(file.name, bytes);
+          if (docId) {
+            rememberFileHandle(docId, handle);
+          }
+          return;
+        }
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        console.warn('showOpenFilePicker failed, falling back to file input:', err);
+      }
+    }
+    this._fileInput.click();
+  }
+
   private setupFileHandling() {
     this._fileInput.addEventListener('change', async () => {
       if (this._fileInput.files && this._fileInput.files[0]) {
@@ -318,11 +348,29 @@ class VeditorApp {
 
     window.addEventListener('drop', async (e) => {
       e.preventDefault();
+      let fileHandle: FileSystemFileHandle | null = null;
+      if (e.dataTransfer?.items && e.dataTransfer.items.length > 0) {
+        const item = e.dataTransfer.items[0];
+        if (typeof (item as any).getAsFileSystemHandle === 'function') {
+          try {
+            const entry = await (item as any).getAsFileSystemHandle();
+            if (entry && entry.kind === 'file') {
+              fileHandle = entry as FileSystemFileHandle;
+            }
+          } catch {
+            // Ignore handle error and fallback to standard File
+          }
+        }
+      }
+
       if (e.dataTransfer?.files && e.dataTransfer.files[0]) {
         const file = e.dataTransfer.files[0];
         if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
           const bytes = new Uint8Array(await file.arrayBuffer());
-          await this.loadPDF(file.name, bytes);
+          const docId = await this.loadPDF(file.name, bytes);
+          if (docId && fileHandle) {
+            rememberFileHandle(docId, fileHandle);
+          }
         }
       }
     });
@@ -352,7 +400,7 @@ class VeditorApp {
     existingDocId?: string,
     notebook?: NotebookSpec,
     initialState?: { activePageIndex?: number; savedScrollTop?: number; savedScrollLeft?: number }
-  ) {
+  ): Promise<string | null> {
     this.showPdfLoading(name, 'Opening document…');
     showToast(`Loading ${name}…`, 'progress');
     try {
@@ -415,10 +463,12 @@ class VeditorApp {
         viewportManager.handleScroll(true);
       }
       showToast(`${name} loaded (${pageCount} pages)`, 'success');
+      return docId;
     } catch (err: any) {
       store.endDocSwitch();
       console.error('Error opening PDF:', err);
       showToast(`Error opening PDF: ${err.message}`, 'error');
+      return null;
     } finally {
       // Smooth fade out of the loading overlay
       window.setTimeout(() => {
@@ -1280,7 +1330,7 @@ class VeditorApp {
           return;
         } else if (key === 'o') {
           e.preventDefault();
-          this._fileInput?.click();
+          void this.requestOpenFile();
           return;
         } else if (key === 's') {
           e.preventDefault();

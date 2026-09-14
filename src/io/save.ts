@@ -31,12 +31,14 @@ export function isDocumentDirty(docId: string): boolean {
 }
 
 async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
+  const isDarkMode = store.appSettings.invertDocumentOled || document.body.classList.contains('invert-pdf-document');
   // Same high-fidelity path as Export so Save matches what users see.
   return pdfExporter.exportPDF({
     flatten: opts?.flatten ?? true,
     dpi: opts?.dpi ?? 150,
     applyRedactions: opts?.applyRedactions ?? true,
-    pageRange: opts?.pageRange
+    pageRange: opts?.pageRange,
+    darkMode: opts?.darkMode ?? isDarkMode
   });
 }
 
@@ -82,9 +84,8 @@ async function writeHandle(handle: any, bytes: Uint8Array): Promise<boolean> {
 }
 
 /**
- * Save: writes writings into the same PDF that was opened.
- * Updates IDB bytes + tries the retained disk handle; falls back to IDB-only
- * with a toast telling the user to use Save As for a disk file.
+ * Save: writes writings directly into the same PDF that was opened.
+ * Retains and writes through the disk file handle without creating copies.
  */
 export async function saveActiveDocument(): Promise<boolean> {
   const doc = store.activeDocument;
@@ -105,15 +106,38 @@ export async function saveActiveDocument(): Promise<boolean> {
     await saveDocumentSession(doc, { includeBytes: true });
     await refreshEngineFromSavedBytes(doc.id, bytes);
 
-    const handle = fileHandles.get(doc.id);
+    let handle = fileHandles.get(doc.id);
+    if (!handle && typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+      // First save without retained handle: link directly to original disk file
+      try {
+        const filename = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
+        handle = await (window as any).showSaveFilePicker({
+          suggestedName: filename,
+          types: [{
+            description: 'PDF Document',
+            accept: { 'application/pdf': ['.pdf'] }
+          }]
+        });
+        if (handle) {
+          rememberFileHandle(doc.id, handle);
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          showToast('Save cancelled', 'info');
+          return false;
+        }
+      }
+    }
+
     if (handle) {
       const wrote = await writeHandle(handle, bytes);
-      if (!wrote) {
-        showToast('Saved locally — use Save As to write a disk file', 'success');
+      if (wrote) {
+        showToast('Saved directly to original file', 'success');
       } else {
-        showToast('Saved', 'success');
+        showToast('Saved in session', 'success');
       }
     } else {
+      await pdfExporter.saveToFile(bytes, doc.name);
       showToast('Saved', 'success');
     }
     store.notify();

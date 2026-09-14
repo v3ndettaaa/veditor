@@ -54,6 +54,10 @@ export class ViewControlsComponent {
       this._isInitialized = false;
     }
 
+    this._invertDocument = typeof store.appSettings.invertDocumentOled === 'boolean'
+      ? store.appSettings.invertDocumentOled
+      : document.body.classList.contains('invert-pdf-document');
+
     this._container.style.display = 'flex';
     const zoomPct = Math.round(store.zoom * 100);
     const currentPage = store.activePageIndex + 1;
@@ -410,6 +414,7 @@ export class ViewControlsComponent {
     this._container.querySelector('#view-invert-doc')?.addEventListener('click', () => {
       this._invertDocument = !this._invertDocument;
       document.body.classList.toggle('invert-pdf-document', this._invertDocument);
+      store.updateAppSettings({ invertDocumentOled: this._invertDocument });
       const invertBtn = this._container.querySelector<HTMLElement>('#view-invert-doc');
       invertBtn?.classList.toggle('active', this._invertDocument);
     });

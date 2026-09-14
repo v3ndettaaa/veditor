@@ -513,6 +513,45 @@ export class PDFEngine {
   }
 
   /**
+   * Renders a page directly to an offscreen canvas at a specified scale and rotation.
+   * Independent of viewport cache to prevent evictions.
+   */
+  public async renderPageToCanvas(
+    pageIndex: number,
+    canvas: HTMLCanvasElement,
+    scale: number,
+    rotation: number = 0
+  ): Promise<boolean> {
+    if (!this._pdfDoc) return false;
+
+    try {
+      const page = this._pageCache.get(pageIndex) || await this._pdfDoc.getPage(pageIndex + 1);
+      const totalRotation = ((rotation || 0) % 360 + 360) % 360;
+      const viewport = page.getViewport({ scale, rotation: totalRotation });
+
+      canvas.width = Math.max(1, Math.floor(viewport.width));
+      canvas.height = Math.max(1, Math.floor(viewport.height));
+
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) return false;
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      await page.render({
+        canvas,
+        canvasContext: ctx,
+        viewport,
+        intent: 'display'
+      }).promise;
+      return true;
+    } catch (err: any) {
+      console.error(`Error rendering page ${pageIndex} to canvas:`, err);
+      return false;
+    }
+  }
+
+  /**
    * Extracts text items for search and selection.
    */
   public async getPageText(pageIndex: number): Promise<{ text: string; items: any[] }> {

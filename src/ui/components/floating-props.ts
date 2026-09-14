@@ -151,7 +151,7 @@ export class FloatingPropsBarComponent {
     // zero collision with the top rotation handle and its stem line.
     const barHeight = 44;
     const boxBottom = boxScreenY + merged.height * zoom;
-    let posY = boxBottom + 16;
+    let posY = boxBottom + 34;
     if (posY + barHeight > window.innerHeight - 30) {
       // If close to bottom of screen, flip above with generous clearance
       // so it stays well above the top rotation handle (which is at -24px).

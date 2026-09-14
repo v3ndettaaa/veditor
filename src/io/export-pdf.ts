@@ -5,6 +5,7 @@
 
 import { PDFDocument, rgb, PDFName, PDFDict, PDFArray, PDFNumber, PDFString, PDFHexString, PDFBool, PDFRawStream } from 'pdf-lib';
 import { store } from '../core/store';
+import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
 import type { StickyNoteAnnotation } from '../core/types';
 
@@ -13,6 +14,7 @@ export interface PDFExportOptions {
   dpi: 72 | 150 | 300 | 600;
   applyRedactions: boolean;
   pageRange?: { start: number; end: number }; // 1-indexed
+  darkMode?: boolean;
 }
 
 export class PDFExporter {
@@ -37,10 +39,43 @@ export class PDFExporter {
       const pdfPage = pages[i];
       const pageAnnotations = doc.annotations[i] || [];
 
-      // Check if page has annotations or redactions
-      if (pageAnnotations.length === 0) continue;
+      // Check if page has annotations, redactions or dark mode enabled
+      if (!options.darkMode && pageAnnotations.length === 0) continue;
 
-      if (options.flatten) {
+      if (options.darkMode) {
+        // True Dark Mode Baking: renders page in OLED Dark mode matching screen view
+        const { width, height } = pdfPage.getSize();
+        const dpiScale = options.dpi / 72;
+        const totalRotation = store.pageRotations[i] || 0;
+
+        const rawCanvas = document.createElement('canvas');
+        const rendered = await pdfEngine.renderPageToCanvas(i, rawCanvas, dpiScale, totalRotation);
+        if (rendered) {
+          const darkCanvas = document.createElement('canvas');
+          darkCanvas.width = rawCanvas.width;
+          darkCanvas.height = rawCanvas.height;
+          const darkCtx = darkCanvas.getContext('2d');
+          if (darkCtx) {
+            darkCtx.filter = 'invert(0.92) hue-rotate(180deg) brightness(0.95) contrast(1.05)';
+            darkCtx.drawImage(rawCanvas, 0, 0);
+            darkCtx.filter = 'none';
+
+            // Render annotations on top in their original colors
+            annotationEngine.renderAnnotationsToCanvas(darkCtx, i, dpiScale);
+
+            const jpgDataUrl = darkCanvas.toDataURL('image/jpeg', 0.92);
+            const jpgBytes = this.dataUrlToUint8Array(jpgDataUrl);
+            const embeddedImg = await pdfDoc.embedJpg(jpgBytes);
+            pdfPage.drawImage(embeddedImg, {
+              x: 0,
+              y: 0,
+              width,
+              height,
+              opacity: 1.0
+            });
+          }
+        }
+      } else if (options.flatten) {
         // High-DPI Flattening onto the page content stream
         const { width, height } = pdfPage.getSize();
         const dpiScale = options.dpi / 72; // e.g. 150 / 72 = 2.08x

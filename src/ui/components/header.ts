@@ -5,7 +5,6 @@
 
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
-import { pdfExporter } from '../../io/export-pdf';
 import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
 import { showToast } from './toast';
 import { t } from '../i18n';
@@ -102,11 +101,6 @@ export class HeaderComponent {
           <span>Save As</span>
         </button>
 
-        <button id="header-export-btn" class="header-btn" ${!activeDoc ? 'style="display:none;"' : ''}>
-          ${getIconSvg('download', 14)}
-          <span>${t('export')}</span>
-        </button>
-
         <div class="toolbar-separator" style="height:18px;"></div>
 
         <button id="header-palette-btn" class="header-btn" title="Command Palette (Cmd+K)">
@@ -162,18 +156,6 @@ export class HeaderComponent {
     this._container.querySelector('#header-saveas-btn')?.addEventListener('click', async () => {
       if (!store.activeDocument) return;
       await saveActiveDocumentAs();
-    });
-
-    this._container.querySelector('#header-export-btn')?.addEventListener('click', async () => {
-      if (!activeDoc) return;
-      try {
-        showToast('Exporting high-resolution PDF…', 'progress');
-        const bytes = await pdfExporter.exportPDF({ flatten: true, dpi: 150, applyRedactions: true });
-        await pdfExporter.saveToFile(bytes, activeDoc.name || 'annotated.pdf');
-        showToast(t('toast.exported'), 'success');
-      } catch (err: any) {
-        showToast(`Export failed: ${err.message}`, 'error');
-      }
     });
 
     this._container.querySelector('#header-palette-btn')?.addEventListener('click', () => {
