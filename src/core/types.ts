@@ -161,6 +161,8 @@ export interface MeasurementAnnotation extends BaseAnnotation {
 export interface CalloutAnnotation extends BaseAnnotation {
   type: 'callout';
   arrowPoint: Point;
+  /** Where the pointer tail bends against the bubble edge (3-point callout). */
+  knee?: Point;
   text: string;
   fontFamily: string;
   fontSize: number;
@@ -379,7 +381,18 @@ export interface AppSettings {
   uiDensity: 'comfortable' | 'compact';
   smoothScroll: boolean;
   invertDocumentOled: boolean;
-  retinaRendering: boolean;
+  /**
+   * Canvas render resolution in DPI (PDF point grid is 72). Replaces the
+   * legacy boolean `retinaRendering`: 72 = 1x, 144 = 2x, etc. When unset the
+   * system DPI (72 * devicePixelRatio) is used.
+   */
+  targetDPI: number;
+  /** Which window edge the floating toolbar is docked to. */
+  toolbarDock: 'top' | 'bottom' | 'left' | 'right';
+  /** Constrain drawn line/polygon segments to 15° increments. */
+  snapAngle15: boolean;
+  /** Merge coincident line endpoints into a continuous path. */
+  connectLines: boolean;
 }
 
 export interface PDFFolder {

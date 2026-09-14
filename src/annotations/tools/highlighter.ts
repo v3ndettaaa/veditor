@@ -10,12 +10,12 @@ import { computePointsBoundingBox } from '../../utils/geometry';
 export class HighlighterTool {
   private _activePoints: StrokePoint[] = [];
   private _pageIndex: number = 0;
-  private _color: string = 'rgba(250, 204, 21, 0.45)';
+  private _color: string = 'rgba(250, 204, 21, 0.3)';
   private _width: number = 20;
   private _blendMode: 'multiply' | 'source-over' = 'multiply';
   private _straightLine: boolean = false;
   private _tipShape: 'chisel' | 'round' = 'round';
-  private _opacity: number = 0.45;
+  private _opacity: number = 0.3;
 
   public start(
     point: StrokePoint,
@@ -25,7 +25,7 @@ export class HighlighterTool {
     blendMode: 'multiply' | 'source-over' = 'multiply',
     straightLine: boolean = false,
     tipShape: 'chisel' | 'round' = 'round',
-    opacity: number = 0.45
+    opacity: number = 0.3
   ) {
     this._activePoints = [point];
     this._pageIndex = pageIndex;

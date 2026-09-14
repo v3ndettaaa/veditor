@@ -24,7 +24,7 @@ export class ImageExporter {
     const canvas = document.createElement('canvas');
 
     // 1. Render PDF base
-    await pdfEngine.renderPageToCanvas(pageIndex, canvas, scale);
+    await pdfEngine.renderPageAtScale(pageIndex, canvas, scale);
 
     // 2. Render Annotations on top
     const ctx = canvas.getContext('2d');

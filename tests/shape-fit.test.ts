@@ -95,6 +95,23 @@ describe('shape-fit', () => {
     expect(fit?.kind).toBe('polygon');
   });
 
+  it('resolves a wobbly triangle to a 3-vertex primitive', () => {
+    const tri: Point[] = [];
+    const v = [{ x: 100, y: 20 }, { x: 180, y: 140 }, { x: 20, y: 140 }, { x: 100, y: 20 }];
+    for (let s = 0; s < 3; s++) {
+      for (let i = 0; i < 10; i++) {
+        const t = i / 10;
+        tri.push({
+          x: v[s].x + (v[s + 1].x - v[s].x) * t + Math.sin(i * 2.1) * 3,
+          y: v[s].y + (v[s + 1].y - v[s].y) * t + Math.cos(i * 1.7) * 3
+        });
+      }
+    }
+    const fit = fitStroke(tri);
+    expect(fit?.kind).toBe('polygon');
+    if (fit?.kind === 'polygon') expect(fit.points.length).toBe(3);
+  });
+
   it('rejects dots and tiny scribbles to ink', () => {
     expect(fitStroke([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBeNull();
     const tiny = linePts({ x: 0, y: 0 }, { x: 5, y: 3 }, 10, 0.2);

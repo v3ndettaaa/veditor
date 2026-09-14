@@ -19,6 +19,7 @@ import {
   MAX_ZOOM,
   DEFAULT_TOOLBAR_ORDER
 } from './types';
+import { getSystemDpi } from '../utils/dpi';
 
 export interface ToolbarLayoutItem {
   id: ToolType;
@@ -67,12 +68,12 @@ class StateStore {
   private _toolSettings: ToolSettings = {
     penColor: '#4f46e5',
     penWidth: 3,
-    highlighterColor: 'rgba(250, 204, 21, 0.45)',
+    highlighterColor: 'rgba(250, 204, 21, 0.3)',
     highlighterWidth: 20,
     highlighterBlendMode: 'source-over',
     highlighterStraightLine: false,
     highlighterTipShape: 'round',
-    highlighterOpacity: 0.45,
+    highlighterOpacity: 0.3,
     highlighterCursor: 'rectangle',
     eraserMode: 'stroke',
     eraserWidth: 24,
@@ -120,7 +121,10 @@ class StateStore {
     uiDensity: 'comfortable',
     smoothScroll: true,
     invertDocumentOled: false,
-    retinaRendering: true
+    targetDPI: 150,
+    toolbarDock: 'top',
+    snapAngle15: false,
+    connectLines: false
   };
 
   // Selection & Clipboard State
@@ -128,6 +132,13 @@ class StateStore {
   private _clipboardAnnotations: Annotation[] = [];
   /** Note card currently open for inner ink/text editing (single, page-local). */
   private _editingNoteId: string | null = null;
+  /**
+   * When true, programmatic selection (annotation creation/recognition) must
+   * not surface contextual panels (floating props bar / inspector). Set while
+   * the app selects a freshly created annotation so creation stays
+   * non-intrusive; cleared immediately after.
+   */
+  private _suppressAutoPanels: boolean = false;
 
   // Toolbar customization (order + visibility persisted; arranged in Settings)
   private _toolbarOrder: ToolType[] = [...DEFAULT_TOOLBAR_ORDER];
@@ -188,7 +199,13 @@ class StateStore {
         }
         const savedApp = localStorage.getItem('veditor_app_settings');
         if (savedApp) {
-          this._appSettings = { ...this._appSettings, ...JSON.parse(savedApp) };
+          const parsed = JSON.parse(savedApp) as Record<string, unknown>;
+          // Migrate the retired `retinaRendering` boolean to `targetDPI`.
+          if (parsed.targetDPI === undefined && parsed.retinaRendering !== undefined) {
+            parsed.targetDPI = parsed.retinaRendering === false ? 72 : getSystemDpi();
+          }
+          delete parsed.retinaRendering;
+          this._appSettings = { ...this._appSettings, ...parsed } as AppSettings;
         }
       }
     } catch (e) {
@@ -261,6 +278,8 @@ class StateStore {
       this.notify();
     }
   }
+  get suppressAutoPanels() { return this._suppressAutoPanels; }
+  public setSuppressAutoPanels(value: boolean) { this._suppressAutoPanels = value; }
   get sidebarOpen() { return this._sidebarOpen; }
   get activeSidebarTab() { return this._activeSidebarTab; }
   get propertiesPanelOpen() { return this._propertiesPanelOpen; }
@@ -468,7 +487,7 @@ class StateStore {
     this._toolSettings = {
       penColor: '#4f46e5',
       penWidth: 3,
-      highlighterColor: 'rgba(250, 204, 21, 0.45)',
+      highlighterColor: 'rgba(250, 204, 21, 0.3)',
       highlighterWidth: 20,
       highlighterBlendMode: 'source-over',
       eraserMode: 'stroke',
@@ -495,7 +514,7 @@ class StateStore {
       drawingCursor: 'pen',
       highlighterStraightLine: false,
       highlighterTipShape: 'round',
-      highlighterOpacity: 0.45,
+      highlighterOpacity: 0.3,
       highlighterCursor: 'rectangle',
       stampPreset: 'APPROVED',
       redactionColor: '#000000',
@@ -519,7 +538,10 @@ class StateStore {
       uiDensity: 'comfortable',
       smoothScroll: true,
       invertDocumentOled: false,
-      retinaRendering: true
+      targetDPI: 150,
+      toolbarDock: 'top',
+      snapAngle15: false,
+      connectLines: false
     };
     this.notify();
   }

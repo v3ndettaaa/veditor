@@ -5,7 +5,7 @@
  */
 
 import { Point, BoundingBox } from '../core/types';
-import { distance, polygonArea, computePointsBoundingBox } from './geometry';
+import { distance, distanceToSegment, polygonArea, computePointsBoundingBox } from './geometry';
 
 export type FittedShape =
   | { kind: 'line'; p0: Point; p1: Point }
@@ -84,6 +84,71 @@ export function rdp(points: Point[], eps: number): Point[] {
 }
 
 /**
+ * Merges near-duplicate consecutive corners and drops a duplicated closing
+ * point. Resampling frequently straddles a true corner with two close points.
+ */
+function mergeCorners(corners: Point[], diag: number): Point[] {
+  let simp = corners;
+  if (simp.length > 1 && distance(simp[0], simp[simp.length - 1]) < 0.08 * diag) {
+    simp = simp.slice(0, -1);
+  }
+  const merged: Point[] = [];
+  for (const p of simp) {
+    const prev = merged[merged.length - 1];
+    if (!prev || distance(p, prev) >= 0.06 * diag) merged.push({ ...p });
+    else {
+      merged[merged.length - 1] = { x: (prev.x + p.x) / 2, y: (prev.y + p.y) / 2 };
+    }
+  }
+  if (merged.length > 1 && distance(merged[0], merged[merged.length - 1]) < 0.06 * diag) {
+    merged.pop();
+  }
+  return merged;
+}
+
+/**
+ * Mean distance from each raw sample to the simplified polygon boundary,
+ * normalised by the stroke diagonal. Used to reject over-aggressive
+ * simplification of genuinely wobbly scribbles.
+ */
+function polygonFitError(raw: Point[], poly: Point[]): number {
+  if (poly.length < 2) return Infinity;
+  let sum = 0;
+  for (const p of raw) {
+    let best = Infinity;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      const d = distanceToSegment(p, a, b);
+      if (d < best) best = d;
+    }
+    sum += best;
+  }
+  return sum / raw.length;
+}
+
+/**
+ * Picks the smallest-vertex corner set across a range of Douglas-Peucker
+ * tolerances. A fixed epsilon over-splits imperfect triangles into many-sided
+ * polygons; widening it until the vertex count stops shrinking yields the
+ * standard primitive the user intended (triangle/quad) while the fit-error
+ * guard below keeps true scribbles from collapsing.
+ */
+function adaptiveCorners(pts: Point[], diag: number): Point[] {
+  let best = mergeCorners(rdp(pts, 0.03 * diag), diag);
+  let bestCount = best.length;
+  for (const factor of [0.045, 0.06, 0.08, 0.1]) {
+    if (bestCount <= 3) break;
+    const candidate = mergeCorners(rdp(pts, factor * diag), diag);
+    if (candidate.length >= 3 && candidate.length < bestCount) {
+      best = candidate;
+      bestCount = candidate.length;
+    }
+  }
+  return best;
+}
+
+/**
  * Classifies a raw pen stroke. Returns null when it should stay ink
  * (too small, too few points, or no confident primitive).
  */
@@ -100,7 +165,6 @@ export function fitStroke(raw: Point[]): FittedShape | null {
   const last = pts[pts.length - 1];
   const endDist = distance(first, last);
   const closure = endDist / diag;
-  const corners = rdp(pts, 0.03 * diag);
 
   // --- Line / arrow (open strokes that stay near their chord) ---
   let maxDev = 0;
@@ -155,26 +219,23 @@ export function fitStroke(raw: Point[]): FittedShape | null {
       };
     }
 
-    // Drop a duplicated closing point and merge near-duplicate corners
-    // (resampling often straddles true corners with two close points).
-    let simp = corners;
-    if (simp.length > 1 && distance(simp[0], simp[simp.length - 1]) < 0.08 * diag) {
-      simp = simp.slice(0, -1);
-    }
-    const merged: Point[] = [];
-    for (const p of simp) {
-      const prev = merged[merged.length - 1];
-      if (!prev || distance(p, prev) >= 0.06 * diag) merged.push(p);
-      else {
-        merged[merged.length - 1] = { x: (prev.x + p.x) / 2, y: (prev.y + p.y) / 2 };
+    // Adaptive simplification: a fixed epsilon over-splits imperfect
+    // triangles into heptagons, so widen it until the vertex count settles.
+    const simp = adaptiveCorners(pts, diag);
+
+    // Only accept a polygon whose vertices actually hug the drawn stroke;
+    // otherwise an aggressive simplification could turn a scribble into a
+    // false triangle.
+    const fitErr = polygonFitError(pts, simp) / diag;
+    if (fitErr > 0.12) {
+      if (variance < 0.15 && isElliptical) {
+        return { kind: 'ellipse', cx, cy, rx, ry };
       }
+      return null;
     }
-    if (merged.length > 1 && distance(merged[0], merged[merged.length - 1]) < 0.06 * diag) {
-      merged.pop();
-    }
-    simp = merged;
 
     if (simp.length === 3) {
+      // Three corners == triangle, still emitted as a 3-point polygon.
       return { kind: 'polygon', points: simp.map(p => ({ ...p })) };
     }
 

@@ -7,15 +7,15 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { PageInfo, PDFBookmarkItem } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
+import { MAX_RENDER_DIMENSION, resolveRenderDpr } from '../utils/dpi';
 
-/** Max canvas dimension in px: caps VRAM at extreme zoom/dpr (CSS upscales). */
-const MAX_RENDER_DIMENSION = 4096;
-
+/** Backing-store multiplier over CSS pixels for the current target DPI. */
 function effectiveDpr(): number {
   try {
-    if (store.appSettings.retinaRendering === false) return 1;
-  } catch (_) {}
-  return window.devicePixelRatio || 1;
+    return resolveRenderDpr(store.appSettings.targetDPI);
+  } catch (_) {
+    return resolveRenderDpr();
+  }
 }
 
 // Configure offline worker
@@ -516,7 +516,7 @@ export class PDFEngine {
    * Renders a page directly to an offscreen canvas at a specified scale and rotation.
    * Independent of viewport cache to prevent evictions.
    */
-  public async renderPageToCanvas(
+  public async renderPageAtScale(
     pageIndex: number,
     canvas: HTMLCanvasElement,
     scale: number,

@@ -24,6 +24,7 @@ import { openDocumentSession, getDocumentSession, createDocumentId } from './io/
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle } from './io/save';
 import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
+import { resolveRenderDpr, clampRenderMultiplier } from './utils/dpi';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
@@ -963,7 +964,11 @@ class VeditorApp {
       pageElements.pdfCanvas.style.width = `${layout.width}px`;
       pageElements.pdfCanvas.style.height = `${layout.height}px`;
 
-      const dpr = store.appSettings.retinaRendering === false ? 1 : (window.devicePixelRatio || 1);
+      const dpr = clampRenderMultiplier(
+        layout.width,
+        layout.height,
+        resolveRenderDpr(store.appSettings.targetDPI)
+      );
       const w = layout.width * dpr;
       const h = layout.height * dpr;
 
@@ -990,7 +995,9 @@ class VeditorApp {
     pageIndex: number,
     p: { patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement }
   ) {
-    const dpr = store.appSettings.retinaRendering === false ? 1 : (window.devicePixelRatio || 1);
+    const cssW = parseFloat(p.patternCanvas.style.width) || p.patternCanvas.width;
+    const cssH = parseFloat(p.patternCanvas.style.height) || p.patternCanvas.height;
+    const dpr = clampRenderMultiplier(cssW, cssH, resolveRenderDpr(store.appSettings.targetDPI));
     const scale = store.zoom * dpr;
 
     // 1. Background paper pattern
@@ -1175,6 +1182,11 @@ class VeditorApp {
       // polygon-close, then focal zoom for non-polygon tools.
       if (pointerHandler.handleNoteDoubleClick(e, pageIndex, canvas, onRepaint)) {
         this.repaintAllRenderedAnnotations();
+        return;
+      }
+      if (pointerHandler.handleCalloutDoubleClick(e, pageIndex, canvas, () => {
+        this.repaintAllRenderedAnnotations();
+      })) {
         return;
       }
       const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);

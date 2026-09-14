@@ -115,6 +115,7 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   }
   if (ann.type === 'callout') {
     next.arrowPoint = mapPt(a.arrowPoint);
+    if (a.knee) next.knee = mapPt(a.knee);
   }
   if (ann.type === 'sticky-note') {
     // Anchor rides with the box; ink/texts are note-local.

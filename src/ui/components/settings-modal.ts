@@ -518,13 +518,13 @@ export class SettingsModalComponent {
 
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">High-DPI Retina Rendering</div>
-              <div class="setting-desc">Renders vector glyphs at native device pixel density (devicePixelRatio) for razor-sharp typography.</div>
+              <div class="setting-title">Target Render DPI</div>
+              <div class="setting-desc">Backing-store resolution for canvas rendering (72–600). Higher values keep vector text sharper at the cost of memory. 72 = 1x; the system default matches your display density.</div>
             </div>
-            <label class="setting-switch">
-              <input type="checkbox" id="retina-toggle" ${app.retinaRendering !== false ? 'checked' : ''}>
-              <span class="setting-slider"></span>
-            </label>
+            <input type="number" id="target-dpi-input" class="field is-compact"
+                   value="${app.targetDPI ?? ''}" min="72" max="600" step="1"
+                   placeholder="System" title="Target render DPI (72–600)"
+                   style="width:88px;" aria-label="Target render DPI">
           </div>
 
           <!-- Preload buffer -->
@@ -833,11 +833,19 @@ export class SettingsModalComponent {
       store.updateAppSettings({ smoothScroll: smoothScrollToggle.checked });
     });
 
-    // Retina rendering toggle
-    const retinaToggle = this._container.querySelector<HTMLInputElement>('#retina-toggle');
-    retinaToggle?.addEventListener('change', () => {
-      store.updateAppSettings({ retinaRendering: retinaToggle.checked });
+    // Target render DPI
+    const targetDpiInput = this._container.querySelector<HTMLInputElement>('#target-dpi-input');
+    const commitTargetDpi = () => {
+      if (!targetDpiInput) return;
+      const raw = parseInt(targetDpiInput.value, 10);
+      const dpi = Number.isFinite(raw) ? Math.max(72, Math.min(600, raw)) : 150;
+      targetDpiInput.value = String(dpi);
+      store.updateAppSettings({ targetDPI: dpi });
       viewportManager.updateLayout(true);
+    };
+    targetDpiInput?.addEventListener('change', commitTargetDpi);
+    targetDpiInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commitTargetDpi(); }
     });
 
     // Preload buffer select

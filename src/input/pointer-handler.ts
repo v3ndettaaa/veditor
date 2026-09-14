@@ -3,11 +3,14 @@
  * Handles 120/240Hz coalesced events, stylus pressure, palm rejection, and tool dispatching.
  */
 
-import { Point, StrokePoint, ToolType, Annotation, BoundingBox, ShapeAnnotation, StickyNoteAnnotation, PaperStyle } from '../core/types';
+import { Point, StrokePoint, ToolType, Annotation, BoundingBox, ShapeAnnotation, StickyNoteAnnotation, PaperStyle, CalloutAnnotation } from '../core/types';
 import { store } from '../core/store';
 import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand, ModifyAnnotationCommand } from '../core/history';
-import { mergeBoundingBoxes, computePointsBoundingBox } from '../utils/geometry';
+import { mergeBoundingBoxes, computePointsBoundingBox, findNearestVertex } from '../utils/geometry';
+import { resolveRenderDpr, clampRenderMultiplier } from '../utils/dpi';
 import { fitStroke, type FittedShape } from '../utils/shape-fit';
+import { renderLiveStroke } from '../annotations/spline';
+import { tween, type TweenHandle } from '../utils/tween';
 import { annotationEngine } from '../annotations/engine';
 import { PressureEngine } from './pressure';
 import { palmRejection } from './palm-rejection';
@@ -21,6 +24,8 @@ import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
 import { laserTool } from '../annotations/tools/laser';
 import { redactionTool } from '../annotations/tools/redaction';
+import { calloutTool } from '../annotations/tools/callout';
+import { openInlineEditor } from '../ui/components/inline-editor';
 import {
   selectionManager,
   normalizeDragBox,
@@ -77,6 +82,8 @@ export class PointerHandler {
   private _lasso: { pageIndex: number; points: Point[]; additive: boolean } | null = null;
   /** Sticky-note card drag (tool creates sized cards like rectangle drags). */
   private _noteDraft: { pageIndex: number; start: Point; current: Point } | null = null;
+  /** Callout draft: anchor is the arrow tip, current is the bubble corner. */
+  private _calloutDraft: { pageIndex: number; anchor: Point; current: Point } | null = null;
   /** Live inner-note stroke (pen/highlighter routed into an editing note). */
   private _noteStroke: {
     noteId: string;
@@ -100,7 +107,12 @@ export class PointerHandler {
   private _holdAnchor: Point | null = null;
   private _holdFired: boolean = false;
   private _holdShape: FittedShape | null = null;
+  /** In-flight raw-ink -> fitted-shape crossfade on the scratch canvas. */
+  private _morphHandle: TweenHandle | null = null;
+  /** Vertex the active shape/polygon point is currently magnet-snapped to. */
+  private _snapTarget: Point | null = null;
   private static readonly HOLD_DELAY_MS = 400;
+  private static readonly MORPH_MS = 180;
   private static readonly HOLD_RADIUS = 8;
   private static readonly HOLD_MIN_SIZE = 12;
 
@@ -195,6 +207,136 @@ export class PointerHandler {
     return changed;
   }
 
+  /**
+   * Backing-store multiplier matching the page canvases (target DPI, clamped
+   * so a page's backing store never exceeds MAX_RENDER_DIMENSION). Live
+   * previews and handle hit-tests must use the same scale as committed
+   * rendering or they drift on HiDPI / custom-DPI displays.
+   */
+  private renderDpr(): number {
+    const c = this._pageScratchCanvas;
+    const target = resolveRenderDpr(store.appSettings.targetDPI);
+    if (!c) return target;
+    const cssW = parseFloat(c.style.width) || c.width;
+    const cssH = parseFloat(c.style.height) || c.height;
+    return clampRenderMultiplier(cssW, cssH, target);
+  }
+
+  /**
+   * Geometry vertices already on the page that a new shape point can snap to:
+   * line/arrow/polygon/freeform points plus rectangle/redaction corners.
+   */
+  private collectShapeVertices(pageIndex: number): Point[] {
+    const doc = store.activeDocument;
+    if (!doc) return [];
+    const out: Point[] = [];
+    for (const a of (doc.annotations[pageIndex] || [])) {
+      if (a.type === 'line' || a.type === 'arrow' || a.type === 'polygon' || a.type === 'freeform-shape') {
+        const pts = (a as { points?: Point[] }).points;
+        if (pts) for (const p of pts) out.push({ x: p.x, y: p.y });
+      } else if (a.type === 'rectangle' || a.type === 'redaction') {
+        const b = a.box;
+        out.push(
+          { x: b.x, y: b.y },
+          { x: b.x + b.width, y: b.y },
+          { x: b.x + b.width, y: b.y + b.height },
+          { x: b.x, y: b.y + b.height }
+        );
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Magnetic vertex snapping: binds `pt` to a nearby existing vertex and
+   * records it for the on-canvas target indicator. Tolerance is screen-space
+   * (8 CSS px) so it feels the same at every zoom.
+   */
+  private snapToVertex(pt: Point, pageIndex: number): Point {
+    const tolPage = 8 / Math.max(store.zoom, 0.0001);
+    const hit = findNearestVertex(pt, this.collectShapeVertices(pageIndex), tolPage);
+    this._snapTarget = hit;
+    return hit ?? pt;
+  }
+
+  /**
+   * Merges a freshly drawn line/arrow with any existing line/arrow that shares
+   * an endpoint (transitively), producing one open multi-point path. Returns
+   * null when nothing connects.
+   */
+  private tryConnectLines(
+    pageIndex: number,
+    ann: ShapeAnnotation
+  ): { remove: Annotation[]; add: ShapeAnnotation } | null {
+    const doc = store.activeDocument;
+    if (!doc || !ann.points || ann.points.length < 2) return null;
+    const tol = 8 / Math.max(store.zoom, 0.0001);
+    const candidates = (doc.annotations[pageIndex] || []).filter(a =>
+      (a.type === 'line' || a.type === 'arrow') &&
+      Array.isArray((a as ShapeAnnotation).points) &&
+      (a as ShapeAnnotation).points!.length >= 2
+    ) as ShapeAnnotation[];
+    if (candidates.length === 0) return null;
+
+    const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+    let chain: Point[] = ann.points.map(p => ({ x: p.x, y: p.y }));
+    const connected: ShapeAnnotation[] = [];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const c of candidates) {
+        if (connected.includes(c) || !c.points) continue;
+        const pts = c.points;
+        const a0 = pts[0];
+        const a1 = pts[pts.length - 1];
+        const head = chain[0];
+        const tail = chain[chain.length - 1];
+        if (dist(a0, tail) <= tol) {
+          chain = chain.concat(pts.slice(1).map(p => ({ x: p.x, y: p.y })));
+          connected.push(c); changed = true;
+        } else if (dist(a1, tail) <= tol) {
+          chain = chain.concat(pts.slice(0, -1).reverse().map(p => ({ x: p.x, y: p.y })));
+          connected.push(c); changed = true;
+        } else if (dist(a1, head) <= tol) {
+          chain = pts.slice(0, -1).map(p => ({ x: p.x, y: p.y })).concat(chain);
+          connected.push(c); changed = true;
+        } else if (dist(a0, head) <= tol) {
+          chain = pts.slice(1).reverse().map(p => ({ x: p.x, y: p.y })).concat(chain);
+          connected.push(c); changed = true;
+        }
+      }
+    }
+    if (connected.length === 0) return null;
+
+    const merged: ShapeAnnotation = {
+      ...ann,
+      id: Math.random().toString(36).substring(2, 9),
+      type: 'line',
+      points: chain,
+      box: computePointsBoundingBox(chain, ann.strokeWidth),
+      arrowEnd: false,
+      updatedAt: Date.now()
+    };
+    return { remove: connected, add: merged };
+  }
+
+  /** Draws the magnetic snap target as a screen-constant ring. */
+  private renderSnapTarget(ctx: CanvasRenderingContext2D, renderScale: number): void {
+    const target = this._snapTarget;
+    if (!target) return;
+    ctx.save();
+    ctx.scale(renderScale, renderScale);
+    const r = 6 / Math.max(store.zoom, 0.0001);
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(99, 102, 241, 0.35)';
+    ctx.fill();
+    ctx.strokeStyle = '#6366f1';
+    ctx.lineWidth = 1.5 / Math.max(store.zoom, 0.0001);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   /** (Re)starts the draw-and-hold snap timer anchored at the given point. */
   private startHoldTimer(anchor: Point): void {
     this.clearHoldTimer();
@@ -223,29 +365,63 @@ export class PointerHandler {
     if (!fit) return;
     this._holdFired = true;
     this._holdShape = fit;
-    // Swap the live ink preview for the snapped shape immediately.
-    if (this._pageScratchCtx && this._pageScratchCanvas) {
-      const ctx = this._pageScratchCtx;
-      const dpr = window.devicePixelRatio || 1;
-      ctx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
-      const preview = this.buildHoldShapeAnnotation(fit, this._activePageIndex, 'layer-default');
-      if (preview) annotationEngine.renderSingleAnnotation(ctx, preview, store.zoom * dpr);
-    }
+    const canvas = this._pageScratchCanvas;
+    const ctx = this._pageScratchCtx;
+    if (!ctx || !canvas) return;
+    const preview = this.buildHoldShapeAnnotation(fit, this._activePageIndex, 'layer-default');
+    if (!preview) return;
+
+    const renderScale = store.zoom * this.renderDpr();
+    const rawPts = penTool.getActivePoints().map(p => ({ x: p.x, y: p.y }));
+    const rawColor = store.toolSettings.penColor;
+    const rawWidth = this.lensWidth(store.toolSettings.penWidth);
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Brief crossfade so the raw ink visibly morphs into the fitted vector
+    // path instead of popping in instantly.
+    this._morphHandle?.cancel();
+    this._morphHandle = tween({
+      durationMs: PointerHandler.MORPH_MS,
+      onUpdate: (t) => {
+        const c = this._pageScratchCtx;
+        const cv = this._pageScratchCanvas;
+        if (!c || !cv) return;
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.clearRect(0, 0, cv.width, cv.height);
+        c.save();
+        c.globalAlpha = Math.max(0, 1 - t);
+        c.scale(renderScale, renderScale);
+        renderLiveStroke(c, rawPts, rawColor, rawWidth, 'linear', false);
+        c.restore();
+        c.save();
+        c.globalAlpha = t;
+        annotationEngine.renderSingleAnnotation(c, preview, renderScale);
+        c.restore();
+      },
+      onComplete: () => { this._morphHandle = null; }
+    });
   }
 
-  /** Builds the snapped ShapeAnnotation with current shape styling. */
+  /**
+   * Builds the snapped ShapeAnnotation. Draw-and-hold recognition is a pen
+   * gesture, so the recognized shape inherits the active pen brush (color,
+   * width) rather than the shape tool's settings — the stroke must not change
+   * color or thickness the moment it snaps.
+   */
   private buildHoldShapeAnnotation(fit: FittedShape, pageIndex: number, layerId: string): ShapeAnnotation | null {
     const s = store.toolSettings;
-    const strokeWidth = this.lensWidth(s.shapeWidth);
+    const strokeWidth = this.lensWidth(s.penWidth);
     const base = {
       id: Math.random().toString(36).substring(2, 9),
       pageIndex,
       layerId,
-      strokeColor: s.shapeColor,
-      fillColor: s.shapeFillColor,
+      strokeColor: s.penColor,
+      fillColor: 'transparent',
       strokeWidth,
-      outline: s.shapeOutline !== false,
-      strokeStyle: s.shapeStyle,
+      outline: true,
+      strokeStyle: 'solid' as const,
       opacity: 1.0,
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -395,13 +571,18 @@ export class PointerHandler {
       }
 
       case 'polygon': {
+        const polySnap = e.shiftKey || store.appSettings.snapAngle15;
         if (shapesTool.isPolygonActive()) {
-          const closed = shapesTool.addPolygonVertex(pt);
+          const placed = this.snapToVertex(pt, pageIndex);
+          // move() records the snap-angle flag that addPolygonVertex reads.
+          shapesTool.move(placed, e.shiftKey, polySnap);
+          const closed = shapesTool.addPolygonVertex(placed);
           if (closed) {
             const polyAnn = shapesTool.finish(defaultLayerId);
             if (polyAnn) {
               history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
             }
+            this._snapTarget = null;
             if (this._pageScratchCtx) {
               this._pageScratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
             }
@@ -410,11 +591,12 @@ export class PointerHandler {
           }
           if (this._pageScratchCtx) {
             this._pageScratchCtx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
-            shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (window.devicePixelRatio || 1));
+            shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (this.renderDpr()));
           }
           return;
         }
 
+        this._snapTarget = null;
         shapesTool.start(
           pt,
           pageIndex,
@@ -432,9 +614,11 @@ export class PointerHandler {
       case 'ellipse':
       case 'line':
       case 'arrow':
-      case 'freeform-shape':
+      case 'freeform-shape': {
+        // Anchor the first point to a nearby existing vertex when present.
+        const startPt = this.snapToVertex(pt, pageIndex);
         shapesTool.start(
-          pt,
+          startPt,
           pageIndex,
           tool,
           tSettings.shapeColor,
@@ -444,6 +628,7 @@ export class PointerHandler {
           tSettings.shapeOutline !== false
         );
         break;
+      }
 
       case 'text': {
         const noteTarget = this.editingNoteAt(pageIndex, pt);
@@ -543,6 +728,11 @@ export class PointerHandler {
         break;
       }
 
+      case 'callout':
+        // Press on the target (arrow tip), drag out the text bubble.
+        this._calloutDraft = { pageIndex, anchor: { x: pt.x, y: pt.y }, current: { x: pt.x, y: pt.y } };
+        break;
+
       case 'select': {
         const doc = store.activeDocument;
         if (!doc) break;
@@ -559,7 +749,7 @@ export class PointerHandler {
           // Lone rotated annotations hit-test in their rotated frame.
           const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
           const hit = selectionManager.hitTestHandles(
-            pt, merged, store.zoom * (window.devicePixelRatio || 1), singleRot
+            pt, merged, store.zoom * (this.renderDpr()), singleRot
           );
           if (hit) {
             const originals = new Map(selected.map(a => [a.id, cloneAnnotation(a)] as [string, Annotation]));
@@ -627,7 +817,7 @@ export class PointerHandler {
     // Clear scratchpad canvas once per frame
     ctx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.renderDpr();
     const renderScale = store.zoom * dpr;
     const pts = coalescedEvents.map((evt: PointerEvent) => this.getPointInPage(evt, scratchCanvas));
     if (pts.length === 0) return;
@@ -723,6 +913,8 @@ export class PointerHandler {
         if (this._holdAnchor && Math.hypot(lastPt.x - this._holdAnchor.x, lastPt.y - this._holdAnchor.y) > PointerHandler.HOLD_RADIUS) {
           this._holdFired = false;
           this._holdShape = null;
+          this._morphHandle?.cancel();
+          this._morphHandle = null;
           this.startHoldTimer({ x: lastPt.x, y: lastPt.y });
         }
         if (this._holdFired && this._holdShape) {
@@ -755,12 +947,21 @@ export class PointerHandler {
       case 'line':
       case 'arrow':
       case 'polygon':
-      case 'freeform-shape':
-        // Shift constrains drag shapes to regular forms (square / circle /
-        // 15°-snapped line), mirroring the highlighter's straight-snap key.
-        for (const pt of pts) shapesTool.move(pt, shiftKey);
+      case 'freeform-shape': {
+        // Shift constrains drag shapes (square / circle / 15° line). The
+        // global Snap setting enables 15° for polygon/freeform segments too.
+        const snapAngle = shiftKey || store.appSettings.snapAngle15;
+        const magnetic = tool === 'line' || tool === 'arrow' ||
+          tool === 'polygon' || tool === 'freeform-shape';
+        this._snapTarget = null;
+        for (const pt of pts) {
+          const p = magnetic ? this.snapToVertex(pt, pageIndex) : pt;
+          shapesTool.move(p, shiftKey, snapAngle);
+        }
         shapesTool.renderScratchpad(ctx, renderScale);
+        if (magnetic) this.renderSnapTarget(ctx, renderScale);
         break;
+      }
 
       case 'measure-distance':
       case 'measure-angle':
@@ -790,6 +991,32 @@ export class PointerHandler {
           ctx.lineWidth = 1.5 / renderScale;
           ctx.setLineDash([5 / renderScale, 4 / renderScale]);
           ctx.strokeRect(box.x, box.y, box.width, box.height);
+          ctx.restore();
+        }
+        break;
+
+      case 'callout':
+        if (this._calloutDraft && this._calloutDraft.pageIndex === pageIndex) {
+          this._calloutDraft.current = { ...lastPt };
+          const raw = normalizeDragBox(this._calloutDraft.anchor, lastPt, 4);
+          const box = {
+            x: raw.x,
+            y: raw.y,
+            width: Math.max(90, raw.width),
+            height: Math.max(48, raw.height)
+          };
+          ctx.save();
+          ctx.scale(renderScale, renderScale);
+          ctx.fillStyle = 'rgba(254, 243, 199, 0.75)';
+          ctx.strokeStyle = '#d97706';
+          ctx.lineWidth = 1.5 / renderScale;
+          ctx.setLineDash([5 / renderScale, 4 / renderScale]);
+          ctx.fillRect(box.x, box.y, box.width, box.height);
+          ctx.strokeRect(box.x, box.y, box.width, box.height);
+          ctx.beginPath();
+          ctx.moveTo(this._calloutDraft.anchor.x, this._calloutDraft.anchor.y);
+          ctx.lineTo(box.x + box.width / 2, box.y + box.height / 2);
+          ctx.stroke();
           ctx.restore();
         }
         break;
@@ -842,7 +1069,7 @@ export class PointerHandler {
       this._strokeTool = null;
       // Polygons remain active across clicks until closed or completed
       if (this._pageScratchCtx && shapesTool.isPolygonActive()) {
-        shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (window.devicePixelRatio || 1));
+        shapesTool.renderScratchpad(this._pageScratchCtx, store.zoom * (this.renderDpr()));
       }
       return;
     }
@@ -909,17 +1136,30 @@ export class PointerHandler {
         }
         const snapped = this._holdFired ? this._holdShape : null;
         const holdPage = this._activePageIndex;
+        this._morphHandle?.cancel();
+        this._morphHandle = null;
         this.clearHoldTimer();
         if (snapped) {
+          // Two-step history: add the raw freehand stroke, then replace it
+          // with the recognized shape. Undo #1 restores the original ink;
+          // undo #2 removes it entirely.
+          const penAnn = penTool.finish(defaultLayerId);
           const shapeAnn = this.buildHoldShapeAnnotation(snapped, holdPage, defaultLayerId);
-          penTool.cancel();
           this._holdFired = false;
           this._holdShape = null;
+          if (penAnn) history.execute(new AddAnnotationCommand(holdPage, penAnn));
           if (shapeAnn) {
-            history.execute(new AddAnnotationCommand(holdPage, shapeAnn));
-            // Expose transform handles immediately, like text/stamp placement.
+            history.execute(new ReplaceAnnotationsCommand(
+              holdPage,
+              penAnn ? [penAnn] : [],
+              [shapeAnn]
+            ));
+            // Expose transform handles immediately without surfacing the
+            // contextual properties bar (creation stays non-intrusive).
             store.setActiveTool('select');
+            store.setSuppressAutoPanels(true);
             store.selectAnnotation(shapeAnn.id);
+            store.setSuppressAutoPanels(false);
           }
         } else {
           const penAnn = penTool.finish(defaultLayerId);
@@ -972,12 +1212,23 @@ export class PointerHandler {
       case 'ellipse':
       case 'line':
       case 'arrow':
-      case 'freeform-shape':
+      case 'freeform-shape': {
         const shapeAnn = shapesTool.finish(defaultLayerId);
         if (shapeAnn) {
-          history.execute(new AddAnnotationCommand(pageIndex, shapeAnn));
+          // "Connect Lines": fold coincident line/arrow endpoints into one
+          // continuous multi-point path instead of stacking separate objects.
+          const connected = store.appSettings.connectLines &&
+            (shapeAnn.type === 'line' || shapeAnn.type === 'arrow')
+            ? this.tryConnectLines(pageIndex, shapeAnn)
+            : null;
+          if (connected) {
+            history.execute(new ReplaceAnnotationsCommand(pageIndex, connected.remove, [connected.add]));
+          } else {
+            history.execute(new AddAnnotationCommand(pageIndex, shapeAnn));
+          }
         }
         break;
+      }
 
       case 'measure-distance':
       case 'measure-angle':
@@ -1023,6 +1274,51 @@ export class PointerHandler {
           store.setEditingNote(note.id);
           store.selectAnnotation(note.id);
           store.setActiveTool('select');
+        }
+        break;
+      }
+
+      case 'callout': {
+        const tSettings = store.toolSettings;
+        const draft = this._calloutDraft;
+        this._calloutDraft = null;
+        if (draft && draft.pageIndex === pageIndex) {
+          const raw = normalizeDragBox(draft.anchor, draft.current, 4);
+          // Tiny drag still yields a usable default-sized bubble offset from
+          // the anchor rather than a degenerate card.
+          const isTiny = raw.width < 40 && raw.height < 24;
+          const box = isTiny
+            ? {
+                x: draft.anchor.x + 24,
+                y: draft.anchor.y - 90,
+                width: 160,
+                height: 70
+              }
+            : {
+                x: raw.x,
+                y: raw.y,
+                width: Math.max(90, raw.width),
+                height: Math.max(48, raw.height)
+              };
+          const callout = calloutTool.createCallout(
+            { x: box.x, y: box.y },
+            { ...draft.anchor },
+            pageIndex,
+            defaultLayerId,
+            'Note...',
+            this.lensWidth(tSettings.fontSize),
+            tSettings.textColor,
+            '#fef3c7',
+            '#d97706',
+            box
+          );
+          history.execute(new AddAnnotationCommand(pageIndex, callout));
+          store.setActiveTool('select');
+          store.setSuppressAutoPanels(true);
+          store.selectAnnotation(callout.id);
+          store.setSuppressAutoPanels(false);
+          // Immediate inline text editing.
+          this.openCalloutEditor(pageIndex, callout, scratchCanvas, onNeedRepaint);
         }
         break;
       }
@@ -1120,6 +1416,57 @@ export class PointerHandler {
     return true;
   }
 
+  /** Opens the inline editor over a callout's text container. */
+  private openCalloutEditor(
+    pageIndex: number,
+    callout: CalloutAnnotation,
+    canvas: HTMLCanvasElement,
+    onRepaint: () => void
+  ): void {
+    const tSettings = store.toolSettings;
+    const rect = canvas.getBoundingClientRect();
+    const z = store.zoom;
+    openInlineEditor({
+      rect: {
+        left: rect.left + callout.box.x * z,
+        top: rect.top + callout.box.y * z,
+        width: callout.box.width * z,
+        height: callout.box.height * z
+      },
+      value: callout.text,
+      fontSize: Math.max(11, this.lensWidth(tSettings.fontSize) * z),
+      color: tSettings.textColor,
+      onCommit: (text) => {
+        const doc = store.activeDocument;
+        const live = doc?.annotations[pageIndex]?.find(a => a.id === callout.id) as CalloutAnnotation | undefined;
+        if (!live) return;
+        const prev = cloneAnnotation(live);
+        const next = cloneAnnotation(live) as CalloutAnnotation;
+        next.text = text;
+        next.updatedAt = Date.now();
+        history.execute(new ModifyAnnotationCommand(pageIndex, prev, next));
+        onRepaint();
+      }
+    });
+  }
+
+  /** Double-click a callout to edit its text inline. Returns true if consumed. */
+  public handleCalloutDoubleClick(
+    e: PointerEvent,
+    pageIndex: number,
+    canvas: HTMLCanvasElement,
+    onRepaint: () => void
+  ): boolean {
+    const doc = store.activeDocument;
+    if (!doc) return false;
+    const pt = this.getPointInPage(e, canvas);
+    const ann = selectionManager.findAnnotationAtPoint(pt, doc.annotations[pageIndex] || []);
+    if (!ann || ann.type !== 'callout') return false;
+    store.selectAnnotation(ann.id);
+    this.openCalloutEditor(pageIndex, ann as CalloutAnnotation, canvas, onRepaint);
+    return true;
+  }
+
   /** Aborts an in-progress zoom marquee without zooming. Returns true if one was active. */
   public cancelZoomMarquee(): boolean {
     if (!this._zoomMarqueeStart) return false;
@@ -1166,7 +1513,15 @@ export class PointerHandler {
     let y2 = m.y + m.height;
     const h = drag.handle;
 
-    if (shiftKey && (h === 'nw' || h === 'ne' || h === 'se' || h === 'sw')) {
+    // Stamps are effectively images: corner resizing preserves aspect by
+    // default (Shift frees it). Other annotations keep free scaling by
+    // default and use Shift to lock.
+    const isCorner = h === 'nw' || h === 'ne' || h === 'se' || h === 'sw';
+    const allStamps = drag.originals.size > 0 &&
+      [...drag.originals.values()].every(a => a.type === 'stamp');
+    const lockAspect = isCorner && (allStamps ? !shiftKey : shiftKey);
+
+    if (lockAspect) {
       const origAspect = m.width > 0 && m.height > 0 ? m.width / m.height : 1;
       const primaryDelta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
       if (h === 'se') {
@@ -1355,7 +1710,7 @@ export class PointerHandler {
     const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
     const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
     const hit = selectionManager.hitTestHandles(
-      pt, merged, store.zoom * (window.devicePixelRatio || 1), singleRot
+      pt, merged, store.zoom * (this.renderDpr()), singleRot
     );
 
     const isNearOrOver = hit !== null || (
@@ -1381,6 +1736,8 @@ export class PointerHandler {
     if (!this._isPointerDown) return;
     const tool = this._strokeTool ?? store.activeTool;
     this.clearHoldTimer();
+    this._morphHandle?.cancel();
+    this._morphHandle = null;
     this._holdFired = false;
     this._holdShape = null;
 
@@ -1396,6 +1753,7 @@ export class PointerHandler {
       this._marquee = null;
       this._lasso = null;
       this._noteDraft = null;
+      this._calloutDraft = null;
       // Restore inner-note sessions to their snapshots (no partial marks).
       this.restoreNoteSessions();
       penTool.cancel();

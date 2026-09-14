@@ -53,6 +53,50 @@ describe('Undo / Redo History System', () => {
     expect(store.activeDocument?.annotations[0].length).toBe(1);
   });
 
+  it('restores the raw stroke on the first undo after shape recognition', () => {
+    const raw: PenAnnotation = {
+      id: 'raw-1',
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'pen',
+      box: { x: 0, y: 0, width: 10, height: 10 },
+      points: [{ x: 0, y: 0, pressure: 0.5 }, { x: 10, y: 10, pressure: 0.5 }],
+      color: '#4f46e5',
+      strokeWidth: 3,
+      opacity: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    const shape = {
+      id: 'shape-1',
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'rectangle' as const,
+      box: { x: 0, y: 0, width: 10, height: 10 },
+      strokeColor: '#4f46e5',
+      fillColor: 'transparent',
+      strokeWidth: 3,
+      outline: true,
+      strokeStyle: 'solid' as const,
+      opacity: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    // Recognition is a two-step transition: add raw, then replace with shape.
+    history.execute(new AddAnnotationCommand(0, raw));
+    history.execute(new ReplaceAnnotationsCommand(0, [raw], [shape]));
+    expect(store.activeDocument?.annotations[0].map(a => a.id)).toEqual(['shape-1']);
+
+    // Undo #1: the raw hand-drawn stroke comes back.
+    history.undo();
+    expect(store.activeDocument?.annotations[0].map(a => a.id)).toEqual(['raw-1']);
+
+    // Undo #2: the raw stroke is removed.
+    history.undo();
+    expect(store.activeDocument?.annotations[0].length).toBe(0);
+  });
+
   it('handles DeleteAnnotationsCommand with undo/redo', () => {
     const ann: PenAnnotation = {
       id: 'ann-1',

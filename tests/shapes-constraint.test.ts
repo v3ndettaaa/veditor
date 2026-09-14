@@ -1,5 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { constrainShapePoint } from '../src/annotations/tools/shapes';
+import { constrainShapePoint, snapPointTo15 } from '../src/annotations/tools/shapes';
+
+describe('15-degree angle snapping', () => {
+  it('snaps an arbitrary vector to the nearest 15-degree ray, length preserved', () => {
+    const anchor = { x: 10, y: 20 };
+    const len = 50;
+    const rad40 = (40 * Math.PI) / 180;
+    const p = snapPointTo15(anchor, {
+      x: anchor.x + len * Math.cos(rad40),
+      y: anchor.y + len * Math.sin(rad40)
+    });
+    expect(Math.hypot(p.x - anchor.x, p.y - anchor.y)).toBeCloseTo(len, 6);
+    const deg = (Math.atan2(p.y - anchor.y, p.x - anchor.x) * 180) / Math.PI;
+    expect(Math.abs(deg - 45)).toBeLessThan(0.001);
+  });
+
+  it('snaps to cardinal axes for tiny deviations', () => {
+    const p = snapPointTo15({ x: 0, y: 0 }, { x: 100, y: 3 });
+    expect(p.y).toBeCloseTo(0, 6);
+  });
+});
 
 describe('Shift-constrained regular shapes', () => {
   it('constrains a rectangle drag to a square preserving drag direction', () => {

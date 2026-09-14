@@ -40,6 +40,7 @@ export class AnnotationEngine {
     if (pattern === 'none') return;
 
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
     ctx.scale(scale, scale);
 
     const step = gridSize;
@@ -100,7 +101,10 @@ export class AnnotationEngine {
   ): void {
     for (const ann of annotations) {
       ctx.save();
-      ctx.globalAlpha = ann.opacity ?? 1.0;
+      // Highlighter ink already carries its translucency in the color alpha;
+      // applying `opacity` again would double-fade it (and diverge from the
+      // live preview). Every other type uses opacity as the single source.
+      ctx.globalAlpha = ann.type === 'highlighter' ? 1.0 : (ann.opacity ?? 1.0);
       if (ann.blendMode && ann.type !== 'highlighter') ctx.globalCompositeOperation = ann.blendMode;
       this.renderSingleAnnotation(ctx, ann, scale);
       ctx.restore();
@@ -115,12 +119,16 @@ export class AnnotationEngine {
     const doc = store.activeDocument;
     if (!doc) return;
 
+    ctx.imageSmoothingEnabled = true;
     const allAnnotations = doc.annotations[pageIndex] || [];
     const visibleAnnotations = layerManager.filterVisibleAnnotations(pageIndex, allAnnotations);
 
     for (const ann of visibleAnnotations) {
       ctx.save();
-      ctx.globalAlpha = ann.opacity ?? 1.0;
+      // Highlighter ink already carries its translucency in the color alpha;
+      // applying `opacity` again would double-fade it (and diverge from the
+      // live preview). Every other type uses opacity as the single source.
+      ctx.globalAlpha = ann.type === 'highlighter' ? 1.0 : (ann.opacity ?? 1.0);
       if (ann.blendMode && ann.type !== 'highlighter') {
         // Highlighters always render with translucent source-over (see
         // spline.ts): legacy annotations may still carry `multiply`, which
@@ -274,25 +282,28 @@ export class AnnotationEngine {
       }
       if (outline) ctx.stroke();
     } else if ((ann.type === 'line' || ann.type === 'arrow') && ann.points?.length >= 2) {
-      const p1 = ann.points[0];
-      const p2 = ann.points[1];
+      // Supports connected multi-point polylines (see "Connect Lines"), not
+      // just two-point segments.
+      const pts = ann.points;
       ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.stroke();
 
       if (ann.type === 'arrow') {
+        const prev = pts[pts.length - 2];
+        const tip = pts[pts.length - 1];
         const headLen = Math.max(12, ann.strokeWidth * 4);
-        const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+        const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
         ctx.beginPath();
-        ctx.moveTo(p2.x, p2.y);
+        ctx.moveTo(tip.x, tip.y);
         ctx.lineTo(
-          p2.x - headLen * Math.cos(angle - Math.PI / 6),
-          p2.y - headLen * Math.sin(angle - Math.PI / 6)
+          tip.x - headLen * Math.cos(angle - Math.PI / 6),
+          tip.y - headLen * Math.sin(angle - Math.PI / 6)
         );
         ctx.lineTo(
-          p2.x - headLen * Math.cos(angle + Math.PI / 6),
-          p2.y - headLen * Math.sin(angle + Math.PI / 6)
+          tip.x - headLen * Math.cos(angle + Math.PI / 6),
+          tip.y - headLen * Math.sin(angle + Math.PI / 6)
         );
         ctx.closePath();
         ctx.fillStyle = ann.strokeColor;

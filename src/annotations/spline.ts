@@ -222,7 +222,7 @@ export function generateSmoothSegments(
  * stacked above the PDF canvas — `multiply` cannot blend across separate
  * canvas elements, so translucency must come from alpha + `source-over`.
  */
-export function normalizeHighlighterColor(color: string, alpha = 0.45): string {
+export function normalizeHighlighterColor(color: string, alpha = 0.3): string {
   const c = color.trim();
   const clampedAlpha = Math.min(0.95, Math.max(0.05, alpha));
   const hexMatch = c.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
@@ -264,85 +264,55 @@ export function renderSmoothStroke(
 ): void {
   if (points.length === 0) return;
 
-  // Finalized pen points are already smoothed in real-time as drawn;
-  // avoid re-smoothing them so the rendered stroke remains 100% identical to what was drawn
-  const pts = isHighlighter ? smoothStrokePoints(points, 'subtle') : points;
+  // Finalized pen points are already smoothed in real-time as drawn; the
+  // highlighter still benefits from a light pass to settle jitter.
+  const pts = isHighlighter ? smoothStrokePoints(points, smoothing === 'none' ? 'none' : 'subtle') : points;
 
   ctx.save();
   ctx.lineCap = tipShape === 'chisel' ? 'square' : 'round';
   ctx.lineJoin = tipShape === 'chisel' ? 'miter' : 'round';
+  ctx.imageSmoothingEnabled = true;
 
-  if (isHighlighter) {
-    // NOTE: annotations render on a transparent overlay canvas above the PDF,
-    // so `multiply` cannot blend with the page below (it only blends within
-    // the overlay itself, darkening self-overlaps). Use normal alpha blending
-    // with a translucent color instead — text stays readable.
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = normalizeHighlighterColor(color);
-    ctx.lineWidth = baseWidth;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    if (pts.length === 2) {
-      ctx.lineTo(pts[1].x, pts[1].y);
-    } else {
-      for (let i = 1; i < pts.length; i++) {
-        const xc = (pts[i - 1].x + pts[i].x) / 2;
-        const yc = (pts[i - 1].y + pts[i].y) / 2;
-        ctx.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y, xc, yc);
-      }
-      const last = pts[pts.length - 1];
-      ctx.lineTo(last.x, last.y);
-    }
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
-
-  // When pressure sensitivity is disabled, render clean uniform stroke
-  if (!pressureEnabled) {
-    if (pts.length === 1) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(pts[0].x, pts[0].y, baseWidth / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      return;
-    }
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = baseWidth;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      const xc = (pts[i - 1].x + pts[i].x) / 2;
-      const yc = (pts[i - 1].y + pts[i].y) / 2;
-      ctx.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y, xc, yc);
-    }
-    const last = pts[pts.length - 1];
-    ctx.lineTo(last.x, last.y);
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
-
-  // Single point dot with pressure
   if (pts.length === 1) {
-    const p = pts[0];
-    const w = calculateStrokeWidth(baseWidth, p.pressure, pressureCurve, pressureEnabled, strength);
-    ctx.fillStyle = color;
+    const w = isHighlighter
+      ? baseWidth
+      : calculateStrokeWidth(baseWidth, pts[0].pressure, pressureCurve, pressureEnabled, strength);
+    ctx.fillStyle = isHighlighter ? normalizeHighlighterColor(color) : color;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, w / 2, 0, Math.PI * 2);
+    ctx.arc(pts[0].x, pts[0].y, w / 2, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
     return;
   }
 
-  const segments = generateSmoothSegments(pts, baseWidth, pressureCurve, pressureEnabled, strength);
+  if (isHighlighter) {
+    // NOTE: annotations render on a transparent overlay canvas above the PDF,
+    // so `multiply` cannot blend with the page below (it only blends within
+    // the overlay itself, darkening self-overlaps). Use normal alpha blending
+    // with a translucent color instead — text stays readable. A single
+    // continuous cubic path keeps translucent ink from darkening at seams.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = normalizeHighlighterColor(color);
+    ctx.lineWidth = baseWidth;
+    const segs = generateSmoothSegments(pts, baseWidth, pressureCurve, false, strength);
+    ctx.beginPath();
+    ctx.moveTo(segs[0].p0.x, segs[0].p0.y);
+    for (const seg of segs) {
+      ctx.bezierCurveTo(seg.cp1.x, seg.cp1.y, seg.cp2.x, seg.cp2.y, seg.p1.x, seg.p1.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
 
+  // Pen: always fit a centripetal Catmull-Rom -> cubic Bezier path, whether
+  // or not pressure is enabled (calculateStrokeWidth returns baseWidth when
+  // pressure is off, so width is simply uniform). This removes the old
+  // pressure-off midpoint-quadratic fallback that produced segmented strokes.
+  const segments = generateSmoothSegments(pts, baseWidth, pressureCurve, pressureEnabled, strength);
+  ctx.strokeStyle = color;
   for (const seg of segments) {
-    const avgWidth = (seg.widthStart + seg.widthEnd) / 2;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = avgWidth;
+    ctx.lineWidth = (seg.widthStart + seg.widthEnd) / 2;
     ctx.beginPath();
     ctx.moveTo(seg.p0.x, seg.p0.y);
     ctx.bezierCurveTo(seg.cp1.x, seg.cp1.y, seg.cp2.x, seg.cp2.y, seg.p1.x, seg.p1.y);
@@ -369,30 +339,7 @@ export function renderLiveStroke(
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-
-  if (!pressureEnabled) {
-    if (points.length === 1) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(points[0].x, points[0].y, baseWidth / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      return;
-    }
-    ctx.strokeStyle = color;
-    ctx.lineWidth = baseWidth;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      const xc = (points[i - 1].x + points[i].x) / 2;
-      const yc = (points[i - 1].y + points[i].y) / 2;
-      ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
-    }
-    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-    ctx.stroke();
-    ctx.restore();
-    return;
-  }
+  ctx.imageSmoothingEnabled = true;
 
   if (points.length === 1) {
     const p = points[0];
@@ -405,11 +352,12 @@ export function renderLiveStroke(
     return;
   }
 
+  // Match the committed renderer exactly: Catmull-Rom -> cubic Bezier for the
+  // entire stroke, so the live preview and the final ink never disagree.
   const segments = generateSmoothSegments(points, baseWidth, pressureCurve, pressureEnabled, strength);
+  ctx.strokeStyle = color;
   for (const seg of segments) {
-    const avgWidth = (seg.widthStart + seg.widthEnd) / 2;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = avgWidth;
+    ctx.lineWidth = (seg.widthStart + seg.widthEnd) / 2;
     ctx.beginPath();
     ctx.moveTo(seg.p0.x, seg.p0.y);
     ctx.bezierCurveTo(seg.cp1.x, seg.cp1.y, seg.cp2.x, seg.cp2.y, seg.p1.x, seg.p1.y);

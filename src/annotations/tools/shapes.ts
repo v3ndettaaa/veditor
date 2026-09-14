@@ -35,17 +35,24 @@ export function constrainShapePoint(
   }
 
   if (type === 'line' || type === 'arrow') {
-    const len = Math.hypot(dx, dy);
-    if (len === 0) return { ...current };
-    const step = Math.PI / 12; // 15°
-    const snapped = Math.round(Math.atan2(dy, dx) / step) * step;
-    return {
-      x: start.x + len * Math.cos(snapped),
-      y: start.y + len * Math.sin(snapped)
-    };
+    return snapPointTo15(start, current);
   }
 
   return { ...current };
+}
+
+/** Snaps `current` to the nearest 15° ray from `anchor`, preserving length. */
+export function snapPointTo15(anchor: Point, current: Point): Point {
+  const dx = current.x - anchor.x;
+  const dy = current.y - anchor.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return { ...current };
+  const step = Math.PI / 12; // 15°
+  const snapped = Math.round(Math.atan2(dy, dx) / step) * step;
+  return {
+    x: anchor.x + len * Math.cos(snapped),
+    y: anchor.y + len * Math.sin(snapped)
+  };
 }
 
 export class ShapesTool {
@@ -61,6 +68,8 @@ export class ShapesTool {
   private _strokeStyle: 'solid' | 'dashed' | 'dotted' = 'solid';
   /** True while Shift is held: preview and finish a regular shape. */
   private _constrain: boolean = false;
+  /** True when 15° angle snapping is active (Shift or the Snap setting). */
+  private _snapAngle: boolean = false;
 
   public start(
     point: Point,
@@ -81,28 +90,45 @@ export class ShapesTool {
     this._strokeWidth = strokeWidth;
     this._outline = outline;
     this._strokeStyle = strokeStyle;
+    this._constrain = false;
+    this._snapAngle = false;
 
     if (type === 'polygon' || type === 'freeform-shape') {
       this._polygonPoints.push(point);
     }
   }
 
-  public move(point: Point, constrain: boolean = false): void {
+  public move(point: Point, constrain: boolean = false, snapAngle: boolean = false): void {
     this._currentPoint = point;
-    // Only drag shapes constrain; polygon vertices and freeform paths ignore it.
+    // Rectangle/ellipse only square up for Shift; line/arrow snap for Shift
+    // OR the global 15° setting; polygon/freeform snap their elastic segment.
     this._constrain = constrain &&
       (this._type === 'rectangle' || this._type === 'ellipse' ||
        this._type === 'line' || this._type === 'arrow');
+    this._snapAngle = snapAngle;
     if (this._type === 'freeform-shape') {
       this._polygonPoints.push(point);
     }
   }
 
-  /** Current drag point with the Shift constraint applied when active. */
+  /** Current drag point with the active constraint applied. */
   private effectiveCurrent(): Point | null {
     if (!this._startPoint || !this._currentPoint) return null;
-    if (!this._constrain) return this._currentPoint;
-    return constrainShapePoint(this._type, this._startPoint, this._currentPoint);
+    if (this._type === 'polygon' || this._type === 'freeform-shape') {
+      if (!this._snapAngle) return this._currentPoint;
+      const anchor = this._polygonPoints.length > 0
+        ? this._polygonPoints[this._polygonPoints.length - 1]
+        : this._startPoint;
+      return snapPointTo15(anchor, this._currentPoint);
+    }
+    if (!this._constrain && !this._snapAngle) return this._currentPoint;
+    if (this._type === 'line' || this._type === 'arrow') {
+      return snapPointTo15(this._startPoint, this._currentPoint);
+    }
+    if (this._constrain) {
+      return constrainShapePoint(this._type, this._startPoint, this._currentPoint);
+    }
+    return this._currentPoint;
   }
 
   public isPolygonActive(): boolean {
@@ -114,16 +140,25 @@ export class ShapesTool {
   }
 
   public addPolygonVertex(point: Point): boolean {
+    // Apply 15° snapping relative to the previous vertex when enabled.
+    const placed = this._snapAngle && this._polygonPoints.length > 0
+      ? snapPointTo15(this._polygonPoints[this._polygonPoints.length - 1], point)
+      : point;
     if (this._polygonPoints.length >= 3) {
       const p0 = this._polygonPoints[0];
-      const distToStart = Math.hypot(point.x - p0.x, point.y - p0.y);
+      const distToStart = Math.hypot(placed.x - p0.x, placed.y - p0.y);
       if (distToStart < 14) {
         // User clicked near start point: signal to close polygon
         return true;
       }
     }
-    this._polygonPoints.push(point);
-    this._currentPoint = point;
+    // Ignore a duplicate vertex from the second click of a double-click.
+    const last = this._polygonPoints[this._polygonPoints.length - 1];
+    if (last && Math.hypot(placed.x - last.x, placed.y - last.y) < 3) {
+      return false;
+    }
+    this._polygonPoints.push(placed);
+    this._currentPoint = placed;
     return false;
   }
 
@@ -181,18 +216,6 @@ export class ShapesTool {
           ctx.fill();
         }
         if (outline) ctx.stroke();
-
-        // Draw vertex points
-        for (let i = 0; i < this._polygonPoints.length; i++) {
-          const pt = this._polygonPoints[i];
-          ctx.beginPath();
-          ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
-          ctx.fillStyle = '#ffffff';
-          ctx.fill();
-          ctx.strokeStyle = this._strokeColor;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
 
         // If hovering near start point (closing threshold), highlight start point
         if (cp && this._polygonPoints.length >= 3) {

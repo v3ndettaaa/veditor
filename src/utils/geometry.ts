@@ -94,6 +94,27 @@ export function boxesIntersect(a: BoundingBox, b: BoundingBox): boolean {
   );
 }
 
+/**
+ * Returns the candidate point within `tolerance` of `point`, or null.
+ * Used by vertex magnetic snapping; ties resolve to the closest candidate.
+ */
+export function findNearestVertex(
+  point: Point,
+  candidates: Point[],
+  tolerance: number
+): Point | null {
+  let best: Point | null = null;
+  let bestDist = tolerance;
+  for (const c of candidates) {
+    const d = distance(point, c);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
 export function mergeBoundingBoxes(boxes: BoundingBox[]): BoundingBox {
   if (boxes.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
   let minX = Infinity;

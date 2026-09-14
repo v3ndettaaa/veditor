@@ -63,6 +63,26 @@ describe('Polygon Multi-Point Shape Tool', () => {
     expect(annotation?.box.height).toBeGreaterThan(0);
   });
 
+  it('ignores a duplicate vertex from the second click of a double-click', () => {
+    shapesTool.start({ x: 0, y: 0 }, 0, 'polygon', '#000', 'transparent', 1, 'solid');
+    shapesTool.addPolygonVertex({ x: 100, y: 0 });
+    shapesTool.addPolygonVertex({ x: 100, y: 100 });
+    const count = shapesTool.getPolygonPointCount();
+    // Same spot again (as dblclick would produce) must not add a 5th vertex.
+    shapesTool.addPolygonVertex({ x: 100, y: 100 });
+    expect(shapesTool.getPolygonPointCount()).toBe(count);
+  });
+
+  it('snaps polygon segments to 15° when angle snapping is enabled', () => {
+    shapesTool.start({ x: 0, y: 0 }, 0, 'polygon', '#000', 'transparent', 1, 'solid');
+    // move(..., snapAngle=true) arms snapping for the next vertex.
+    shapesTool.move({ x: 50, y: 8 }, false, true);
+    shapesTool.addPolygonVertex({ x: 100, y: 8 });
+    shapesTool.addPolygonVertex({ x: 0, y: 100 });
+    const ann = shapesTool.finish('layer-1');
+    expect(ann?.points?.[1].y).toBeCloseTo(0, 6);
+  });
+
   it('rejects finishing a polygon with fewer than 3 vertices', () => {
     shapesTool.start({ x: 0, y: 0 }, 0, 'polygon', '#000', 'transparent', 1, 'solid');
     shapesTool.addPolygonVertex({ x: 10, y: 10 });

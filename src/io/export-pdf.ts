@@ -49,7 +49,7 @@ export class PDFExporter {
         const totalRotation = store.pageRotations[i] || 0;
 
         const rawCanvas = document.createElement('canvas');
-        const rendered = await pdfEngine.renderPageToCanvas(i, rawCanvas, dpiScale, totalRotation);
+        const rendered = await pdfEngine.renderPageAtScale(i, rawCanvas, dpiScale, totalRotation);
         if (rendered) {
           const darkCanvas = document.createElement('canvas');
           darkCanvas.width = rawCanvas.width;

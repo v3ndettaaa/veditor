@@ -36,8 +36,7 @@ export class StampTool {
       x: point.x - 90,
       y: point.y - 32,
       width: 180,
-      height: 64,
-      rotation: -0.12 // slight organic tilt (-7 degrees)
+      height: 64
     };
 
     return {
@@ -46,6 +45,9 @@ export class StampTool {
       layerId,
       type: 'stamp',
       box,
+      // Tilt lives on the annotation rotation (shared with selection math),
+      // not on `box.rotation`, so hit-testing and rendering agree.
+      rotation: -0.12,
       stampType: 'preset',
       presetKey: preset.key,
       color: preset.color,
@@ -67,8 +69,7 @@ export class StampTool {
       x: point.x - width / 2,
       y: point.y - height / 2,
       width,
-      height,
-      rotation: 0
+      height
     };
 
     return {
@@ -96,45 +97,70 @@ export class StampTool {
     const cx = b.x + b.width / 2;
     const cy = b.y + b.height / 2;
 
+    // `ann.rotation` is applied by the annotation engine before dispatch, so
+    // this renderer always draws in the box's unrotated local frame.
     ctx.translate(cx, cy);
-    if (b.rotation) {
-      ctx.rotate(b.rotation);
-    }
     ctx.translate(-b.width / 2, -b.height / 2);
 
     if (ann.stampType === 'preset') {
       const preset = STAMP_PRESETS.find(p => p.key === ann.presetKey) || STAMP_PRESETS[0];
       const color = ann.color || preset.color;
 
+      // Scale every visual metric from the box size (base: 180x64) so the
+      // label, borders and radii stay proportional when resized.
+      const k = b.height / 64;
+      const inset = Math.max(1, 2 * k);
+
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
-      ctx.lineWidth = 3;
-
-      // Outer rounded rect
-      this.drawRoundedRect(ctx, 2, 2, b.width - 4, b.height - 4, 8);
+      ctx.lineWidth = Math.max(1, 3 * k);
+      this.drawRoundedRect(ctx, inset, inset, Math.max(1, b.width - inset * 2), Math.max(1, b.height - inset * 2), Math.max(2, 8 * k));
       ctx.stroke();
 
       if (preset.borderStyle === 'double') {
-        // Inner rect
-        ctx.lineWidth = 1.5;
-        this.drawRoundedRect(ctx, 7, 7, b.width - 14, b.height - 14, 5);
+        const innerInset = Math.max(1.5, 7 * k);
+        ctx.lineWidth = Math.max(0.75, 1.5 * k);
+        this.drawRoundedRect(ctx, innerInset, innerInset, Math.max(1, b.width - innerInset * 2), Math.max(1, b.height - innerInset * 2), Math.max(1, 5 * k));
         ctx.stroke();
       }
 
-      // Stamp Text
-      ctx.font = `bold 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif`;
+      // Fit the label to the box: derive from height then shrink to width.
+      let fontSize = Math.max(6, b.height * (22 / 64));
+      const fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif';
+      ctx.font = `bold ${fontSize}px ${fontFamily}`;
+      const maxTextWidth = Math.max(8, b.width * 0.86);
+      const measured = ctx.measureText(preset.label).width;
+      if (measured > maxTextWidth && measured > 0) {
+        fontSize = Math.max(6, fontSize * (maxTextWidth / measured));
+        ctx.font = `bold ${fontSize}px ${fontFamily}`;
+      }
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(preset.label, b.width / 2, b.height / 2);
     } else if (ann.stampType === 'custom' && ann.imageUrl) {
-      const img = new Image();
-      img.src = ann.imageUrl;
-      if (img.complete) {
-        ctx.drawImage(img, 0, 0, b.width, b.height);
+      const img = this.getImage(ann.imageUrl);
+      if (img && img.complete && img.naturalWidth > 0) {
+        // Aspect-preserving "contain" fit.
+        const s = Math.min(b.width / img.naturalWidth, b.height / img.naturalHeight);
+        const dw = img.naturalWidth * s;
+        const dh = img.naturalHeight * s;
+        ctx.drawImage(img, (b.width - dw) / 2, (b.height - dh) / 2, dw, dh);
       }
     }
 
     ctx.restore();
+  }
+
+  /** Cache decoded images so repeated paints don't re-trigger a network load. */
+  private _imageCache: Map<string, HTMLImageElement> = new Map();
+  private getImage(src: string): HTMLImageElement {
+    let img = this._imageCache.get(src);
+    if (!img) {
+      img = new Image();
+      img.src = src;
+      this._imageCache.set(src, img);
+    }
+    return img;
   }
 
   private drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
