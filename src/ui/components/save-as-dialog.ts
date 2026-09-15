@@ -12,12 +12,18 @@ export interface SaveAsOptions {
   dpi: 72 | 150 | 300 | 600;
   flatten: boolean;
   applyRedactions: boolean;
+  /** Bake the dark viewing theme into the saved pages. */
+  darkMode?: boolean;
   pageRange?: { start: number; end: number };
+  pageIndices?: number[];
 }
 
 interface SaveAsDialogOpts {
   defaultFilename: string;
   pageCount: number;
+  selectedPageIndices?: number[];
+  /** Preselects the theme choice to match the current on-screen appearance. */
+  displayedDark?: boolean;
   hasRedactions: boolean;
   supportsPicker: boolean;
   onSubmit: (opts: SaveAsOptions) => void | Promise<void>;
@@ -66,6 +72,14 @@ export class SaveAsDialogComponent {
               </select>
             </label>
 
+            <label class="form-field">
+              <span class="form-label">Theme</span>
+              <select id="saveas-theme" class="field">
+                <option value="light" ${this._opts.displayedDark ? '' : 'selected'}>Light — original page colors</option>
+                <option value="dark" ${this._opts.displayedDark ? 'selected' : ''}>Dark — as displayed in dark mode</option>
+              </select>
+            </label>
+
             <label class="form-field form-check">
               <input id="saveas-flatten" type="checkbox" checked />
               <span>${t('saveAs.flatten')}</span>
@@ -89,6 +103,10 @@ export class SaveAsDialogComponent {
                 <label style="display:flex; gap:4px; align-items:center;">
                   <input type="radio" name="saveas-range" value="custom" /> ${t('saveAs.custom')}
                 </label>
+                ${this._opts.selectedPageIndices?.length ? `
+                <label style="display:flex; gap:4px; align-items:center;">
+                  <input type="radio" name="saveas-range" value="selected" /> Selected (${this._opts.selectedPageIndices.length})
+                </label>` : ''}
                 <input id="saveas-start" class="field" type="number" min="1" max="${this._opts.pageCount}" value="1" style="width:64px;" disabled />
                 <span>–</span>
                 <input id="saveas-end" class="field" type="number" min="1" max="${this._opts.pageCount}" value="${this._opts.pageCount}" style="width:64px;" disabled />
@@ -142,18 +160,23 @@ export class SaveAsDialogComponent {
       if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
       const dpi = Number(q<HTMLSelectElement>('#saveas-dpi')?.value || 150) as 72 | 150 | 300 | 600;
       const flatten = q<HTMLInputElement>('#saveas-flatten')?.checked !== false;
+      const darkMode = q<HTMLSelectElement>('#saveas-theme')?.value === 'dark';
       const applyRedactions = q<HTMLInputElement>('#saveas-redactions')?.checked !== false;
       const custom = this._container.querySelector<HTMLInputElement>('input[name="saveas-range"]:checked')?.value === 'custom';
       let pageRange: { start: number; end: number } | undefined;
+      let pageIndices: number[] | undefined;
       if (custom) {
         const s = Math.max(1, Math.min(this._opts.pageCount, Math.floor(Number(start?.value) || 1)));
         const e = Math.max(1, Math.min(this._opts.pageCount, Math.floor(Number(end?.value) || this._opts.pageCount)));
         pageRange = { start: Math.min(s, e), end: Math.max(s, e) };
       }
+      if (this._container.querySelector<HTMLInputElement>('input[name="saveas-range"]:checked')?.value === 'selected') {
+        pageIndices = this._opts.selectedPageIndices;
+      }
       this._busy = true;
       (q('#saveas-submit') as HTMLButtonElement | null)?.setAttribute('disabled', '');
       try {
-        await this._opts.onSubmit({ filename: name, dpi, flatten, applyRedactions, pageRange });
+        await this._opts.onSubmit({ filename: name, dpi, flatten, applyRedactions, darkMode, pageRange, pageIndices });
         this.destroy();
       } finally {
         this._busy = false;

@@ -90,9 +90,9 @@ export class PointerHandler {
   private _morphHandle: TweenHandle | null = null;
   /** Vertex the active shape/polygon point is currently magnet-snapped to. */
   private _snapTarget: Point | null = null;
-  private static readonly HOLD_DELAY_MS = 400;
-  /** Long enough that the three morph phases read as one gesture, not a flash. */
-  private static readonly MORPH_MS = 260;
+  private static readonly HOLD_DELAY_MS = 320;
+  /** Settle-in duration for the recognized shape. */
+  private static readonly MORPH_MS = 220;
   private static readonly HOLD_RADIUS = 8;
   private static readonly HOLD_MIN_SIZE = 12;
 
@@ -297,23 +297,15 @@ export class PointerHandler {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Morph: the raw ink stays put and fades while the fitted shape is drawn
-    // over it with a sweeping outline, so the stroke reads as being
-    // *straightened* rather than replaced. A short accent glow marks the
-    // moment it locks in. Three overlapping phases, one tween:
-    //   ink   1 -> 0 over t 0..0.55
-    //   shape 0 -> 1 over t 0.25..1.0
-    //   glow  fades out over t 0.6..1.0
-    const accent = store.appSettings.accentColor || '#4f46e5';
-    const shapeBox = preview.box;
-    const sweepLength = Math.max(40, (shapeBox.width + shapeBox.height) * 2);
-
+    // Recognition feedback: the fitted shape "settles" into place — it fades
+    // in while relaxing from a slightly enlarged version of itself back to
+    // 100%, centered on the stroke. The raw ink drops away quickly underneath.
+    // No dashes or glow rectangles; the settle motion itself is the cue.
+    const shapeCx = preview.box.x + preview.box.width / 2;
+    const shapeCy = preview.box.y + preview.box.height / 2;
     this._morphHandle?.cancel();
     this._morphHandle = tween({
       durationMs: PointerHandler.MORPH_MS,
-      // Linear master clock: the phase windows below are wall-clock fractions,
-      // and a global ease-out would rush all three of them into the first
-      // quarter of the gesture. Each phase eases itself instead.
       easing: (t) => t,
       onUpdate: (t) => {
         const c = this._pageScratchCtx;
@@ -322,10 +314,9 @@ export class PointerHandler {
         c.setTransform(1, 0, 0, 1, 0, 0);
         c.clearRect(0, 0, cv.width, cv.height);
 
-        // Phase A: the ink the user drew, fading out — slowly at first, so the
-        // shape is seen to grow *out of* the stroke rather than replace it.
-        const inkAlpha = 1 - easeOutCubic(Math.min(1, t / 0.55));
-        if (inkAlpha > 0) {
+        // Ink clears in the first 40% so the settle reads on a clean page.
+        const inkAlpha = 1 - easeOutCubic(Math.min(1, t / 0.4));
+        if (inkAlpha > 0.01) {
           c.save();
           c.globalAlpha = inkAlpha;
           c.scale(renderScale, renderScale);
@@ -333,40 +324,18 @@ export class PointerHandler {
           c.restore();
         }
 
-        // Phase B: the shape, revealed along its outline.
-        const shapeT = easeOutCubic(Math.max(0, Math.min(1, (t - 0.25) / 0.75)));
-        if (shapeT > 0) {
-          c.save();
-          c.globalAlpha = shapeT;
-          annotationEngine.renderSingleAnnotation(c, preview, renderScale);
-          c.restore();
-
-          // Sweeping outline on top of the plain shape: dash offset walks the
-          // visible dash from the shape's start to its end.
-          c.save();
-          c.scale(renderScale, renderScale);
-          c.strokeStyle = accent;
-          c.lineWidth = 1.75 / Math.max(renderScale, 0.0001);
-          c.lineCap = 'round';
-          c.setLineDash([sweepLength, sweepLength]);
-          c.lineDashOffset = sweepLength * (1 - shapeT);
-          c.strokeRect(shapeBox.x, shapeBox.y, shapeBox.width, shapeBox.height);
-          c.restore();
-        }
-
-        // Phase C: accent halo that eases out as the shape settles.
-        const glowT = easeOutCubic(Math.max(0, Math.min(1, (t - 0.6) / 0.4)));
-        if (glowT < 1) {
-          c.save();
-          c.scale(renderScale, renderScale);
-          c.globalAlpha = (1 - glowT) * 0.5;
-          c.strokeStyle = accent;
-          c.lineWidth = 3 / Math.max(renderScale, 0.0001);
-          c.shadowColor = accent;
-          c.shadowBlur = 12 * (1 - glowT);
-          c.strokeRect(shapeBox.x, shapeBox.y, shapeBox.width, shapeBox.height);
-          c.restore();
-        }
+        const settle = easeOutCubic(t);
+        const scaleFactor = 1.06 - 0.06 * settle;
+        c.save();
+        c.globalAlpha = settle;
+        // Grow/settle around the shape's own center, in page units.
+        c.scale(renderScale, renderScale);
+        c.translate(shapeCx, shapeCy);
+        c.scale(scaleFactor, scaleFactor);
+        c.translate(-shapeCx, -shapeCy);
+        // Already scaled to page units above: render at scale 1.
+        annotationEngine.renderSingleAnnotation(c, preview, 1);
+        c.restore();
       },
       onComplete: () => {
         this._morphHandle = null;
@@ -376,10 +345,7 @@ export class PointerHandler {
         if (!c || !cv) return;
         c.setTransform(1, 0, 0, 1, 0, 0);
         c.clearRect(0, 0, cv.width, cv.height);
-        c.save();
-        c.scale(renderScale, renderScale);
         annotationEngine.renderSingleAnnotation(c, preview, renderScale);
-        c.restore();
       }
     });
   }
@@ -631,6 +597,9 @@ export class PointerHandler {
         // selection here would defeat the additive union on pointer-up, so it
         // only happens for a plain (non-additive) lasso.
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        // A press on the current selection's handles or body is a transform,
+        // never a new lasso — the controls behave identically to Select.
+        if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) break;
         if (!additive) store.clearSelection();
         this._lasso = {
           pageIndex,
@@ -645,37 +614,13 @@ export class PointerHandler {
         const doc = store.activeDocument;
         if (!doc) break;
         const pageAnns = doc.annotations[pageIndex] || [];
-        const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
 
         // Ctrl/Cmd-click adds to the selection exactly like Shift-click, so it
         // must not start a drag — otherwise multi-selecting for bulk delete
         // is impossible once something is already selected.
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         // 1. Grab a transform handle or the selection body to start a drag.
-        if (selected.length > 0 && !additive) {
-          const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
-          // Lone rotated annotations hit-test in their rotated frame.
-          const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
-          const hit = selectionManager.hitTestHandles(
-            pt, merged, store.zoom * (this.renderDpr()), singleRot
-          );
-          if (hit) {
-            const originals = new Map(selected.map(a => [a.id, cloneAnnotation(a)] as [string, Annotation]));
-            // Resizing a rotated annotation works in its unrotated frame.
-            const startPt = singleRot && hit !== 'body' && hit !== 'rot'
-              ? rotatePoint(pt, boxCenter(merged), -singleRot)
-              : { x: pt.x, y: pt.y };
-            this._selectDrag = {
-              mode: hit === 'body' ? 'move' : hit === 'rot' ? 'rotate' : 'resize',
-              handle: hit,
-              pageIndex,
-              originals,
-              merged: { ...merged },
-              startPt
-            };
-            break;
-          }
-        }
+        if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) break;
 
         // 2. Click an annotation to (multi-)select it.
         const ann = selectionManager.findAnnotationAtPoint(pt, pageAnns);
@@ -701,6 +646,42 @@ export class PointerHandler {
         break;
       }
     }
+  }
+
+  /**
+   * Starts a move/resize/rotate drag when the point grabs the current
+   * selection's handles or body. Shared by the Select and Lasso tools so the
+   * transform controls behave the same regardless of the active tool.
+   */
+  private tryBeginSelectDrag(pt: Point, pageIndex: number): boolean {
+    const doc = store.activeDocument;
+    if (!doc) return false;
+    const pageAnns = doc.annotations[pageIndex] || [];
+    const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+    if (selected.length === 0) return false;
+
+    const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
+    // Lone rotated annotations hit-test in their rotated frame.
+    const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
+    const hit = selectionManager.hitTestHandles(
+      pt, merged, store.zoom * (this.renderDpr()), singleRot
+    );
+    if (!hit) return false;
+
+    const originals = new Map(selected.map(a => [a.id, cloneAnnotation(a)] as [string, Annotation]));
+    // Resizing a rotated annotation works in its unrotated frame.
+    const startPt = singleRot && hit !== 'body' && hit !== 'rot'
+      ? rotatePoint(pt, boxCenter(merged), -singleRot)
+      : { x: pt.x, y: pt.y };
+    this._selectDrag = {
+      mode: hit === 'body' ? 'move' : hit === 'rot' ? 'rotate' : 'resize',
+      handle: hit,
+      pageIndex,
+      originals,
+      merged: { ...merged },
+      startPt
+    };
+    return true;
   }
 
   public handlePointerMove(
@@ -755,6 +736,9 @@ export class PointerHandler {
     const shiftKey = (e as MouseEvent).shiftKey === true;
 
     switch (tool) {
+      // Lasso shares Select's whole move path: an active transform drag takes
+      // priority, then the growing lasso loop, then the marquee.
+      case 'lasso':
       case 'select': {
         if (this._selectDrag && this._selectDrag.pageIndex === pageIndex) {
           // Absolute transform from drag start applied to pristine originals:
@@ -788,11 +772,6 @@ export class PointerHandler {
           this._marquee.current = { ...lastPt };
           this.renderMarquee(ctx, renderScale);
         }
-        break;
-      }
-
-      case 'lasso': {
-        this.growLasso(pts, pageIndex, ctx, renderScale);
         break;
       }
 
@@ -1368,6 +1347,19 @@ export class PointerHandler {
     const hit = selectionManager.hitTestHandles(
       pt, merged, store.zoom * (this.renderDpr()), singleRot
     );
+    const cursorByHandle: Record<Exclude<HandleType, null>, string> = {
+      nw: 'nwse-resize',
+      se: 'nwse-resize',
+      ne: 'nesw-resize',
+      sw: 'nesw-resize',
+      n: 'ns-resize',
+      s: 'ns-resize',
+      e: 'ew-resize',
+      w: 'ew-resize',
+      rot: 'crosshair',
+      body: 'move'
+    };
+    if (hit) canvas.style.cursor = cursorByHandle[hit];
 
     const isNearOrOver = hit !== null || (
       pt.x >= merged.x - 10 &&
@@ -1377,6 +1369,25 @@ export class PointerHandler {
     );
 
     floatingPropsBar.setHoverState(isNearOrOver);
+  }
+
+  /**
+   * Selection controls are an interaction layer, not a tool. This lets a user
+   * grab an existing selection while the hand or lasso tool is active instead
+   * of accidentally starting another pan/selection loop.
+   */
+  public isSelectionControlAt(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): boolean {
+    const doc = store.activeDocument;
+    if (!doc || store.selectedAnnotationIds.size === 0) return false;
+    const selected = (doc.annotations[pageIndex] || [])
+      .filter(annotation => store.selectedAnnotationIds.has(annotation.id));
+    if (selected.length === 0) return false;
+    const point = this.getPointInPage(e, canvas);
+    const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
+    const rotation = selected.length === 1 ? selected[0].rotation || 0 : 0;
+    return selectionManager.hitTestHandles(
+      point, merged, store.zoom * this.renderDpr(), rotation
+    ) !== null;
   }
 
   /**

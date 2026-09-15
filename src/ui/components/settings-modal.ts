@@ -15,8 +15,9 @@ import { clearAllStorage } from '../../io/storage';
 import { DEFAULT_ACCENT } from '../theme';
 import { resolveRenderDpr, clampRenderMultiplier } from '../../utils/dpi';
 import { TOOL_SHORT_LABELS } from './toolbar';
+import { shortcutManager, DEFAULT_SHORTCUTS, type ShortcutAction } from '../../input/shortcuts';
 
-type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
+type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'shortcuts' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
 
 /** Toolbar tool id → icon name, mirroring the toolbar template. */
 const TOOLBAR_ICONS: Record<string, string> = {
@@ -105,7 +106,7 @@ export class SettingsModalComponent {
     if (store.settingsTabRequest) {
       const req = store.settingsTabRequest;
       store.settingsTabRequest = null;
-      const tabs: string[] = ['appearance', 'toolbar', 'input', 'viewer', 'performance', 'storage', 'language', 'about'];
+      const tabs: string[] = ['appearance', 'toolbar', 'input', 'shortcuts', 'viewer', 'performance', 'storage', 'language', 'about'];
       if (tabs.includes(req)) this._activeTab = req as SettingsTab;
     }
 
@@ -181,6 +182,10 @@ export class SettingsModalComponent {
               <button class="settings-tab-btn ${this._activeTab === 'input' ? 'active' : ''}" data-tab="input">
                 ${getIconSvg('pen', 15)}
                 <span>Pen & Input</span>
+              </button>
+              <button class="settings-tab-btn ${this._activeTab === 'shortcuts' ? 'active' : ''}" data-tab="shortcuts">
+                ${getIconSvg('command', 15)}
+                <span>Keyboard Shortcuts</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'viewer' ? 'active' : ''}" data-tab="viewer">
                 ${getIconSvg('eye', 15)}
@@ -456,6 +461,32 @@ export class SettingsModalComponent {
               </button>
             </div>
           </div>
+        </div>
+      `;
+    }
+
+    if (this._activeTab === 'shortcuts') {
+      const bindings = shortcutManager.all();
+      const rows = (Object.keys(DEFAULT_SHORTCUTS) as ShortcutAction[]).map(action => {
+        const label = TOOL_SHORT_LABELS[action] || action;
+        const key = bindings[action] === 'space' ? 'Space' : bindings[action].toUpperCase();
+        return `
+          <button type="button" class="secondary-btn shortcut-row" data-rebind="${action}"
+                  style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+            <span>${label}</span>
+            <kbd class="kbd" style="min-width:44px; text-align:center;">${key}</kbd>
+          </button>`;
+      }).join('');
+
+      return `
+        <div class="settings-stack">
+          <div class="settings-section-header">Tool Shortcuts</div>
+          <div class="form-hint">Click a shortcut, then press the new key to bind it. Press Esc to cancel. Shortcuts are single keys without Ctrl/Alt modifiers and are saved on this device.</div>
+          <div class="prop-group" id="shortcut-rows" style="display:flex; flex-direction:column; gap:6px;">
+            ${rows}
+          </div>
+          <div class="form-hint" id="shortcut-conflict" style="color:#f43f5e; min-height:16px;"></div>
+          <button id="shortcuts-reset-btn" class="secondary-btn">Reset to Defaults</button>
         </div>
       `;
     }
@@ -945,6 +976,54 @@ export class SettingsModalComponent {
     this._container.querySelector('#about-shortcuts-btn')?.addEventListener('click', () => {
       store.setSettingsModalOpen(false);
       store.setShortcutsModalOpen(true);
+    });
+
+    // Keyboard shortcut rebinding: click a row, press the new key.
+    const refreshShortcutsPane = () => {
+      const content = this._container.querySelector('.settings-content');
+      if (content) {
+        content.innerHTML = this.renderTabContent(store.appSettings, store.toolSettings);
+        this.bindContentEvents();
+      }
+    };
+    this._container.querySelectorAll<HTMLElement>('[data-rebind]').forEach(row => {
+      row.addEventListener('click', () => {
+        const action = row.getAttribute('data-rebind') as ShortcutAction | null;
+        if (!action) return;
+        const kbd = row.querySelector('kbd');
+        if (kbd) kbd.textContent = '…';
+        const conflictHint = this._container.querySelector('#shortcut-conflict');
+        if (conflictHint) conflictHint.textContent = '';
+        const onKey = (e: KeyboardEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.removeEventListener('keydown', onKey, true);
+          if (e.key === 'Escape') {
+            refreshShortcutsPane();
+            return;
+          }
+          // Modifier presses alone don't bind; wait cancelled instead.
+          if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) {
+            refreshShortcutsPane();
+            return;
+          }
+          const conflict = shortcutManager.set(action, e.key === ' ' ? 'space' : e.key);
+          if (conflict) {
+            refreshShortcutsPane();
+            const hint = this._container.querySelector('#shortcut-conflict');
+            if (hint) {
+              hint.textContent = `“${e.key === ' ' ? 'Space' : e.key.toUpperCase()}” is already used by ${TOOL_SHORT_LABELS[conflict] || conflict}.`;
+            }
+            return;
+          }
+          refreshShortcutsPane();
+        };
+        window.addEventListener('keydown', onKey, true);
+      });
+    });
+    this._container.querySelector('#shortcuts-reset-btn')?.addEventListener('click', () => {
+      shortcutManager.reset();
+      refreshShortcutsPane();
     });
   }
 }

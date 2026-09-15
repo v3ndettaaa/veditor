@@ -15,6 +15,10 @@ export function shapeHasOutline(ann: Pick<ShapeAnnotation, 'type' | 'outline'>):
   return ann.outline !== false;
 }
 import { store } from '../core/store';
+import { traceRoundedPolygon } from '../utils/geometry';
+
+/** Default fillet radius (page pt) for shape corners; ~“a little radius”. */
+export const SHAPE_CORNER_RADIUS = 0.75;
 import { renderSmoothStroke } from './spline';
 import { textTool } from './tools/text';
 import { stampTool } from './tools/stamp';
@@ -239,6 +243,10 @@ export class AnnotationEngine {
     ctx.strokeStyle = ann.strokeColor;
     ctx.fillStyle = ann.fillColor || 'transparent';
     ctx.lineWidth = ann.strokeWidth;
+    // Shapes made from recognition or the polygon tool share this renderer;
+    // a round join prevents a sharp miter spike at every connected corner.
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
 
     if (ann.strokeStyle === 'dashed') {
       ctx.setLineDash([8, 6]);
@@ -252,10 +260,31 @@ export class AnnotationEngine {
     const outline = shapeHasOutline(ann);
 
     if (ann.type === 'rectangle') {
-      if (ann.fillColor && ann.fillColor !== 'transparent') {
-        ctx.fillRect(b.x, b.y, b.width, b.height);
+      const radius = Math.max(0, Math.min(
+        Number.isFinite(ann.cornerRadius) ? ann.cornerRadius : SHAPE_CORNER_RADIUS,
+        b.width / 2,
+        b.height / 2
+      ));
+      ctx.beginPath();
+      if (radius > 0) {
+        // `roundRect` is not available in older extension WebViews.
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(b.x, b.y, b.width, b.height, radius);
+        } else {
+          ctx.moveTo(b.x + radius, b.y);
+          ctx.arcTo(b.x + b.width, b.y, b.x + b.width, b.y + b.height, radius);
+          ctx.arcTo(b.x + b.width, b.y + b.height, b.x, b.y + b.height, radius);
+          ctx.arcTo(b.x, b.y + b.height, b.x, b.y, radius);
+          ctx.arcTo(b.x, b.y, b.x + b.width, b.y, radius);
+          ctx.closePath();
+        }
+      } else {
+        ctx.rect(b.x, b.y, b.width, b.height);
       }
-      if (outline) ctx.strokeRect(b.x, b.y, b.width, b.height);
+      if (ann.fillColor && ann.fillColor !== 'transparent') {
+        ctx.fill();
+      }
+      if (outline) ctx.stroke();
     } else if (ann.type === 'ellipse') {
       ctx.beginPath();
       ctx.ellipse(
@@ -300,14 +329,13 @@ export class AnnotationEngine {
         ctx.fill();
       }
     } else if (ann.points && ann.points.length > 1) {
+      // Polygons and recognized freeform shapes get filleted corners so they
+      // match the rounded look of rectangles; legacy square corners stay
+      // available through cornerRadius: 0.
+      const closed = ann.type === 'freeform-shape' || ann.type === 'polygon';
+      const radius = Number.isFinite(ann.cornerRadius) ? ann.cornerRadius : SHAPE_CORNER_RADIUS;
       ctx.beginPath();
-      ctx.moveTo(ann.points[0].x, ann.points[0].y);
-      for (let i = 1; i < ann.points.length; i++) {
-        ctx.lineTo(ann.points[i].x, ann.points[i].y);
-      }
-      if (ann.type === 'freeform-shape' || ann.type === 'polygon') {
-        ctx.closePath();
-      }
+      traceRoundedPolygon(ctx, ann.points, radius, closed);
       if (ann.fillColor && ann.fillColor !== 'transparent') {
         ctx.fill();
       }

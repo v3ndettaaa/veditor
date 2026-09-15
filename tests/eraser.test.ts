@@ -12,7 +12,7 @@ describe('EraserTool Modes & Pixel Slicing', () => {
     strokeWidth: 2,
     opacity: 1,
     box: { x: Math.min(...xCoords), y: 0, width: Math.max(...xCoords) - Math.min(...xCoords), height: 10 },
-    points: xCoords.map(x => ({ x, y: 5 })),
+    points: xCoords.map(x => ({ x, y: 5, pressure: 0.5 })),
     createdAt: Date.now(),
     updatedAt: Date.now()
   });

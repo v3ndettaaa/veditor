@@ -129,9 +129,6 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   } else if (a.points !== undefined) {
     next.points = a.points;
   }
-  if (a.points !== undefined) {
-    next.points = a.points;
-  }
   if ('strokeWidth' in a && typeof a.strokeWidth === 'number') {
     next.strokeWidth = Math.max(0.5, a.strokeWidth * meanScale);
   }
@@ -164,12 +161,14 @@ export class SelectionManager {
     const cy = box.y + box.height / 2;
 
     let bestHandle: HandleType | null = null;
-    let bestDist = hs * 1.5;
+    // Generous grab zones: handles draw only a few CSS pixels wide on HiDPI
+    // screens, so the hit area must be meaningfully larger than the visual.
+    let bestDist = hs * 2.4;
 
     // Rotation handle (tested in the unrotated frame like everything else)
     const rotPt: Point = { x: cx, y: box.y - rotDist };
     const dRot = distance(local, rotPt);
-    if (dRot <= hs * 1.6) {
+    if (dRot <= hs * 2.2) {
       bestHandle = 'rot';
       bestDist = dRot;
     }
@@ -193,7 +192,7 @@ export class SelectionManager {
 
     for (const [key, pt] of Object.entries(handles)) {
       const d = distance(local, pt);
-      if (d <= hs * 1.4 && d < bestDist) {
+      if (d <= hs * 2.0 && d < bestDist) {
         bestDist = d;
         bestHandle = key as HandleType;
       }

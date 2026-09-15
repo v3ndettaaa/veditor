@@ -78,7 +78,8 @@ export class PenTool {
       this._width,
       this._pressureCurve,
       this._pressureEnabled,
-      this._strength
+      this._strength,
+      this._smoothing
     );
     ctx.restore();
   }

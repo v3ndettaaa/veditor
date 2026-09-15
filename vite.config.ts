@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
   const isFirefox = mode === 'firefox';
   const outDir = isDesktop ? 'dist/desktop' : (isFirefox ? 'dist/firefox' : 'dist/chrome');
 
-  const input = isDesktop
+  const input: Record<string, string> = isDesktop
     ? { main: resolve(import.meta.dirname, 'index.html') }
     : {
         main: resolve(import.meta.dirname, 'index.html'),

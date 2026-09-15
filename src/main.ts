@@ -23,19 +23,21 @@ import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
 import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle } from './io/save';
-import { selectionManager } from './annotations/selection';
+import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { resolveRenderDpr, clampRenderMultiplier } from './utils/dpi';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
-import { history, DeleteAnnotationsCommand } from './core/history';
+import { history, AddAnnotationCommand, DeleteAnnotationsCommand, BulkModifyCommand } from './core/history';
+import { stampTool } from './annotations/tools/stamp';
 import { duplicateSelectedAnnotations } from './annotations/duplicate';
 import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
 import { onPageStructureChanged } from './core/page-ops';
 import { gestureEngine } from './input/gestures';
+import { shortcutManager } from './input/shortcuts';
 
 class VeditorApp {
   private _scrollContainer: HTMLElement;
@@ -106,6 +108,8 @@ class VeditorApp {
   } | null = null;
   /** Tool to restore when a held Space (temporary hand) is released. */
   private _spacePrevTool: ToolType | null = null;
+  /** Last hand-tool press, for manual double-press quick-select detection. */
+  private _lastHandTap: { time: number; x: number; y: number } | null = null;
   private _annotationMenu = new AnnotationContextMenu();
 
   constructor() {
@@ -209,6 +213,9 @@ class VeditorApp {
 
     // 6. Setup Keyboard Shortcuts
     this.setupGlobalShortcuts();
+
+    // 6b. Paste images copied outside the editor straight onto the page.
+    this.setupClipboardImagePaste();
 
     // 7. Check URL parameters
     await this.checkUrlParams();
@@ -1119,8 +1126,11 @@ class VeditorApp {
     p.pdfCanvas.style.width = `${layout.width}px`;
     p.pdfCanvas.style.height = `${layout.height}px`;
 
-    const w = layout.width * dpr;
-    const h = layout.height * dpr;
+    // Whole-pixel backing stores: fractional canvas sizes are truncated by
+    // the browser, leaving a sub-pixel mismatch against the CSS size that
+    // slightly resamples (and softens/aliases) every stroke.
+    const w = Math.round(layout.width * dpr);
+    const h = Math.round(layout.height * dpr);
 
     // Avoid clearing canvas buffers if dimensions haven't changed!
     let resized = false;
@@ -1263,8 +1273,39 @@ class VeditorApp {
         return;
       }
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      // Transform handles and the selected body take precedence over the hand
+      // tool. (The lasso tool handles this itself in PointerHandler.)
+      if (
+        store.activeTool === 'hand' &&
+        pointerHandler.isSelectionControlAt(e, pageIndex, canvas)
+      ) {
+        store.setActiveTool('select');
+      }
       // Hand tool: drag pans the page like a trackpad — never draws.
       if (store.activeTool === 'hand') {
+        // Double-press quick-select. Detected manually on pointerdown because
+        // `dblclick` is unreliable here: canceled pointerdowns and touch
+        // double-taps don't produce it consistently across browsers.
+        const now = performance.now();
+        const lastTap = this._lastHandTap;
+        this._lastHandTap = { time: now, x: e.clientX, y: e.clientY };
+        if (
+          lastTap &&
+          now - lastTap.time < 400 &&
+          Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 25
+        ) {
+          const point = pointerHandler.pagePointForEvent(e, canvas);
+          const hit = selectionManager.findAnnotationAtPoint(
+            point, store.activeDocument?.annotations[pageIndex] || []
+          );
+          if (hit) {
+            this._lastHandTap = null;
+            store.setActiveTool('select');
+            store.selectAnnotation(hit.id);
+            onRepaint();
+            return;
+          }
+        }
         e.preventDefault();
         try {
           canvas.setPointerCapture(e.pointerId);
@@ -1304,6 +1345,10 @@ class VeditorApp {
       }
       if (!pointerHandler.isPointerDown) {
         pointerHandler.handleHover(e, pageIndex, canvas);
+        // Polygon vertices are placed on click, so its elastic edge must also
+        // receive unpressed moves. `handlePointerMove` returns immediately for
+        // every other inactive tool.
+        pointerHandler.handlePointerMove(e, pageIndex, canvas, onRepaint);
         return;
       }
       e.preventDefault();
@@ -1373,6 +1418,22 @@ class VeditorApp {
       const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
       if (finished) return;
       if (store.activeTool === 'polygon') return;
+      // The hand tool remains an efficient navigation mode, but double-click
+      // is an intentional editing gesture. Pick the topmost unlocked item
+      // directly rather than forwarding a synthetic pointer event (which
+      // could begin a pan or lasso drag).
+      if (store.activeTool === 'hand') {
+        const point = pointerHandler.pagePointForEvent(e, canvas);
+        const hit = selectionManager.findAnnotationAtPoint(
+          point, store.activeDocument?.annotations[pageIndex] || []
+        );
+        if (hit) {
+          store.setActiveTool('select');
+          store.selectAnnotation(hit.id);
+          onRepaint();
+          return;
+        }
+      }
       // Toggle: zoomed out → 200% at click; zoomed in → fit width.
       if (store.zoom < 1.5) {
         this.zoomAtPoint(2.0 / Math.max(store.zoom, MIN_ZOOM), { x: e.clientX, y: e.clientY });
@@ -1471,6 +1532,76 @@ class VeditorApp {
     }
   }
 
+  /**
+   * System clipboard → page: pasting an image copied anywhere (browser,
+   * screenshot tool, image editor) drops it onto the active page as a
+   * resizable image annotation, one undo step.
+   */
+  private setupClipboardImagePaste() {
+    window.addEventListener('paste', (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      // Text fields keep their native paste behavior.
+      if (target && (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable)) return;
+      if (!store.activeDocument) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+        const file = item.getAsFile();
+        if (!file) continue;
+        e.preventDefault();
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+          if (!dataUrl) return;
+          const probe = new Image();
+          probe.onload = () => {
+            stampTool.primeImage(dataUrl, probe);
+            this.insertPastedImage(dataUrl, probe.naturalWidth, probe.naturalHeight);
+          };
+          probe.onerror = () => showToast('Could not read pasted image', 'error');
+          probe.src = dataUrl;
+        };
+        reader.readAsDataURL(file);
+        return; // First image wins; ignore other clipboard flavors.
+      }
+    });
+  }
+
+  /** Places a pasted image centered on the active page, sized to fit. */
+  private insertPastedImage(dataUrl: string, pixelWidth: number, pixelHeight: number): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+    const pageIndex = store.activePageIndex;
+    const page = doc.pages?.[pageIndex];
+    const pageWidth = page?.width ?? 612;
+    const pageHeight = page?.height ?? 792;
+
+    // CSS pixels → PDF points (96dpi → 72dpi), then cap to 60% of the page so
+    // large screenshots land as a manageable, still-resizable size.
+    let width = pixelWidth * 0.75;
+    let height = pixelHeight * 0.75;
+    const fit = Math.min(1, (pageWidth * 0.6) / width, (pageHeight * 0.6) / height);
+    width *= fit;
+    height *= fit;
+
+    const annotation = stampTool.createCustomImageStamp(
+      { x: pageWidth / 2, y: pageHeight / 2 },
+      pageIndex,
+      'layer-default',
+      dataUrl,
+      width,
+      height
+    );
+    history.execute(new AddAnnotationCommand(pageIndex, annotation));
+    store.setActiveTool('select');
+    store.selectAnnotation(annotation.id);
+    this.repaintAllRenderedAnnotations();
+    showToast('Image pasted onto page', 'success');
+  }
+
   private setupGlobalShortcuts() {
     // Hold Space for a temporary hand tool (Figma-style); release restores.
     window.addEventListener('keyup', (e) => {
@@ -1556,6 +1687,41 @@ class VeditorApp {
       if (e.altKey) return;
 
       const key = e.key.toLowerCase();
+      const shortcutTool = shortcutManager.actionForEvent(e);
+      if (shortcutTool) {
+        e.preventDefault();
+        store.setActiveTool(shortcutTool);
+        return;
+      }
+
+      // Arrow keys always operate on one clear target: the current selection
+      // when present, otherwise the document viewport. This keeps browser
+      // scrolling from competing with canvas transforms.
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+        e.preventDefault();
+        const selectedIds = store.selectedAnnotationIds;
+        const doc = store.activeDocument;
+        const distance = e.shiftKey ? 10 : 1;
+        const dx = key === 'arrowleft' ? -distance : key === 'arrowright' ? distance : 0;
+        const dy = key === 'arrowup' ? -distance : key === 'arrowdown' ? distance : 0;
+        if (doc && selectedIds.size > 0) {
+          for (const [pageKey, annotations] of Object.entries(doc.annotations)) {
+            const pairs = annotations
+              .filter(annotation => selectedIds.has(annotation.id) && !annotation.locked)
+              .map(annotation => ({
+                prev: annotation,
+                next: transformAnnotation(annotation, {
+                  dx, dy, scaleX: 1, scaleY: 1, originX: 0, originY: 0
+                })
+              }));
+            if (pairs.length) history.execute(new BulkModifyCommand(Number(pageKey), pairs));
+          }
+          this.repaintAllRenderedAnnotations();
+        } else {
+          this._scrollContainer.scrollBy({ left: dx * 32, top: dy * 32, behavior: 'auto' });
+        }
+        return;
+      }
 
       // Delete / Backspace removes the current selection (all pages).
       if (key === 'delete' || key === 'backspace') {
@@ -1575,24 +1741,13 @@ class VeditorApp {
         return;
       }
 
-      if (key === 'v') store.setActiveTool('select');
-      else if (key === 'p') store.setActiveTool('pen');
-      else if (key === 'h') store.setActiveTool('highlighter');
-      else if (key === 'e') store.setActiveTool('eraser');
-      else if (key === 'r') store.setActiveTool('rectangle');
-      else if (key === 'o') store.setActiveTool('ellipse');
-      else if (key === 'l') store.setActiveTool('line');
-      else if (key === 'a') store.setActiveTool('arrow');
-      else if (key === 'g') store.setActiveTool('polygon');
-      else if (key === 't') store.setActiveTool('text');
-      else if (key === 'm') store.setActiveTool('stamp');
-      else if (key === 'k') store.setSignatureModalOpen(true);
-      else if (key === 'q') store.setActiveTool('lasso');
+      // Tool keys resolve through the user-configurable shortcut registry;
+      // only non-tool actions keep fixed keys below.
+      if (key === 'k') store.setSignatureModalOpen(true);
       else if (key === 'n') {
         store.setActiveTool('scratchpad');
         store.setScratchpadOpen(true);
       }
-      else if (key === 'x') store.setActiveTool('redaction');
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();

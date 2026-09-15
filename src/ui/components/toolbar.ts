@@ -111,6 +111,9 @@ export class ToolbarComponent {
 
   public render(): void {
     this._container.dataset.dock = store.appSettings.toolbarDock;
+    // Mirrored on <body> so sibling overlays (e.g. the zoom controls) can
+    // reposition themselves around a bottom-docked toolbar with pure CSS.
+    document.body.dataset.toolbarDock = store.appSettings.toolbarDock;
     if (!store.activeDocument) {
       this._container.style.display = 'none';
       return;

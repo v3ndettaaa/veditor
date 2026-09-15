@@ -10,8 +10,12 @@
 
 export const BASE_PDF_DPI = 72;
 
-/** Maximum canvas backing-store dimension, capped to protect VRAM. */
-export const MAX_RENDER_DIMENSION = 4096;
+/**
+ * Maximum canvas backing-store dimension, capped to protect VRAM.
+ * 6144 keeps pages sharp to ~5x zoom on HiDPI displays; beyond the cap the
+ * browser upscales, which is where visible aliasing would begin.
+ */
+export const MAX_RENDER_DIMENSION = 6144;
 
 export function getDevicePixelRatio(): number {
   if (typeof window !== 'undefined' && window.devicePixelRatio) {

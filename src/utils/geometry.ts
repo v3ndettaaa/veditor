@@ -4,6 +4,59 @@
 
 import { Point, BoundingBox } from '../core/types';
 
+/**
+ * Traces a polyline/polygon with rounded corners onto an open path. Each
+ * corner is filleted with `arcTo`, clamped to half of its two adjacent edge
+ * lengths so short edges never overlap. Callers own beginPath/fill/stroke.
+ */
+export function traceRoundedPolygon(
+  ctx: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  radius: number,
+  close: boolean
+): void {
+  const n = points.length;
+  if (n === 0) return;
+  const d = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.hypot(b.x - a.x, b.y - a.y);
+  if (n < 3 || radius <= 0) {
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(points[i].x, points[i].y);
+    if (close && n > 1) ctx.closePath();
+    return;
+  }
+  const cornerRadius = (
+    prev: { x: number; y: number },
+    curr: { x: number; y: number },
+    next: { x: number; y: number }
+  ) => Math.max(0, Math.min(radius, d(prev, curr) / 2, d(curr, next) / 2));
+
+  if (close) {
+    const start = {
+      x: (points[n - 1].x + points[0].x) / 2,
+      y: (points[n - 1].y + points[0].y) / 2
+    };
+    ctx.moveTo(start.x, start.y);
+    for (let i = 0; i < n; i++) {
+      const prev = points[(i - 1 + n) % n];
+      const curr = points[i];
+      const next = points[(i + 1) % n];
+      const mid = { x: (curr.x + next.x) / 2, y: (curr.y + next.y) / 2 };
+      ctx.arcTo(curr.x, curr.y, mid.x, mid.y, cornerRadius(prev, curr, next));
+      ctx.lineTo(mid.x, mid.y);
+    }
+    ctx.closePath();
+    return;
+  }
+
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < n - 1; i++) {
+    const r = cornerRadius(points[i - 1], points[i], points[i + 1]);
+    ctx.arcTo(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, r);
+  }
+  ctx.lineTo(points[n - 1].x, points[n - 1].y);
+}
+
 export function distance(p1: Point, p2: Point): number {
   const dx = p2.x - p1.x;
   const dy = p2.y - p1.y;

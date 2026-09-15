@@ -471,9 +471,12 @@ export function renderSmoothStroke(
 ): void {
   if (points.length === 0) return;
 
-  // Finalized pen points are already smoothed in real-time as drawn; the
-  // highlighter still benefits from a light pass to settle jitter.
-  const pts = isHighlighter ? smoothStrokePoints(points, smoothing === 'none' ? 'none' : 'subtle') : points;
+  // Filter samples before fitting the Bézier path. This prevents raw pointer
+  // samples from pulling an otherwise smooth curve into visible corners.
+  const pts = smoothStrokePoints(
+    points,
+    isHighlighter && smoothing !== 'none' ? 'subtle' : smoothing
+  );
 
   ctx.save();
   ctx.lineCap = tipShape === 'chisel' ? 'square' : 'round';
@@ -519,7 +522,7 @@ export function renderSmoothStroke(
   // the path is the same centripetal Catmull-Rom fit — calculateStrokeWidth
   // simply returns baseWidth when pressure is off.
   ctx.restore();
-  renderInkRibbon(ctx, points, color, baseWidth, pressureCurve, pressureEnabled, strength);
+  renderInkRibbon(ctx, pts, color, baseWidth, pressureCurve, pressureEnabled, strength);
 }
 
 /**
@@ -534,8 +537,17 @@ export function renderLiveStroke(
   baseWidth: number,
   pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
   pressureEnabled = true,
-  strength: 'light' | 'balanced' | 'strong' = 'balanced'
+  strength: 'light' | 'balanced' | 'strong' = 'balanced',
+  smoothing: 'none' | 'subtle' | 'medium' | 'high' = 'medium'
 ): void {
-  renderInkRibbon(ctx, points, color, baseWidth, pressureCurve, pressureEnabled, strength);
+  renderInkRibbon(
+    ctx,
+    smoothStrokePoints(points, smoothing),
+    color,
+    baseWidth,
+    pressureCurve,
+    pressureEnabled,
+    strength
+  );
 }
 

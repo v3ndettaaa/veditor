@@ -13,6 +13,13 @@ export interface PDFExportOptions {
   dpi: 72 | 150 | 300 | 600;
   applyRedactions: boolean;
   pageRange?: { start: number; end: number }; // 1-indexed
+  /** Exact zero-indexed pages, used by sidebar multi-selection. */
+  pageIndices?: number[];
+  /**
+   * True bakes the on-screen dark theme into the exported pages (the same
+   * inversion filter the viewer uses); false/undefined keeps original page
+   * colors untouched. Only ever applied when explicitly requested.
+   */
   darkMode?: boolean;
 }
 
@@ -30,19 +37,24 @@ export class PDFExporter {
     const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
     const pages = pdfDoc.getPages();
 
-    const startIdx = options.pageRange ? options.pageRange.start - 1 : 0;
-    const endIdx = options.pageRange ? options.pageRange.end - 1 : pages.length - 1;
+    const selectedIndices = options.pageIndices?.length
+      ? [...new Set(options.pageIndices)].filter(i => i >= 0 && i < pages.length).sort((a, b) => a - b)
+      : options.pageRange
+        ? Array.from(
+          { length: Math.max(0, options.pageRange.end - options.pageRange.start + 1) },
+          (_, offset) => options.pageRange!.start - 1 + offset
+        ).filter(i => i >= 0 && i < pages.length)
+        : pages.map((_, index) => index);
 
-    for (let i = startIdx; i <= endIdx; i++) {
-      if (i < 0 || i >= pages.length) continue;
+    for (const i of selectedIndices) {
       const pdfPage = pages[i];
       const pageAnnotations = doc.annotations[i] || [];
 
-      // Check if page has annotations, redactions or dark mode enabled
       if (!options.darkMode && pageAnnotations.length === 0) continue;
 
       if (options.darkMode) {
-        // True Dark Mode Baking: renders page in OLED Dark mode matching screen view
+        // Dark theme baking: renders the page through the same inversion the
+        // viewer applies, then overlays annotations in their original colors.
         const { width, height } = pdfPage.getSize();
         const dpiScale = options.dpi / 72;
         const totalRotation = store.pageRotations[i] || 0;
@@ -59,19 +71,11 @@ export class PDFExporter {
             darkCtx.drawImage(rawCanvas, 0, 0);
             darkCtx.filter = 'none';
 
-            // Render annotations on top in their original colors
             annotationEngine.renderAnnotationsToCanvas(darkCtx, i, dpiScale);
 
-            const jpgDataUrl = darkCanvas.toDataURL('image/jpeg', 0.92);
-            const jpgBytes = this.dataUrlToUint8Array(jpgDataUrl);
+            const jpgBytes = await this.canvasToBytes(darkCanvas, 'image/jpeg', 0.92);
             const embeddedImg = await pdfDoc.embedJpg(jpgBytes);
-            pdfPage.drawImage(embeddedImg, {
-              x: 0,
-              y: 0,
-              width,
-              height,
-              opacity: 1.0
-            });
+            pdfPage.drawImage(embeddedImg, { x: 0, y: 0, width, height, opacity: 1.0 });
           }
         }
       } else if (options.flatten) {
@@ -90,10 +94,7 @@ export class PDFExporter {
           // Render annotations at export scale
           annotationEngine.renderAnnotationsToCanvas(ctx, i, dpiScale);
 
-          // Convert canvas to PNG blob/bytes
-          const pngDataUrl = offCanvas.toDataURL('image/png');
-          const pngBytes = this.dataUrlToUint8Array(pngDataUrl);
-
+          const pngBytes = await this.canvasToBytes(offCanvas, 'image/png');
           const embeddedPng = await pdfDoc.embedPng(pngBytes);
           pdfPage.drawImage(embeddedPng, {
             x: 0,
@@ -123,6 +124,16 @@ export class PDFExporter {
           }
         }
       }
+    }
+
+    // Copy selected pages into a fresh document. This is more reliable than
+    // removing pages in-place across Firefox's pdf-lib worker boundary, and
+    // it supports non-contiguous sidebar selections.
+    if (options.pageRange || options.pageIndices?.length) {
+      const selectedDocument = await PDFDocument.create();
+      const copiedPages = await selectedDocument.copyPages(pdfDoc, selectedIndices);
+      copiedPages.forEach(page => selectedDocument.addPage(page));
+      return selectedDocument.save();
     }
 
     return await pdfDoc.save();
@@ -184,6 +195,33 @@ export class PDFExporter {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     return { handle: null, cancelled: false };
+  }
+
+  /**
+   * Canvas → encoded bytes without a base64 round-trip: `toBlob` avoids the
+   * ~3x peak memory and main-thread stall of `toDataURL` + `atob` on large
+   * high-DPI pages. Falls back to the data-URL path when `toBlob` yields null.
+   */
+  private canvasToBytes(
+    canvas: HTMLCanvasElement,
+    type: 'image/png' | 'image/jpeg',
+    quality?: number
+  ): Promise<Uint8Array> {
+    return new Promise((resolveBytes, rejectBytes) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          try {
+            resolveBytes(this.dataUrlToUint8Array(canvas.toDataURL(type, quality)));
+          } catch (err) {
+            rejectBytes(err);
+          }
+          return;
+        }
+        blob.arrayBuffer()
+          .then(buf => resolveBytes(new Uint8Array(buf)))
+          .catch(rejectBytes);
+      }, type, quality);
+    });
   }
 
   private dataUrlToUint8Array(dataUrl: string): Uint8Array {

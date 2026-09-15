@@ -117,6 +117,8 @@ export interface ShapeAnnotation extends BaseAnnotation {
   /** False = fill-only shape with no outline stroke (ignored by line/arrow). */
   outline?: boolean;
   strokeStyle: 'solid' | 'dashed' | 'dotted';
+  /** Optional radius in page points. Zero preserves legacy square corners. */
+  cornerRadius?: number;
   points?: Point[]; // for polygon, line, arrow, freeform
   arrowStart?: boolean;
   arrowEnd?: boolean;

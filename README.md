@@ -5,10 +5,10 @@
 # veditor
 
 ### **Ultra-Fast, World-Class Offline PDF Editor & Annotation Suite**
-*Engineered for Chrome (Manifest V3) & Firefox (WebExtensions)*
+*Engineered for Chrome (Manifest V3), Firefox (WebExtensions) & Desktop (Tauri v2)*
 
-[![Tests](https://img.shields.io/badge/tests-39%20passed-brightgreen.svg)](#-automated-testing)
-[![Target](https://img.shields.io/badge/target-Chrome%20MV3%20%7C%20Firefox-blue.svg)](#-installation)
+[![Tests](https://img.shields.io/badge/tests-113%20passed-brightgreen.svg)](#-automated-testing)
+[![Target](https://img.shields.io/badge/target-Chrome%20MV3%20%7C%20Firefox%20%7C%20Desktop-blue.svg)](#-installation)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 [![Offline](https://img.shields.io/badge/offline-100%25%20Private%20(Zero%20Telemetry)-emerald.svg)](#-privacy--offline-guarantee)
 [![Language](https://img.shields.io/badge/i18n-English%20%7C%20فارسی%20(RTL)-orange.svg)](#-multilingual--full-rtl-support)
@@ -26,9 +26,16 @@
 ## ✨ Key Features
 
 ### 📐 Custom Multi-Point Polygon & Shapes
-- **Interactive Multi-Point Polygon (`G`)**: Click consecutive points on the page to build complex custom vector shapes with live rubber-band preview line and interactive vertex indicators.
+- **Interactive Multi-Point Polygon (`G`)**: Click consecutive points on the page to build complex custom vector shapes with a live elastic edge that follows the cursor between clicks.
 - **Auto-Closing Detection**: Hovering within 14px of the start point illuminates a green target ring; clicking or double-clicking snaps the polygon closed.
-- **Geometric Vector Library**: Rectangles (`R`), Ellipses (`O`), Lines (`L`), Arrows (`A`), and Polygons (`G`) with customizable stroke width, fill color, and styles (Solid, Dashed, Dotted).
+- **Geometric Vector Library**: Rectangles (`R`), Ellipses (`O`), Lines (`L`), Arrows (`A`), and Polygons (`G`) with customizable stroke width, fill color, styles (Solid, Dashed, Dotted), and softly filleted corners.
+- **Draw-and-Hold Shape Recognition**: Sketch a shape with the pen and hold still — the stroke settles into a clean line, arrow, rectangle, ellipse, triangle, or polygon with a subtle scale-in animation.
+
+### 🖼️ Paste Images from Anywhere
+- **System Clipboard Paste (`Ctrl+V`)**: Copy an image in any app — browser, screenshot tool, image editor — and paste it straight onto the active page as a resizable, rotatable image annotation (one undo step, auto-selected).
+
+### ⌨️ Customizable Keyboard Shortcuts
+- **Rebind Any Tool Key**: A dedicated *Keyboard Shortcuts* tab in Settings lets you click a shortcut, press a new key, and rebind it — with conflict warnings, per-device persistence, and one-click *Reset to Defaults*.
 
 ### 🖍️ Advanced Highlighter with Straight-Line Auto-Snap
 - **Straight-Line Snapping**: Hold the **`Shift`** key while dragging or toggle "Straight Snap" in the highlighter popover to draw crisp, level horizontal or vertical highlights over lines of text.
@@ -107,6 +114,7 @@ Access the comprehensive Settings Modal from the gear icon in the header:
 - **Viewer & Reading**: Default view mode (Continuous Vertical, Single Page, Two-Page Book Spread), default zoom presets (Fit Width, Fit Page, 100%, 125%, 150%), and realistic drop shadows.
 - **Performance**: Custom canvas render DPI (72–600, with preset chips and a live effective-scale readout), off-screen page buffer distance, and force VRAM reclaim button.
 - **Storage & Backup**: Configurable auto-save frequency, IndexedDB database reset, and complete settings restore.
+- **Keyboard Shortcuts**: Rebind every tool key with live conflict detection and reset-to-defaults.
 - **About**: Version information, keyboard shortcuts dialog, and direct GitHub links.
 
 ---
@@ -142,6 +150,15 @@ veditor is built from the ground up for seamless bidirectional localization:
 4. Select `dist/firefox/manifest.json`.
 5. **veditor** is immediately ready to annotate!
 
+### Desktop (Tauri v2)
+1. Install the [Rust toolchain](https://www.rust-lang.org/tools/install) and Tauri prerequisites.
+2. Build the native desktop app:
+   ```bash
+   npm run build:desktop   # web bundle -> dist/desktop
+   npx tauri build         # native installers for your OS
+   ```
+3. Installers are emitted under `src-tauri/target/release/bundle/`.
+
 ---
 
 ## 🛠️ Development & Testing
@@ -159,24 +176,17 @@ npm run test
 # 4. Compile production bundles
 npm run build:chrome    # Chrome MV3 -> dist/chrome
 npm run build:firefox   # Firefox WebExtensions -> dist/firefox
+npm run build:desktop   # Tauri web bundle -> dist/desktop
 
 # 5. Build and generate distribution ZIP archives
 npm run package         # Creates dist/veditor-chrome.zip and dist/veditor-firefox.zip
 ```
 
 ### 🧪 Automated Testing
-All core mathematical algorithms, spline generation, pressure mappings, multi-tab switching, and undo/redo stacks are covered by automated unit tests:
+All core mathematical algorithms — spline generation, pressure mappings, shape recognition, selection transforms, page operations, history, and export — are covered by automated unit tests:
 ```
-✓ tests/eraser.test.ts (4 tests)
-✓ tests/export.test.ts (3 tests)
-✓ tests/folders.test.ts (4 tests)
-✓ tests/geometry.test.ts (8 tests)
-✓ tests/history.test.ts (4 tests)
-✓ tests/polygon-highlighter.test.ts (10 tests)
-✓ tests/spline.test.ts (6 tests)
-
-Test Files  7 passed (7)
-     Tests  39 passed (39)
+Test Files  17 passed (17)
+     Tests  113 passed (113)
 ```
 
 ---
@@ -262,7 +272,7 @@ veditor/
 | `Ctrl + K` | Open Command Palette |
 | `?` | View Keyboard Shortcuts Modal |
 
-See [SHORTCUTS.md](SHORTCUTS.md) for the complete reference.
+Every tool key above is **rebindable** from *Settings → Keyboard Shortcuts*. See [SHORTCUTS.md](SHORTCUTS.md) for the complete reference.
 
 ---
 
