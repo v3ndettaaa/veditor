@@ -24,6 +24,7 @@ import {
 } from '../../annotations/selection';
 import { mergeBoundingBoxes } from '../../utils/geometry';
 import { getIconSvg } from '../../utils/icons';
+import { viewportManager } from '../../core/viewport';
 import { showToast } from './toast';
 
 export interface AnnotationMenuTarget {
@@ -32,7 +33,7 @@ export interface AnnotationMenuTarget {
   onRepaint: (pageIndex: number) => void;
 }
 
-interface MenuAction {
+export interface MenuAction {
   kind: 'action';
   id: string;
   label: string;
@@ -43,25 +44,109 @@ interface MenuAction {
   run: () => void;
 }
 
-interface MenuSeparator {
+export interface MenuSeparator {
   kind: 'separator';
 }
 
-type MenuEntry = MenuAction | MenuSeparator;
+export type MenuEntry = MenuAction | MenuSeparator;
 
 function makeAnnotationId(): string {
   return `ann_${Math.random().toString(36).substring(2, 10)}`;
 }
 
-export class AnnotationContextMenu {
-  private _root: HTMLDivElement | null = null;
-  private _cleanup: (() => void) | null = null;
+/**
+ * The one open menu, module-level so the canvas menu and the page-list menu can
+ * never stack on top of each other.
+ */
+let activeMenuCleanup: (() => void) | null = null;
 
+export function closeContextMenu(): void {
+  if (activeMenuCleanup) {
+    activeMenuCleanup();
+    activeMenuCleanup = null;
+  }
+}
+
+/**
+ * Renders a themed menu of `entries` at (x, y), clamped to the viewport, and
+ * dismisses it on outside pointer-down, Escape, scroll or resize. Shared by the
+ * canvas context menu and the page-list context menu so both look identical.
+ */
+export function openContextMenu(x: number, y: number, entries: MenuEntry[], parent: ParentNode = document.body): void {
+  if (entries.length === 0) return;
+  closeContextMenu();
+
+  const root = document.createElement('div');
+  root.className = 'annotation-context-menu';
+  root.setAttribute('role', 'menu');
+  root.innerHTML = entries.map(entry => entry.kind === 'separator'
+    ? '<div class="annotation-context-separator" role="separator"></div>'
+    : `
+      <button type="button" class="annotation-context-item${entry.danger ? ' is-danger' : ''}" data-menu-action="${entry.id}" role="menuitem"${entry.disabled ? ' disabled aria-disabled="true"' : ''}>
+        <span class="annotation-context-icon">${getIconSvg(entry.icon, 14)}</span>
+        <span class="annotation-context-label">${entry.label}</span>
+        ${entry.shortcut ? `<span class="annotation-context-shortcut">${entry.shortcut}</span>` : ''}
+      </button>
+    `).join('');
+  parent.appendChild(root);
+
+  root.querySelectorAll<HTMLButtonElement>('[data-menu-action]').forEach(button => {
+    const entry = entries.find(item => item.kind === 'action' && item.id === button.dataset.menuAction) as MenuAction | undefined;
+    if (!entry) return;
+    if (entry.disabled) return;
+    button.addEventListener('click', () => {
+      closeContextMenu();
+      try {
+        entry.run();
+      } catch (err) {
+        console.error('Context menu action failed:', err);
+        showToast('That action could not be completed', 'error');
+      }
+    });
+  });
+
+  const position = () => {
+    const width = root.offsetWidth || 220;
+    const height = root.offsetHeight || entries.length * 34;
+    const left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(y, window.innerHeight - height - 8));
+    root.style.left = `${left}px`;
+    root.style.top = `${top}px`;
+  };
+  position();
+  requestAnimationFrame(position);
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (root.contains(event.target as Node)) return;
+    closeContextMenu();
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') closeContextMenu();
+  };
+  const onViewportChange = () => closeContextMenu();
+  document.addEventListener('pointerdown', onPointerDown, true);
+  document.addEventListener('keydown', onKeyDown, true);
+  document.getElementById('document-scroll-container')?.addEventListener('scroll', onViewportChange, { passive: true });
+  window.addEventListener('resize', onViewportChange);
+  activeMenuCleanup = () => {
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    document.getElementById('document-scroll-container')?.removeEventListener('scroll', onViewportChange);
+    window.removeEventListener('resize', onViewportChange);
+    root.remove();
+  };
+
+  root.querySelector<HTMLButtonElement>('[data-menu-action]')?.focus({ preventScroll: true });
+}
+
+export class AnnotationContextMenu {
   constructor(private _parent: ParentNode = document.body) {}
 
   /**
-   * Builds and shows a menu for a canvas right-click. Returns false when no
-   * contextual action applies, allowing the browser menu to remain available.
+   * Builds and shows a menu for a canvas right-click. Always consumes the
+   * event: on empty canvas the selection tool is activated and a
+   * document-level menu is offered instead of leaking through to the browser
+   * menu, which is never useful inside the editor.
    */
   public handleCanvasContextMenu(e: MouseEvent, target: AnnotationMenuTarget): boolean {
     const doc = store.activeDocument;
@@ -80,7 +165,14 @@ export class AnnotationContextMenu {
     const selection = hit && selectedOnPage.length > 0 ? selectedOnPage : hit ? [hit] : [];
     const clipboard = store.clipboardAnnotations;
 
-    if (selection.length === 0 && clipboard.length === 0) return false;
+    if (selection.length === 0) {
+      // Right-click on empty canvas: settle on the selection tool so the menu's
+      // actions land on a tool the user can then drag with. The clipboard paste
+      // is one of the entries this menu offers, so it is not a separate case.
+      store.setActiveTool('select');
+      this.open(e.clientX, e.clientY, this.buildEmptyAreaEntries(target));
+      return true;
+    }
 
     const entries: MenuEntry[] = [];
     if (selection.length > 0) {
@@ -111,13 +203,46 @@ export class AnnotationContextMenu {
     return true;
   }
 
-  public close(): void {
-    if (this._cleanup) {
-      this._cleanup();
-      this._cleanup = null;
+  /** Actions offered when nothing is under the cursor. */
+  private buildEmptyAreaEntries(target: AnnotationMenuTarget): MenuEntry[] {
+    const doc = store.activeDocument;
+    const clips = store.clipboardAnnotations;
+    const entries: MenuEntry[] = [];
+
+    if (clips.length > 0) {
+      entries.push({
+        kind: 'action',
+        id: 'paste',
+        label: `Paste ${clips.length > 1 ? `${clips.length} items` : 'item'}`,
+        icon: 'clipboard',
+        run: () => this.pasteClipboard(target)
+      });
+      entries.push({ kind: 'separator' });
     }
-    this._root?.remove();
-    this._root = null;
+
+    const pageAnnotations = doc ? (doc.annotations[target.pageIndex] || []) : [];
+    entries.push({
+      kind: 'action',
+      id: 'select-all',
+      label: 'Select all on page',
+      icon: 'select',
+      shortcut: 'Ctrl+A',
+      disabled: pageAnnotations.length === 0,
+      run: () => {
+        store.setSelectedAnnotationIds(pageAnnotations.map(a => a.id));
+        store.setActivePageIndex(target.pageIndex);
+        target.onRepaint(target.pageIndex);
+      }
+    });
+
+    entries.push({ kind: 'separator' });
+    entries.push({ kind: 'action', id: 'fit-width', label: 'Fit to width', icon: 'fitWidth', run: () => viewportManager.fitToWidth() });
+    entries.push({ kind: 'action', id: 'fit-page', label: 'Fit to page', icon: 'fitPage', run: () => viewportManager.fitToPage() });
+    return entries;
+  }
+
+  public close(): void {
+    closeContextMenu();
   }
 
   private copySelection(selection: Annotation[]): void {
@@ -203,66 +328,6 @@ export class AnnotationContextMenu {
   }
 
   private open(x: number, y: number, entries: MenuEntry[]): void {
-    this.close();
-    const root = document.createElement('div');
-    root.className = 'annotation-context-menu';
-    root.setAttribute('role', 'menu');
-    root.innerHTML = entries.map(entry => entry.kind === 'separator'
-      ? '<div class="annotation-context-separator" role="separator"></div>'
-      : `
-        <button type="button" class="annotation-context-item${entry.danger ? ' is-danger' : ''}" data-menu-action="${entry.id}" role="menuitem">
-          <span class="annotation-context-icon">${getIconSvg(entry.icon, 14)}</span>
-          <span class="annotation-context-label">${entry.label}</span>
-          ${entry.shortcut ? `<span class="annotation-context-shortcut">${entry.shortcut}</span>` : ''}
-        </button>
-      `).join('');
-    this._parent.appendChild(root);
-    this._root = root;
-
-    root.querySelectorAll<HTMLButtonElement>('[data-menu-action]').forEach(button => {
-      const entry = entries.find(item => item.kind === 'action' && item.id === button.dataset.menuAction) as MenuAction | undefined;
-      if (!entry) return;
-      button.addEventListener('click', () => {
-        this.close();
-        try {
-          entry.run();
-        } catch (err) {
-          console.error('Context menu action failed:', err);
-          showToast('That action could not be completed', 'error');
-        }
-      });
-    });
-
-    const position = () => {
-      const width = root.offsetWidth || 220;
-      const height = root.offsetHeight || entries.length * 34;
-      const left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
-      const top = Math.max(8, Math.min(y, window.innerHeight - height - 8));
-      root.style.left = `${left}px`;
-      root.style.top = `${top}px`;
-    };
-    position();
-    requestAnimationFrame(position);
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (root.contains(event.target as Node)) return;
-      this.close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') this.close();
-    };
-    const onViewportChange = () => this.close();
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKeyDown, true);
-    document.getElementById('document-scroll-container')?.addEventListener('scroll', onViewportChange, { passive: true });
-    window.addEventListener('resize', onViewportChange);
-    this._cleanup = () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKeyDown, true);
-      document.getElementById('document-scroll-container')?.removeEventListener('scroll', onViewportChange);
-      window.removeEventListener('resize', onViewportChange);
-    };
-
-    root.querySelector<HTMLButtonElement>('[data-menu-action]')?.focus({ preventScroll: true });
+    openContextMenu(x, y, entries, this._parent);
   }
 }

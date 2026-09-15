@@ -658,6 +658,52 @@ input[type="range"] {
   font-size: 11px;
 }
 
+/* Custom render resolution: numeric field plus one-tap preset chips. */
+.dpi-control-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dpi-number-input {
+  width: 84px;
+  flex: 0 0 auto;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dpi-preset-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.dpi-chip {
+  min-width: 42px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-medium);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.dpi-chip:hover {
+  border-color: var(--accent-primary, #6366f1);
+  color: var(--text-primary);
+}
+
+.dpi-chip.active {
+  background: var(--accent-primary, #6366f1);
+  border-color: var(--accent-primary, #6366f1);
+  color: #fff;
+}
+
 /* Compact form dialog: header, labelled fields, trailing action row.
    `.modal-dialog.form-dialog` keeps the two-class specificity described
    in the header comment so the narrower width wins over the base dialog. */
@@ -1017,6 +1063,31 @@ input[type="range"] {
   border-color: var(--accent);
 }
 
+/* Multi-selection from ctrl/shift clicks and drag-reorder. */
+.thumbnail-card.is-selected {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.thumbnail-card.is-selected.is-active {
+  background: var(--accent-subtle);
+}
+
+.thumbnail-card.is-dragging {
+  opacity: 0.45;
+}
+
+.thumbnail-card.is-drop-target {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.thumbnail-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Fixed frame so the list does not reflow as pages finish rendering. */
 .thumbnail-frame {
   position: relative;
@@ -1118,6 +1189,12 @@ input[type="range"] {
 
 .annotation-context-item.is-danger {
   color: var(--danger);
+}
+
+.annotation-context-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
 
 .annotation-context-icon {

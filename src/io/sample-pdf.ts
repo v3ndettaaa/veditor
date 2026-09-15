@@ -53,7 +53,7 @@ export async function generateSamplePDF(): Promise<Uint8Array> {
   const features = [
     '• Pen & Highlighter: Smooth vector ink with realistic pressure curves and tilt',
     '• Pixel & Stroke Erasers: Erase whole strokes or slice segments with surgical precision',
-    '• Shapes & Callouts: Rectangles, ellipses, arrows, measurements, and speech bubbles',
+    '• Shapes & Measurements: Rectangles, ellipses, arrows, polygons, and calibrated rulers',
     '• Keyboard-First Workflow: Press "P" for pen, "H" for highlighter, "E" for eraser, "Ctrl+Z" to undo',
     '• Zero Cloud Telemetry: Runs 100% locally in your browser sandbox with complete privacy',
     '• Vector Export: Export crisp annotations that stay sharp on any device or printer',

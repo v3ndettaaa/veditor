@@ -27,7 +27,8 @@ export class ShortcutsModalComponent {
         icon: 'pen',
         items: [
           { key: 'V', desc: 'Select & transform' },
-          { key: 'Alt + drag', desc: 'Lasso select' },
+          { key: 'Q', desc: 'Lasso select' },
+          { key: 'Alt + drag', desc: 'Lasso select from any tool' },
           { key: 'Space (hold)', desc: 'Hand — drag to pan' },
           { key: 'Esc', desc: 'Exit zoom lens / cancel marquee' },
           { key: 'P', desc: 'Freehand pen' },
@@ -35,12 +36,9 @@ export class ShortcutsModalComponent {
           { key: 'E', desc: 'Eraser' },
           { key: 'T', desc: 'Text box' },
           { key: 'M', desc: 'Stamp / image' },
-          { key: 'C', desc: 'Callout bubble' },
           { key: 'K', desc: 'Signature' },
           { key: 'N', desc: 'Scratchpad' },
-          { key: 'X', desc: 'Redaction' },
-          { key: 'U', desc: 'Sticky note (drag to create, double-click to collapse)' },
-          { key: 'Z', desc: 'Laser pointer' }
+          { key: 'X', desc: 'Redaction' }
         ]
       },
       {

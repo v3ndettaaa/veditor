@@ -9,7 +9,7 @@ import { store } from '../../core/store';
 import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
-import { ToolType, EraserMode, toolbarFamily, ToolbarDock, classifyToolbarDock } from '../../core/types';
+import { ToolType, EraserMode, toolbarFamily, ToolbarDock, classifyToolbarDock, ToolOptionKey, SEGMENT_TOOLS } from '../../core/types';
 
 /** Short labels for tools, reused by Settings → Toolbar. */
 export const TOOL_SHORT_LABELS: Record<string, string> = {
@@ -27,12 +27,9 @@ export const TOOL_SHORT_LABELS: Record<string, string> = {
   text: 'Text',
   stamp: 'Stamp',
   'measure-distance': 'Measure',
-  callout: 'Callout',
   signature: 'Signature',
   redaction: 'Redaction',
-  laser: 'Laser',
-  scratchpad: 'Scratchpad',
-  'sticky-note': 'Sticky note'
+  scratchpad: 'Scratchpad'
 };
 
 /** Parses free-typed numeric input, falling back when empty/invalid. */
@@ -171,6 +168,11 @@ export class ToolbarComponent {
           ${getIconSvg('hand')}
         </button>
 
+        <!-- Lasso Select Tool -->
+        <button class="tool-btn ${activeTool === 'lasso' ? 'active' : ''}" data-tool="lasso" title="${t('tools.lasso')} (Q)">
+          ${getIconSvg('lasso')}
+        </button>
+
         <!-- Zoom-to-Selection Lens Tool -->
         <button class="tool-btn ${activeTool === 'zoom-lens' ? 'active' : ''}" data-tool="zoom-lens" title="${t('tools.zoomLens')}" style="cursor:zoom-in;">
           ${getIconSvg('zoomIn')}
@@ -220,15 +222,6 @@ export class ToolbarComponent {
                   <input type="number" id="hover-pen-width-input" class="size-readout size-type-input pen-readout"
                          min="1" max="50" step="1" value="${s.penWidth}" title="Type any width (1-50px)" aria-label="Pen width">
                 </div>
-              </div>
-
-              <div class="sub-row-separator"></div>
-
-              <div class="sub-row-section">
-                <span class="sub-row-label">Curve</span>
-                <button class="mode-toggle-btn curve-btn ${s.pressureCurve === 'linear' ? 'active' : ''}" data-curve="linear">Linear</button>
-                <button class="mode-toggle-btn curve-btn ${s.pressureCurve === 'soft' ? 'active' : ''}" data-curve="soft">Soft</button>
-                <button class="mode-toggle-btn curve-btn ${s.pressureCurve === 'firm' ? 'active' : ''}" data-curve="firm">Firm</button>
               </div>
 
               <div class="sub-row-separator"></div>
@@ -493,11 +486,6 @@ export class ToolbarComponent {
             </div>
           </div>
 
-          <!-- Callout -->
-          <button class="tool-btn ${activeTool === 'callout' ? 'active' : ''}" data-tool="callout" title="${t('tools.callout')} (C)">
-            ${getIconSvg('callout')}
-          </button>
-
           <!-- Signature Pad Trigger -->
           <button class="tool-btn ${activeTool === 'signature' ? 'active' : ''}" id="toolbar-signature-btn" data-tool="signature" title="${t('tools.signature')} (K)">
             ${getIconSvg('signature')}
@@ -515,48 +503,10 @@ export class ToolbarComponent {
             </div>
           </div>
 
-          <!-- Laser Pointer -->
-          <button class="tool-btn ${activeTool === 'laser' ? 'active' : ''}" data-tool="laser" title="${t('tools.laser')} (Z)">
-            ${getIconSvg('laser')}
-          </button>
-
           <!-- Floating Scratchpad -->
           <button class="tool-btn ${activeTool === 'scratchpad' ? 'active' : ''}" data-tool="scratchpad" title="${t('tools.scratchpad')} (N)">
             ${getIconSvg('scratchpad')}
           </button>
-
-          <!-- Handwritten Sticky Note with Paper Card -->
-          <div class="tool-btn-wrapper ${this._pinnedTool === 'sticky-note' ? 'is-pinned' : ''}" data-wrapper-tool="sticky-note">
-            <button class="tool-btn ${activeTool === 'sticky-note' ? 'active' : ''}" data-tool="sticky-note" title="${t('tools.stickyNote')} (U)">
-              ${getIconSvg('stickyNote')}
-              <span class="tool-color-dot sticky-dot" style="background-color:${s.stickyColor || '#fef08a'};"></span>
-            </button>
-            <div class="tool-hover-card">
-              <div class="sub-row-section">
-                <span class="sub-row-label">Color</span>
-                <div class="color-swatches-group">
-                  ${['#fef08a', '#bbf7d0', '#bae6fd', '#fbcfe8', '#e9d5ff', '#ffffff', '#fed7aa'].map(c => `
-                    <button type="button" class="color-swatch sticky-swatch ${(s.stickyColor || '#fef08a').toLowerCase() === c.toLowerCase() ? 'active' : ''}"
-                            style="background-color:${c};" data-sticky-color="${c}"
-                            title="Sticky note ${c}" aria-label="Sticky note ${c}"
-                            aria-pressed="${(s.stickyColor || '#fef08a').toLowerCase() === c.toLowerCase()}"></button>
-                  `).join('')}
-                  <div class="color-picker-wrapper" title="Custom sticky note color">
-                    <input type="color" id="hover-sticky-color-picker" class="color-picker-input" value="${s.stickyColor || '#fef08a'}">
-                  </div>
-                </div>
-              </div>
-
-              <div class="sub-row-separator"></div>
-
-              <div class="sub-row-section">
-                <span class="sub-row-label">Paper</span>
-                <button class="mode-toggle-btn sticky-paper-btn ${s.stickyPaper === 'blank' ? 'active' : ''}" data-sticky-paper="blank">Blank</button>
-                <button class="mode-toggle-btn sticky-paper-btn ${s.stickyPaper === 'grid' ? 'active' : ''}" data-sticky-paper="grid">Grid</button>
-                <button class="mode-toggle-btn sticky-paper-btn ${s.stickyPaper === 'lined' ? 'active' : ''}" data-sticky-paper="lined">Lined</button>
-              </div>
-            </div>
-          </div>
         </div>
 
         <div class="toolbar-separator"></div>
@@ -672,11 +622,6 @@ export class ToolbarComponent {
       if (document.activeElement !== el && el.value !== s.penColor) el.value = s.penColor;
     });
 
-    this._container.querySelectorAll('[data-curve]').forEach(el => {
-      const curve = el.getAttribute('data-curve');
-      el.classList.toggle('active', curve === s.pressureCurve);
-    });
-
     this._container.querySelectorAll('[data-drawing-cursor]').forEach(el => {
       const cur = el.getAttribute('data-drawing-cursor');
       el.classList.toggle('active', cur === (s.drawingCursor || 'pen'));
@@ -733,25 +678,6 @@ export class ToolbarComponent {
       el.classList.toggle('active', cur === (s.highlighterCursor || 'rectangle'));
     });
 
-    // 3. Sticky Note Indicators
-    const stickyDot = this._container.querySelector<HTMLElement>('.sticky-dot');
-    if (stickyDot) stickyDot.style.backgroundColor = s.stickyColor || '#fef08a';
-
-    this._container.querySelectorAll('[data-sticky-color]').forEach(el => {
-      const c = el.getAttribute('data-sticky-color');
-      el.classList.toggle('active', !!c && c.toLowerCase() === (s.stickyColor || '#fef08a').toLowerCase());
-    });
-
-    const stickyPicker = this._container.querySelector<HTMLInputElement>('#hover-sticky-color-picker');
-    if (stickyPicker && stickyPicker.value !== (s.stickyColor || '#fef08a')) {
-      stickyPicker.value = s.stickyColor || '#fef08a';
-    }
-
-    this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
-      const p = el.getAttribute('data-sticky-paper');
-      el.classList.toggle('active', p === (s.stickyPaper || 'lined'));
-    });
-
     // 4. Eraser Indicators
     this._container.querySelectorAll('[data-eraser-mode]').forEach(el => {
       const m = el.getAttribute('data-eraser-mode');
@@ -792,6 +718,16 @@ export class ToolbarComponent {
     this._container.querySelectorAll('[data-shape-outline]').forEach(el => {
       const on = el.getAttribute('data-shape-outline') === 'on';
       el.classList.toggle('active', on === (s.shapeOutline !== false));
+    });
+
+    // Per-tool precision pills. `setToolOption` does not change any of the
+    // keys `onStoreUpdate` watches, so this path — not a re-render — is what
+    // has to show the new state.
+    this._container.querySelectorAll<HTMLElement>('[data-shape-opt]').forEach(el => {
+      const key = el.getAttribute('data-shape-opt') as ToolOptionKey | null;
+      const tool = el.closest<HTMLElement>('[data-wrapper-tool]')?.dataset.wrapperTool as ToolType | undefined;
+      if (!key || !tool) return;
+      el.classList.toggle('active', store.toolOption(tool, key));
     });
 
     this._container.querySelectorAll('[data-shape-fill="transparent"]').forEach(el => {
@@ -866,12 +802,6 @@ export class ToolbarComponent {
     this._container.querySelectorAll('[data-redact-color]').forEach(el => {
       const rc = el.getAttribute('data-redact-color');
       el.classList.toggle('active', rc === (s.redactionColor || '#000000'));
-    });
-
-    // 8b. Sticky-note Paper Indicators
-    this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
-      const p = el.getAttribute('data-sticky-paper');
-      el.classList.toggle('active', p === (s.stickyPaper || 'lined'));
     });
 
     // 9. Undo / Redo buttons reactive state
@@ -965,6 +895,17 @@ export class ToolbarComponent {
           </div>
         </div>
       ` : ''}
+
+      ${SEGMENT_TOOLS.includes(shapeType as ToolType) ? `
+        <div class="sub-row-separator"></div>
+        <div class="sub-row-section">
+          <span class="sub-row-label">Precision</span>
+          <button class="mode-toggle-btn shape-opt-btn ${store.toolOption(shapeType as ToolType, 'snapAngle15') ? 'active' : ''}"
+                  data-shape-opt="snapAngle15" title="Constrain this tool's segments to 15° increments (Shift always does)">Snap 15°</button>
+          <button class="mode-toggle-btn shape-opt-btn ${store.toolOption(shapeType as ToolType, 'connectLines') ? 'active' : ''}"
+                  data-shape-opt="connectLines" title="Merge this line with a coincident endpoint into one continuous path">Connect lines</button>
+        </div>
+      ` : ''}
     `;
   }
 
@@ -1042,17 +983,6 @@ export class ToolbarComponent {
         const w = parseInt(el.getAttribute('data-pen-width') || '2', 10);
         store.updateToolSettings({ penWidth: w });
         this.updateIndicators();
-      });
-    });
-
-    this._container.querySelectorAll('[data-curve]').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const curve = el.getAttribute('data-curve') as any;
-        if (curve) {
-          store.updateToolSettings({ pressureCurve: curve });
-          this.updateIndicators();
-        }
       });
     });
 
@@ -1415,6 +1345,20 @@ export class ToolbarComponent {
       });
     });
 
+    // Per-tool precision options (Snap-15° / Connect-lines). The hover-card
+    // belongs to one tool, so the option is written for whichever segment tool
+    // rendered this card.
+    this._container.querySelectorAll('[data-shape-opt]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = el.getAttribute('data-shape-opt') as ToolOptionKey | null;
+        const wrapper = el.closest<HTMLElement>('[data-wrapper-tool]');
+        const tool = wrapper?.dataset.wrapperTool as ToolType | undefined;
+        if (!key || !tool) return;
+        store.setToolOption(tool, key, !store.toolOption(tool, key));
+      });
+    });
+
     this._container.querySelectorAll('[data-shape-fill="transparent"]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1515,55 +1459,6 @@ export class ToolbarComponent {
       });
     });
 
-    // Sticky-note color listeners (new cards + selected notes)
-    this._container.querySelectorAll('[data-sticky-color]').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const color = el.getAttribute('data-sticky-color');
-        if (!color) return;
-        store.updateToolSettings({ stickyColor: color });
-        this.applyStickyColorToSelected(color);
-        this.updateIndicators();
-      });
-    });
-
-    const stickyColorPicker = this._container.querySelector<HTMLInputElement>('#hover-sticky-color-picker');
-    stickyColorPicker?.addEventListener('input', (e) => {
-      const color = (e.target as HTMLInputElement).value;
-      store.updateToolSettings({ stickyColor: color });
-      this.applyStickyColorToSelected(color);
-      this.updateIndicators();
-    });
-
-    // Sticky-note paper listeners (new cards + selected notes)
-    this._container.querySelectorAll('[data-sticky-paper]').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const pattern = el.getAttribute('data-sticky-paper') as any;
-        if (!pattern) return;
-        store.updateToolSettings({ stickyPaper: pattern });
-        const doc = store.activeDocument;
-        if (doc) {
-          const ids = new Set(store.selectedAnnotationIds);
-          for (const pageIdx in doc.annotations) {
-            for (const ann of doc.annotations[pageIdx]) {
-              if (ann.type === 'sticky-note' && ids.has(ann.id)) {
-                const prev = ann as any;
-                const cPaperColor = store.toolSettings.stickyColor || prev.paper?.paperColor || '#fef08a';
-                const next = {
-                  ...prev,
-                  paper: { ...(prev as any).paper, pattern, paperColor: cPaperColor },
-                  updatedAt: Date.now()
-                };
-                history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
-              }
-            }
-          }
-        }
-        this.updateIndicators();
-      });
-    });
-
     // Delete selected
     this._container.querySelector('#del-selected-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1616,24 +1511,5 @@ export class ToolbarComponent {
       handle.addEventListener('pointerup', commitUp);
       handle.addEventListener('pointercancel', cancelDrag);
     });
-  }
-
-  private applyStickyColorToSelected(color: string): void {
-    const doc = store.activeDocument;
-    if (!doc) return;
-    const ids = new Set(store.selectedAnnotationIds);
-    for (const pageIdx in doc.annotations) {
-      for (const ann of doc.annotations[pageIdx]) {
-        if (ann.type === 'sticky-note' && ids.has(ann.id)) {
-          const prev = ann as any;
-          const next = {
-            ...prev,
-            paper: { ...(prev as any).paper, paperColor: color },
-            updatedAt: Date.now()
-          };
-          history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
-        }
-      }
-    }
   }
 }

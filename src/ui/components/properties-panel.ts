@@ -78,11 +78,9 @@ export class PropertiesPanelComponent {
     const firstAnn = selectedAnnotations[0];
     const hasShape = selectedAnnotations.some(ann => 'fillColor' in ann || ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' || ann.type === 'freeform-shape');
     const firstFillColor = (firstAnn as any).fillColor || 'transparent';
-    const hasSticky = selectedAnnotations.some(ann => ann.type === 'sticky-note');
-    const firstStickyColor = hasSticky ? ((firstAnn as any).paper?.paperColor || '#fef08a') : null;
     const hasOutlineToggle = selectedAnnotations.some(ann =>
       ann.type === 'rectangle' || ann.type === 'ellipse' ||
-      ann.type === 'polygon' || ann.type === 'freeform-shape' || ann.type === 'callout'
+      ann.type === 'polygon' || ann.type === 'freeform-shape'
     );
     const firstOutline = (firstAnn as any).outline !== false;
 
@@ -95,23 +93,7 @@ export class PropertiesPanelComponent {
       </div>
 
       <div class="panel-body">
-        <!-- Sticky Note Paper Color Picker (if sticky note selected) -->
-        ${hasSticky ? `
-          <div class="prop-group">
-            <span class="prop-label">Note Color</span>
-            <div class="prop-color-row">
-              <div class="color-picker-wrapper is-lg" title="Note Color">
-                <input type="color" id="prop-sticky-picker" class="color-picker-input" value="${firstStickyColor}">
-              </div>
-              <input type="text" class="prop-color-value prop-hex-input" id="prop-sticky-val"
-                     value="${firstStickyColor}"
-                     spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Note color hex">
-            </div>
-          </div>
-        ` : ''}
-
         <!-- Stroke Color Picker -->
-        ${!hasSticky ? `
         <div class="prop-group">
           <span class="prop-label">${hasShape ? 'Stroke Color' : t('properties.color')}</span>
           <div class="prop-color-row">
@@ -123,7 +105,6 @@ export class PropertiesPanelComponent {
                    spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Stroke color hex">
           </div>
         </div>
-        ` : ''}
 
         <!-- Fill Color (if shape selected) -->
         ${hasShape ? `
@@ -318,50 +299,6 @@ export class PropertiesPanelComponent {
       store.setActivePageIndex(store.activePageIndex);
     };
 
-    const applyStickyColor = (val: string) => {
-      selectedAnnotations.forEach(ann => {
-        if (ann.type === 'sticky-note') {
-          const prev = ann as any;
-          const next = {
-            ...prev,
-            paper: { ...(prev.paper || {}), paperColor: val },
-            updatedAt: Date.now()
-          };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
-        }
-      });
-      store.setActivePageIndex(store.activePageIndex);
-    };
-
-    // Sticky note color picker change
-    const stickyPicker = this._container.querySelector<HTMLInputElement>('#prop-sticky-picker');
-    stickyPicker?.addEventListener('input', () => {
-      const val = stickyPicker.value;
-      syncHexInput('#prop-sticky-val', val);
-      applyStickyColor(val);
-    });
-
-    // Typed hex sticky note color
-    const stickyHex = this._container.querySelector<HTMLInputElement>('#prop-sticky-val');
-    const commitStickyHex = () => {
-      if (!stickyHex) return;
-      const parsed = parseHexInput(stickyHex.value);
-      const current = String(firstStickyColor || '#fef08a');
-      if (parsed) {
-        if (parsed !== current.toLowerCase()) applyStickyColor(parsed);
-        stickyHex.value = parsed;
-      } else {
-        stickyHex.value = current;
-      }
-    };
-    stickyHex?.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); commitStickyHex(); stickyHex.blur(); }
-      else if (e.key === 'Escape') { e.preventDefault(); stickyHex.value = String(firstStickyColor || '#fef08a'); stickyHex.blur(); }
-    });
-    stickyHex?.addEventListener('focus', () => stickyHex.select());
-    stickyHex?.addEventListener('blur', () => commitStickyHex());
-
     // Typed width (Enter/blur commits)
     const widthNum = this._container.querySelector<HTMLInputElement>('#prop-width-val');
     const commitWidthNum = () => {
@@ -406,7 +343,7 @@ export class PropertiesPanelComponent {
         const on = btn.getAttribute('data-prop-outline') === 'on';
         selectedAnnotations.forEach(ann => {
           if (ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' ||
-              ann.type === 'freeform-shape' || ann.type === 'callout') {
+              ann.type === 'freeform-shape') {
             const prev = { ...ann };
             const next = { ...ann, outline: on };
             history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));

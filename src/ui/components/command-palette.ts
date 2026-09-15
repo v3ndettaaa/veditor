@@ -56,11 +56,17 @@ export class CommandPaletteComponent {
       { id: 'tool-ellipse', title: 'Ellipse Shape Tool', category: 'Tools', shortcut: 'O', action: () => store.setActiveTool('ellipse') },
       { id: 'tool-line', title: 'Line Tool', category: 'Tools', shortcut: 'L', action: () => store.setActiveTool('line') },
       { id: 'tool-arrow', title: 'Arrow Tool', category: 'Tools', shortcut: 'A', action: () => store.setActiveTool('arrow') },
+      { id: 'tool-polygon', title: 'Multi-Point Polygon Tool', category: 'Tools', shortcut: 'G', action: () => store.setActiveTool('polygon') },
+      // No toolbar button of its own: the freeform shape is a freehand closed
+      // outline and matches the pen's role closely enough that it stays out of
+      // the default row, but it is a full tool and belongs in the palette.
+      { id: 'tool-freeform', title: 'Freeform Shape Tool (freehand closed outline)', category: 'Tools', action: () => store.setActiveTool('freeform-shape') },
       { id: 'tool-text', title: 'Text Box Tool', category: 'Tools', shortcut: 'T', action: () => store.setActiveTool('text') },
+      { id: 'tool-stamp', title: 'Vector Stamp Tool', category: 'Tools', shortcut: 'M', action: () => store.setActiveTool('stamp') },
+      { id: 'tool-signature', title: 'Signature Pad', category: 'Tools', shortcut: 'K', action: () => store.setSignatureModalOpen(true) },
       { id: 'tool-measure', title: 'Measure Distance Tool', category: 'Tools', action: () => store.setActiveTool('measure-distance') },
-      { id: 'tool-laser', title: 'Presentation Laser Pointer', category: 'Tools', shortcut: 'Z', action: () => store.setActiveTool('laser') },
       { id: 'tool-redaction', title: 'Redaction Tool', category: 'Tools', shortcut: 'X', action: () => store.setActiveTool('redaction') },
-      { id: 'tool-sticky-note', title: 'Sticky Note Tool', category: 'Tools', shortcut: 'U', action: () => store.setActiveTool('sticky-note') },
+      { id: 'tool-lasso', title: 'Lasso Select Tool', category: 'Tools', shortcut: 'Q', action: () => store.setActiveTool('lasso') },
       { id: 'tool-scratchpad', title: 'Floating Scratchpad', category: 'Tools', shortcut: 'N', action: () => { store.setActiveTool('scratchpad'); store.setScratchpadOpen(true); } },
 
       { id: 'view-customize-toolbar', title: 'Customize toolbar layout', category: 'View', action: () => { store.setSettingsModalOpen(true); store.settingsTabRequest = 'toolbar'; } },

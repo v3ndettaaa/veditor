@@ -1,7 +1,7 @@
 /**
  * Lightweight inline text editor overlaying a canvas annotation.
  * A floating textarea committed with Esc/Enter/blur and cancelled with
- * Ctrl+Z-style Tab-out. Used by the callout tool (and reusable for text).
+ * Ctrl+Z-style Tab-out. Used by the text tool.
  */
 
 export interface InlineEditorOptions {

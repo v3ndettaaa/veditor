@@ -95,13 +95,12 @@ describe('Annotation transforms', () => {
   });
 
   it('scales font size for text-like annotations', () => {
-    const callout: any = {
+    const text: any = {
       id: 'c',
       pageIndex: 0,
       layerId: 'default',
-      type: 'callout',
+      type: 'text',
       box: { x: 0, y: 0, width: 100, height: 50 },
-      arrowPoint: { x: 50, y: 80 },
       text: 'hi',
       fontFamily: 'Inter',
       fontSize: 14,
@@ -112,9 +111,8 @@ describe('Annotation transforms', () => {
       createdAt: 0,
       updatedAt: 0
     };
-    const next = transformAnnotation(callout, { dx: 0, dy: 0, scaleX: 2, scaleY: 2, originX: 0, originY: 0 });
+    const next = transformAnnotation(text, { dx: 0, dy: 0, scaleX: 2, scaleY: 2, originX: 0, originY: 0 });
     expect(next.fontSize).toBe(28);
-    expect(next.arrowPoint).toMatchObject({ x: 100, y: 160 });
   });
 
   it('hits rotated annotations in their unrotated frame', () => {

@@ -96,6 +96,19 @@ export class NotebookController {
     return added;
   }
 
+  /**
+   * Resizes the notebook. Every page is identical ruled paper, so the caller
+   * is responsible for remapping the page-index-keyed annotations through the
+   * same index map afterwards — this only rewrites the bytes.
+   */
+  public async applyPageCount(count: number): Promise<boolean> {
+    const doc = store.activeDocument;
+    if (!doc?.notebook) return false;
+    const target = Math.max(1, Math.min(MAX_PAGES, Math.floor(count)));
+    if (target === doc.pageCount) return false;
+    return this.rebuild(doc.notebook, target);
+  }
+
   public atPageLimit(): boolean {
     return (store.activeDocument?.pageCount ?? 0) >= MAX_PAGES;
   }

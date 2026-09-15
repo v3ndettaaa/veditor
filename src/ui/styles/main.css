@@ -958,44 +958,6 @@ body.invert-pdf-document .pdf-page-canvas {
   cursor: crosshair;
 }
 
-/* DOM toggles above canvas ink: explicit sticky-note collapse/expand buttons. */
-.note-toggle-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 5;
-  pointer-events: none;
-}
-
-.note-toggle-btn {
-  position: absolute;
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--border-medium);
-  background: var(--bg-surface-elevated);
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.note-toggle-btn:hover {
-  background: var(--bg-surface-hover);
-}
-
-.note-toggle-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 /* Floating View Controls */
 .floating-view-controls {
   position: absolute;
@@ -1038,6 +1000,24 @@ body.invert-pdf-document .pdf-page-canvas {
   box-shadow: var(--shadow-float);
   z-index: 30;
   overflow: hidden;
+}
+
+/* Collapsed to its header strip: the panel stays docked where the user left
+   it and the header itself becomes the restore affordance. */
+.scratchpad-panel.is-minimized {
+  height: auto !important;
+}
+
+.scratchpad-panel.is-minimized .scratchpad-body,
+.scratchpad-panel.is-minimized .scratchpad-footer,
+.scratchpad-panel.is-minimized .scratchpad-resize,
+.scratchpad-panel.is-minimized .scratchpad-resize-edge {
+  display: none;
+}
+
+.scratchpad-panel.is-minimized .scratchpad-header {
+  cursor: pointer;
+  border-bottom: none;
 }
 
 .scratchpad-header {

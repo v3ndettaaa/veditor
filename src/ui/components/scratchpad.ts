@@ -156,9 +156,23 @@ export class ScratchpadComponent {
     const panel = this.panel;
     if (!panel) return;
     const doc = store.activeDocument;
-    const visible = store.scratchpadOpen && !store.scratchpadMinimized && !!doc;
-    panel.style.display = visible ? 'flex' : 'none';
-    if (!visible) return;
+    const open = store.scratchpadOpen && !!doc;
+    // Minimized keeps the panel docked: only the header strip stays visible, so
+    // the pad is one click away instead of gone until the toolbar reopens it.
+    const minimized = open && store.scratchpadMinimized;
+    panel.style.display = open ? 'flex' : 'none';
+    panel.classList.toggle('is-minimized', minimized);
+
+    const minBtn = this._container.querySelector<HTMLElement>('#scratchpad-min-btn');
+    if (minBtn) {
+      minBtn.innerHTML = minimized ? getIconSvg('expand', 14) : getIconSvg('compress', 14);
+      minBtn.title = minimized ? 'Restore scratchpad' : 'Minimize';
+    }
+
+    if (!open) return;
+    // While minimized the body is display:none, so measuring it would resize
+    // the backing store to 1px and wipe the pad contents.
+    if (minimized) return;
 
     this.fitCanvas();
     this.redraw();
@@ -332,9 +346,11 @@ export class ScratchpadComponent {
     const header = this._container.querySelector<HTMLElement>('#scratchpad-header');
     const panel = this.panel;
 
-    // Drag header to reposition scratchpad panel
+    // Drag header to reposition scratchpad panel. While minimized the header is
+    // the restore affordance instead of a drag handle.
     header?.addEventListener('pointerdown', (e) => {
       if (!panel || (e.target as HTMLElement).closest('button')) return;
+      if (store.scratchpadMinimized) return;
       e.preventDefault();
       try {
         header.setPointerCapture(e.pointerId);
@@ -363,6 +379,11 @@ export class ScratchpadComponent {
       header.addEventListener('pointermove', move);
       header.addEventListener('pointerup', up);
       header.addEventListener('pointercancel', up);
+    });
+
+    header?.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      if (store.scratchpadMinimized) store.setScratchpadMinimized(false);
     });
 
     // Free resizing from the north, east, and southeast edges without
@@ -394,7 +415,7 @@ export class ScratchpadComponent {
       showToast('Scratchpad view centered', 'info');
     });
     this._container.querySelector('#scratchpad-min-btn')?.addEventListener('click', () => {
-      store.setScratchpadMinimized(true);
+      store.setScratchpadMinimized(!store.scratchpadMinimized);
     });
 
     // Width pills
@@ -453,6 +474,9 @@ export class ScratchpadComponent {
     window.addEventListener('pointerdown', (e) => {
       const p = this.panel;
       if (!p || p.style.display === 'none') return;
+      // A minimized pad is just a docked strip — clicking the page must not
+      // dismiss it, otherwise the restore affordance disappears mid-thought.
+      if (store.scratchpadMinimized) return;
       const target = e.target as HTMLElement | null;
       if (!target) return;
       // If clicking inside the scratchpad panel, keep open
@@ -467,7 +491,7 @@ export class ScratchpadComponent {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space' && !this._spacePressed && (e.target as HTMLElement)?.tagName !== 'INPUT' && (e.target as HTMLElement)?.tagName !== 'TEXTAREA') {
         const p = this.panel;
-        if (p && p.style.display !== 'none') {
+        if (p && p.style.display !== 'none' && !store.scratchpadMinimized) {
           this._spacePressed = true;
           this.updateCursor();
         }

@@ -13,6 +13,7 @@ import { pdfEngine } from '../../core/pdf-engine';
 import { viewportManager } from '../../core/viewport';
 import { clearAllStorage } from '../../io/storage';
 import { DEFAULT_ACCENT } from '../theme';
+import { resolveRenderDpr, clampRenderMultiplier } from '../../utils/dpi';
 import { TOOL_SHORT_LABELS } from './toolbar';
 
 type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
@@ -20,6 +21,7 @@ type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'viewer' | 'performance'
 /** Toolbar tool id → icon name, mirroring the toolbar template. */
 const TOOLBAR_ICONS: Record<string, string> = {
   select: 'select',
+  lasso: 'lasso',
   hand: 'hand',
   'zoom-lens': 'zoomIn',
   pen: 'pen',
@@ -33,10 +35,8 @@ const TOOLBAR_ICONS: Record<string, string> = {
   text: 'text',
   stamp: 'stamp',
   'measure-distance': 'measure',
-  callout: 'callout',
   signature: 'signature',
-  redaction: 'redaction',
-  laser: 'laser'
+  redaction: 'redaction'
 };
 
 export class SettingsModalComponent {
@@ -414,29 +414,6 @@ export class SettingsModalComponent {
             </select>
           </div>
 
-          <!-- Precision snapping for lines, polylines, and connectors -->
-          <div class="setting-card">
-            <div class="setting-info">
-              <div class="setting-title">Snap Segments to 15°</div>
-              <div class="setting-desc">Constrain lines and polyline segments to 15° increments. Holding Shift always snaps, even when this default is off.</div>
-            </div>
-            <label class="setting-switch">
-              <input type="checkbox" id="snap-angle-toggle" ${app.snapAngle15 ? 'checked' : ''}>
-              <span class="setting-slider"></span>
-            </label>
-          </div>
-
-          <div class="setting-card">
-            <div class="setting-info">
-              <div class="setting-title">Connect Coincident Line Endpoints</div>
-              <div class="setting-desc">Merge a newly finished line with nearby line endpoints into one continuous path.</div>
-            </div>
-            <label class="setting-switch">
-              <input type="checkbox" id="connect-lines-toggle" ${app.connectLines ? 'checked' : ''}>
-              <span class="setting-slider"></span>
-            </label>
-          </div>
-
           <!-- Intelligent Palm Rejection -->
           <div class="setting-card">
             <div class="setting-info">
@@ -540,11 +517,38 @@ export class SettingsModalComponent {
     }
 
     if (this._activeTab === 'performance') {
+      const effectiveDpi = Math.round(store.appSettings.targetDPI || 150);
+      const requestedScale = resolveRenderDpr(effectiveDpi);
+      // Mirror the real cap so the hint never promises resolution the backing
+      // store cannot hold (a 600 DPI Letter page is 5100 px, over the 4096 cap).
+      const cappedScale = clampRenderMultiplier(612, 792, requestedScale);
+      const capped = cappedScale < requestedScale - 1e-6;
+      const dpiHint = capped
+        ? `Effective backing store: ${(cappedScale).toFixed(2)}× (${Math.round(cappedScale * 72)} DPI). ` +
+          `Capped at 4096 px per axis for pages this size — zoom in further to use the full ${effectiveDpi} DPI.`
+        : `Effective backing store: ${requestedScale.toFixed(2)}× (${effectiveDpi} DPI). Higher values are sharper but use more memory.`;
       return `
         <div class="settings-stack">
           <div class="settings-callout is-accent">
             <span class="settings-callout-icon">${getIconSvg('zap', 15)}</span>
             <span><strong>Extreme efficiency engine active.</strong> Canvases outside the active viewport are automatically recycled and sized to 1x1, reclaiming gigabytes of uncompressed GPU memory when viewing 100+ page books.</span>
+          </div>
+
+          <!-- Custom render DPI. 72 DPI = the PDF point grid; every step up
+               multiplies the backing store, so the effective scale and the
+               4096 px per-axis cap are surfaced next to the field. -->
+          <div class="prop-group">
+            <span class="prop-label">Canvas Render Resolution (DPI)</span>
+            <div class="dpi-control-row">
+              <input type="number" id="target-dpi-input" class="field dpi-number-input"
+                     min="72" max="600" step="1" value="${effectiveDpi}">
+              <div class="dpi-preset-chips">
+                ${[72, 150, 300, 600].map(d =>
+                  `<button type="button" class="dpi-chip ${effectiveDpi === d ? 'active' : ''}" data-dpi-preset="${d}">${d}</button>`
+                ).join('')}
+              </div>
+            </div>
+            <div class="setting-desc" id="dpi-effective-hint">${dpiHint}</div>
           </div>
 
           <!-- Preload buffer -->
@@ -809,20 +813,11 @@ export class SettingsModalComponent {
       store.updateToolSettings({ strokeSmoothing: smoothingSelect.value as any });
     });
 
-    // Angle-snapping and line-connection defaults
-    const snapAngleToggle = this._container.querySelector<HTMLInputElement>('#snap-angle-toggle');
-    snapAngleToggle?.addEventListener('change', () => {
-      store.updateAppSettings({ snapAngle15: snapAngleToggle.checked });
-    });
-    const connectLinesToggle = this._container.querySelector<HTMLInputElement>('#connect-lines-toggle');
-    connectLinesToggle?.addEventListener('change', () => {
-      store.updateAppSettings({ connectLines: connectLinesToggle.checked });
-    });
-
-    // Palm toggle
+    // Palm toggle. Palm rejection is a tool/drawing setting, not an app one —
+    // writing it through updateAppSettings silently persisted nothing.
     const palmToggle = this._container.querySelector<HTMLInputElement>('#palm-toggle');
     palmToggle?.addEventListener('change', () => {
-      store.updateAppSettings({ palmRejectionEnabled: palmToggle.checked });
+      store.updateToolSettings({ palmRejectionEnabled: palmToggle.checked });
     });
 
     // Inverted eraser toggle
@@ -873,19 +868,34 @@ export class SettingsModalComponent {
       store.updateAppSettings({ smoothScroll: smoothScrollToggle.checked });
     });
 
-    // Target render DPI
+    // Target render DPI. Typing is debounced so a three-digit value does not
+    // re-render every page three times; `change`/Enter commits immediately.
     const targetDpiInput = this._container.querySelector<HTMLInputElement>('#target-dpi-input');
+    let dpiDebounce: number | null = null;
     const commitTargetDpi = () => {
       if (!targetDpiInput) return;
+      if (dpiDebounce !== null) { window.clearTimeout(dpiDebounce); dpiDebounce = null; }
       const raw = parseInt(targetDpiInput.value, 10);
       const dpi = Number.isFinite(raw) ? Math.max(72, Math.min(600, raw)) : 150;
       targetDpiInput.value = String(dpi);
       store.updateAppSettings({ targetDPI: dpi });
       viewportManager.updateLayout(true);
     };
+    targetDpiInput?.addEventListener('input', () => {
+      if (dpiDebounce !== null) window.clearTimeout(dpiDebounce);
+      dpiDebounce = window.setTimeout(() => { dpiDebounce = null; commitTargetDpi(); }, 350);
+    });
     targetDpiInput?.addEventListener('change', commitTargetDpi);
     targetDpiInput?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); commitTargetDpi(); }
+    });
+    this._container.querySelectorAll<HTMLElement>('[data-dpi-preset]').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const dpi = parseInt(chip.dataset.dpiPreset || '', 10);
+        if (!Number.isFinite(dpi) || !targetDpiInput) return;
+        targetDpiInput.value = String(dpi);
+        commitTargetDpi();
+      });
     });
 
     // Preload buffer select

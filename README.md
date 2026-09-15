@@ -85,18 +85,16 @@
 | Tool | Shortcut | Description |
 | :--- | :---: | :--- |
 | **Selection & Transform** | `V` | 8-point bounding box resize, drag reposition, multi-select, and alignment |
+| **Lasso Select** | `Q` | Freehand loop around ink to select everything it encloses (Alt+drag from any tool) |
 | **Freehand Pen** | `P` | Dynamic ink with custom colors, opacity, stroke widths, and pressure dynamics |
 | **Highlighter** | `H` | Non-destructive highlighting with chisel/round tips, straight snap & multiply blend |
 | **Eraser** | `E` | 3 modes: Stroke Eraser, Object Eraser, and Pixel/Mask Eraser — each drag is a single undo step, so long erasing sessions never lag |
-| **Polygon Shape** | `G` | Multi-point custom polygon shape with click-to-place vertices and close detection |
+| **Polygon Shape** | `G` | Multi-point custom polygon shape with click-to-place vertices, an elastic segment that follows the cursor, and close detection |
 | **Geometric Shapes** | `R`, `O`, `L`, `A` | Rectangles, Ellipses, Lines, and Arrows with solid/dashed/dotted borders and fills |
 | **Rich Text Boxes** | `T` | Multi-line text boxes with font sizing, colors, borders, and background fills |
-| **Vector Stamps** | `S` | High-res vector presets (`APPROVED`, `CONFIDENTIAL`, `DRAFT`, etc.) & image imports |
-| **Technical Measure** | `M` | Calibrated distance, angle, and area calculations with real-world units |
-| **Speech Callout** | `C` | Directional speech bubbles with customizable callout pointer tails |
+| **Vector Stamps** | `M` | High-res vector presets (`APPROVED`, `CONFIDENTIAL`, `DRAFT`, etc.) & image imports |
 | **Digital Signatures** | `K` | Vector ink signature capture dialog with persistent local signature library |
 | **True Redaction** | `X` | Content censoring that strips underlying text and graphics upon export |
-| **Laser Pointer** | `Z` | Ephemeral glowing trail for interactive screen-sharing and presentations |
 
 ---
 
@@ -107,7 +105,7 @@ Access the comprehensive Settings Modal from the gear icon in the header:
 - **Paper Patterns**: Blank canvas, Square Grid, Dot Grid, Lined Paper, and Isometric 3D Drafting Grid.
 - **Pen & Input**: Pressure sensitivity toggle, mouse speed simulation, calibration response curves, dynamic thickness range, and stroke stabilization.
 - **Viewer & Reading**: Default view mode (Continuous Vertical, Single Page, Two-Page Book Spread), default zoom presets (Fit Width, Fit Page, 100%, 125%, 150%), and realistic drop shadows.
-- **Performance**: High-DPI Retina rendering toggle, off-screen page buffer distance, and force VRAM reclaim button.
+- **Performance**: Custom canvas render DPI (72–600, with preset chips and a live effective-scale readout), off-screen page buffer distance, and force VRAM reclaim button.
 - **Storage & Backup**: Configurable auto-save frequency, IndexedDB database reset, and complete settings restore.
 - **About**: Version information, keyboard shortcuts dialog, and direct GitHub links.
 
@@ -243,6 +241,7 @@ veditor/
 | Key | Action |
 | :---: | :--- |
 | `V` | Select / Transform Tool |
+| `Q` | Lasso Select Tool |
 | `P` | Freehand Pen Tool |
 | `H` | Highlighter Tool |
 | `E` | Eraser Tool |
@@ -252,12 +251,10 @@ veditor/
 | `L` | Line Tool |
 | `A` | Arrow Tool |
 | `G` | Multi-Point Polygon Shape |
-| `S` | Vector Stamp Tool |
-| `M` | Technical Measurement Tool |
-| `C` | Callout Bubble Tool |
+| `M` | Vector Stamp Tool |
+| `N` | Scratchpad |
 | `K` | Digital Signature Pad |
 | `X` | Redaction Tool |
-| `Z` | Presentation Laser Pointer |
 | `Ctrl + Z` | Undo (Scoped to active PDF tab) |
 | `Ctrl + Y` | Redo (Scoped to active PDF tab) |
 | `Ctrl + +` / `Ctrl + -` | Zoom In / Zoom Out |

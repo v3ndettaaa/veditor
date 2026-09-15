@@ -23,7 +23,7 @@ Whether you are annotating lecture slides, reviewing contracts, signing document
 - 🖍️ **Highlighter**: Non-destructive highlighter with Multiply blend mode so underlying text remains razor-sharp.
 - 🧹 **Smart Eraser**: Stroke Eraser (delete whole stroke on touch), Object Eraser, and Pixel Eraser modes.
 - 📐 **Technical Measurement Tools**: Calibrated distance, angle, and polygon area measurement with real-world units (mm, cm, m, in, ft, pt, px).
-- 🔲 **Shapes & Callouts**: Rectangles, ellipses, straight lines, arrows, polygons, and directional callout speech bubbles.
+- 🔲 **Shapes & Lasso**: Rectangles, ellipses, straight lines, arrows, and multi-point polygons, plus a freehand lasso that selects every annotation it encloses.
 - ✍️ **Digital Signatures**: Hand-draw or upload signatures with persistent signature library storage.
 - 🏷️ **Built-in Vector Stamps**: APPROVED, CONFIDENTIAL, DRAFT, REVISED, SIGN HERE, FINAL, VOID, URGENT, PAID.
 - 🔒 **True Redaction**: Safely redact sensitive and confidential information permanently before sharing.

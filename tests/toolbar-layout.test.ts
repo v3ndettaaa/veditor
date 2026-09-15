@@ -11,9 +11,9 @@ describe('Toolbar layout customization', () => {
   });
 
   it('drops unknown ids and appends missing tools on reorder', () => {
-    store.setToolbarOrder(['laser', 'pen', 'nope' as ToolType]);
+    store.setToolbarOrder(['signature', 'pen', 'nope' as ToolType]);
     const ids = store.toolbarLayout.map(l => l.id);
-    expect(ids.slice(0, 2)).toEqual(['laser', 'pen']);
+    expect(ids.slice(0, 2)).toEqual(['signature', 'pen']);
     expect(ids).not.toContain('nope');
     // Every known tool still present exactly once.
     expect([...ids].sort()).toEqual([...DEFAULT_TOOLBAR_ORDER].sort());
@@ -21,9 +21,9 @@ describe('Toolbar layout customization', () => {
   });
 
   it('hides tools and filters unknown hidden ids', () => {
-    store.setToolbarHidden(['laser', 'ghost' as ToolType]);
+    store.setToolbarHidden(['signature', 'ghost' as ToolType]);
     const hidden = store.toolbarLayout.filter(l => !l.visible).map(l => l.id);
-    expect(hidden).toEqual(['laser']);
+    expect(hidden).toEqual(['signature']);
     store.resetToolbarLayout();
   });
 
@@ -42,8 +42,9 @@ describe('Toolbar layout customization', () => {
 
   it('groups tools into stable families for separators', () => {
     expect(toolbarFamily('select')).toBe('nav');
+    expect(toolbarFamily('lasso')).toBe('nav');
     expect(toolbarFamily('pen')).toBe('ink');
     expect(toolbarFamily('rectangle')).toBe('shapes');
-    expect(toolbarFamily('laser')).toBe('annotate');
+    expect(toolbarFamily('signature')).toBe('annotate');
   });
 });

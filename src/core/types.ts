@@ -4,6 +4,7 @@
 
 export type ToolType =
   | 'select'
+  | 'lasso'
   | 'hand'
   | 'zoom-lens'
   | 'pen'
@@ -20,12 +21,9 @@ export type ToolType =
   | 'measure-distance'
   | 'measure-angle'
   | 'measure-area'
-  | 'laser'
-  | 'callout'
   | 'signature'
   | 'redaction'
-  | 'scratchpad'
-  | 'sticky-note';
+  | 'scratchpad';
 
 export type EraserMode = 'stroke' | 'object' | 'pixel';
 
@@ -158,21 +156,6 @@ export interface MeasurementAnnotation extends BaseAnnotation {
   label: string;
 }
 
-export interface CalloutAnnotation extends BaseAnnotation {
-  type: 'callout';
-  arrowPoint: Point;
-  /** Where the pointer tail bends against the bubble edge (3-point callout). */
-  knee?: Point;
-  text: string;
-  fontFamily: string;
-  fontSize: number;
-  color: string;
-  fillColor: string;
-  strokeColor: string;
-  /** False = borderless bubble (fill + text only). */
-  outline?: boolean;
-}
-
 export interface SignatureAnnotation extends BaseAnnotation {
   type: 'signature';
   points?: StrokePoint[][];
@@ -188,35 +171,6 @@ export interface RedactionAnnotation extends BaseAnnotation {
   applied?: boolean; // false = pending redaction mark, true = applied/scrubbed
 }
 
-export interface StickyNoteInkStroke {
-  kind: 'pen' | 'highlighter';
-  points: StrokePoint[]; // note-local coords (0..box.w/h)
-  color: string;
-  strokeWidth: number;
-}
-
-export interface StickyNoteText {
-  text: string;
-  fontFamily: string;
-  fontSize: number;
-  color: string;
-  x: number; // note-local coords
-  y: number;
-  w: number;
-}
-
-export interface StickyNoteAnnotation extends BaseAnnotation {
-  type: 'sticky-note';
-  /** Pin tip in page coords — where the collapsed badge lives. */
-  anchor: Point;
-  /** Minimized into the pin badge (persists, undoes, exports). */
-  collapsed: boolean;
-  paper: PaperStyle;
-  /** Freehand content in note-local coords (0..box.w/h). */
-  ink: StickyNoteInkStroke[];
-  texts: StickyNoteText[];
-}
-
 export type Annotation =
   | PenAnnotation
   | HighlighterAnnotation
@@ -224,10 +178,8 @@ export type Annotation =
   | TextAnnotation
   | StampAnnotation
   | MeasurementAnnotation
-  | CalloutAnnotation
   | SignatureAnnotation
-  | RedactionAnnotation
-  | StickyNoteAnnotation;
+  | RedactionAnnotation;
 
 export interface PageInfo {
   pageIndex: number;
@@ -267,19 +219,29 @@ export const MAX_ZOOM = 8;
 
 /** Default toolbar button order (undo/redo stay pinned separately). */
 export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
-  'select', 'hand', 'zoom-lens',
+  'select', 'lasso', 'hand', 'zoom-lens',
   'pen', 'highlighter', 'eraser',
   'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
-  'text', 'stamp', 'measure-distance', 'callout', 'signature', 'redaction', 'laser', 'scratchpad', 'sticky-note'
+  'text', 'stamp', 'measure-distance', 'signature', 'redaction', 'scratchpad'
 ];
 
 /** Visual family per toolbar tool; separators render between families. */
 export function toolbarFamily(id: ToolType): string {
-  if (id === 'select' || id === 'hand' || id === 'zoom-lens') return 'nav';
+  if (id === 'select' || id === 'lasso' || id === 'hand' || id === 'zoom-lens') return 'nav';
   if (id === 'pen' || id === 'highlighter' || id === 'eraser') return 'ink';
   if (id === 'rectangle' || id === 'ellipse' || id === 'line' || id === 'arrow' || id === 'polygon') return 'shapes';
   return 'annotate';
 }
+
+/**
+ * Tools that draw multi-segment geometry and therefore honour the Snap-15° and
+ * Connect-lines options. Single-box shapes (rectangle/ellipse) are axis-aligned
+ * and have nothing to constrain or chain.
+ */
+export const SEGMENT_TOOLS: ToolType[] = ['line', 'arrow', 'polygon', 'freeform-shape'];
+
+/** Per-tool toggles surfaced in the shape hover cards rather than Settings. */
+export type ToolOptionKey = 'snapAngle15' | 'connectLines';
 
 export const PAGE_SIZES = {
   letter: { label: 'Letter', width: 612, height: 792 },
@@ -320,6 +282,19 @@ export interface DocumentSession {
   lastSavedAt?: number;
   /** Present only for generated notebooks; see NotebookSpec. */
   notebook?: NotebookSpec;
+}
+
+/**
+ * Pages copied or cut from the thumbnail list, kept as a standalone PDF so they
+ * can be pasted into a different document (or the same one, repeatedly).
+ */
+export interface PageClipboard {
+  bytes: Uint8Array;
+  pageCount: number;
+  /** Point size of the first copied page, used for blank-page insertion too. */
+  width: number;
+  height: number;
+  sourceName: string;
 }
 
 export type DrawingCursorType = 'pen' | 'dot' | 'circle' | 'crosshair';
@@ -391,8 +366,14 @@ export interface ToolSettings {
   drawingCursor: DrawingCursorType;
   stampPreset: string;
   redactionColor: string;
-  stickyPaper: PaperPattern;
-  stickyColor: string;
+  /**
+   * Per-tool: constrain the tool's segments to 15° increments. Lives here (and
+   * not in AppSettings) because it is a drawing option of the shape tools, so
+   * it is surfaced in their hover cards and is only meaningful for SEGMENT_TOOLS.
+   */
+  snapAngle15: Partial<Record<ToolType, boolean>>;
+  /** Per-tool: merge coincident line endpoints into a continuous path. */
+  connectLines: Partial<Record<ToolType, boolean>>;
 }
 
 export interface AppSettings {
@@ -420,10 +401,6 @@ export interface AppSettings {
   targetDPI: number;
   /** Which window edge the floating toolbar is docked to. */
   toolbarDock: ToolbarDock;
-  /** Constrain drawn line/polygon segments to 15° increments. */
-  snapAngle15: boolean;
-  /** Merge coincident line endpoints into a continuous path. */
-  connectLines: boolean;
 }
 
 export interface PDFFolder {

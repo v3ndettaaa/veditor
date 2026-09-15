@@ -10,6 +10,7 @@ export const fa = {
   redo: 'انجام دوباره (Redo)',
   tools: {
     select: 'انتخاب و تغییر اندازه (V)',
+    lasso: 'انتخاب کمندی (Q)',
     hand: 'دست — کشیدن برای جابه‌جایی (نگه داشتن Space)',
     zoomLens: 'بزرگ‌نمایی ناحیه (کشیدن یک محدوده)',
     pen: 'قلم روان‌نویس (P)',
@@ -28,19 +29,40 @@ export const fa = {
     distance: 'اندازه‌گیری فاصله',
     angle: 'اندازه‌گیری زاویه',
     area: 'اندازه‌گیری مساحت',
-    laser: 'اشاره‌گر لیزری (Z)',
-    callout: 'حباب یادداشت (C)',
     signature: 'امضای الکترونیکی (K)',
     redaction: 'پوشاندن امن اطلاعات (X)',
-    scratchpad: 'دفترچه یادداشت شناور (N)',
-    stickyNote: 'یادداشت چسبان (U)'
+    scratchpad: 'دفترچه یادداشت شناور (N)'
   },
   sidebar: {
     thumbnails: 'صفحات',
     outline: 'فهرست و بوکمارک',
     layers: 'لایه‌ها',
     search: 'جستجو',
-    history: 'تاریخچه تغییرات'
+    history: 'تاریخچه تغییرات',
+    pages: {
+      goTo: 'رفتن به صفحه {page}',
+      copy: 'کپی',
+      cut: 'برش',
+      pasteBefore: 'چسباندن قبل از این صفحه',
+      pasteAfter: 'چسباندن بعد از این صفحه',
+      duplicate: 'تکرار صفحه',
+      insertBlankBefore: 'افزودن صفحه خالی قبل',
+      insertBlankAfter: 'افزودن صفحه خالی بعد',
+      moveUp: 'انتقال به بالا',
+      moveDown: 'انتقال به پایین',
+      rotateCw: 'چرخش در جهت عقربه‌های ساعت',
+      rotateCcw: 'چرخش در خلاف جهت عقربه‌های ساعت',
+      selectAll: 'انتخاب همه صفحات',
+      delete: 'حذف',
+      deleteMany: 'حذف {count} صفحه',
+      copied: '{count} صفحه کپی شد',
+      cutDone: 'صفحه بریده شد',
+      pasted: '{count} صفحه چسبانده شد',
+      blankInserted: 'صفحه خالی اضافه شد',
+      deleted: 'صفحه حذف شد',
+      deletedMany: '{count} صفحه حذف شد',
+      failed: 'این عملیات صفحه انجام نشد'
+    }
   },
   properties: {
     title: 'تنظیمات عنصر',

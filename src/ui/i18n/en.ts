@@ -10,6 +10,7 @@ export const en = {
   redo: 'Redo',
   tools: {
     select: 'Select & Transform (V)',
+    lasso: 'Lasso Select (Q)',
     hand: 'Hand — drag to pan (hold Space)',
     zoomLens: 'Zoom to selection (drag a region)',
     pen: 'Freehand Pen (P)',
@@ -28,19 +29,40 @@ export const en = {
     distance: 'Measure Distance',
     angle: 'Measure Angle',
     area: 'Measure Area',
-    laser: 'Laser Pointer (Z)',
-    callout: 'Callout Bubble (C)',
     signature: 'Signature (K)',
     redaction: 'Redaction (X)',
-    scratchpad: 'Floating Scratchpad (N)',
-    stickyNote: 'Sticky Note (U)'
+    scratchpad: 'Floating Scratchpad (N)'
   },
   sidebar: {
     thumbnails: 'Pages',
     outline: 'Bookmarks',
     layers: 'Layers',
     search: 'Search',
-    history: 'History'
+    history: 'History',
+    pages: {
+      goTo: 'Go to page {page}',
+      copy: 'Copy',
+      cut: 'Cut',
+      pasteBefore: 'Paste before',
+      pasteAfter: 'Paste after',
+      duplicate: 'Duplicate',
+      insertBlankBefore: 'Insert blank before',
+      insertBlankAfter: 'Insert blank after',
+      moveUp: 'Move up',
+      moveDown: 'Move down',
+      rotateCw: 'Rotate clockwise',
+      rotateCcw: 'Rotate counter-clockwise',
+      selectAll: 'Select all pages',
+      delete: 'Delete',
+      deleteMany: 'Delete {count} pages',
+      copied: '{count} page(s) copied',
+      cutDone: 'Page cut',
+      pasted: '{count} page(s) pasted',
+      blankInserted: 'Blank page inserted',
+      deleted: 'Page deleted',
+      deletedMany: '{count} pages deleted',
+      failed: 'That page operation could not be completed'
+    }
   },
   properties: {
     title: 'Properties',

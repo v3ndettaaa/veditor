@@ -15,11 +15,15 @@ import {
   Annotation,
   Layer,
   SidebarTab,
+  ToolOptionKey,
+  SEGMENT_TOOLS,
+  PageClipboard,
   MIN_ZOOM,
   MAX_ZOOM,
   DEFAULT_TOOLBAR_ORDER
 } from './types';
 import { getSystemDpi } from '../utils/dpi';
+import { pruneUnsupportedAnnotations } from '../annotations/migrate';
 
 export interface ToolbarLayoutItem {
   id: ToolType;
@@ -99,8 +103,8 @@ class StateStore {
     drawingCursor: 'pen',
     stampPreset: 'APPROVED',
     redactionColor: '#000000',
-    stickyPaper: 'lined',
-    stickyColor: '#fef08a'
+    snapAngle15: {},
+    connectLines: {}
   };
 
   // App Settings
@@ -122,16 +126,15 @@ class StateStore {
     smoothScroll: true,
     invertDocumentOled: false,
     targetDPI: 150,
-    toolbarDock: 'top',
-    snapAngle15: false,
-    connectLines: false
+    toolbarDock: 'top'
   };
 
   // Selection & Clipboard State
   private _selectedAnnotationIds: Set<string> = new Set();
   private _clipboardAnnotations: Annotation[] = [];
-  /** Note card currently open for inner ink/text editing (single, page-local). */
-  private _editingNoteId: string | null = null;
+  /** Pages highlighted in the thumbnail list; cleared on document switch. */
+  private _selectedPageIndices: Set<number> = new Set();
+  private _pageClipboard: PageClipboard | null = null;
   /**
    * When true, programmatic selection (annotation creation/recognition) must
    * not surface contextual panels (floating props bar / inspector). Set while
@@ -205,6 +208,20 @@ class StateStore {
             parsed.targetDPI = parsed.retinaRendering === false ? 72 : getSystemDpi();
           }
           delete parsed.retinaRendering;
+          // Migrate the retired global snap/connect flags to per-tool options.
+          if (parsed.snapAngle15 !== undefined || parsed.connectLines !== undefined) {
+            const legacySnap = parsed.snapAngle15 === true;
+            const legacyConnect = parsed.connectLines === true;
+            const snap = { ...this._toolSettings.snapAngle15 };
+            const connect = { ...this._toolSettings.connectLines };
+            for (const tool of SEGMENT_TOOLS) {
+              if (snap[tool] === undefined) snap[tool] = legacySnap;
+              if (connect[tool] === undefined) connect[tool] = legacyConnect;
+            }
+            this._toolSettings = { ...this._toolSettings, snapAngle15: snap, connectLines: connect };
+            delete parsed.snapAngle15;
+            delete parsed.connectLines;
+          }
           this._appSettings = { ...this._appSettings, ...parsed } as AppSettings;
         }
       }
@@ -271,12 +288,17 @@ class StateStore {
   get appSettings() { return this._appSettings; }
   get selectedAnnotationIds() { return this._selectedAnnotationIds; }
   get clipboardAnnotations() { return this._clipboardAnnotations; }
-  get editingNoteId() { return this._editingNoteId; }
-  public setEditingNote(id: string | null) {
-    if (this._editingNoteId !== id) {
-      this._editingNoteId = id;
-      this.notify();
-    }
+  /**
+   * Per-tool drawing option (`snapAngle15` / `connectLines`). Defaults to off
+   * for any tool the user has not toggled.
+   */
+  public toolOption(tool: ToolType, key: ToolOptionKey): boolean {
+    return this._toolSettings[key]?.[tool] === true;
+  }
+  /** Persists a per-tool drawing option through the normal settings save path. */
+  public setToolOption(tool: ToolType, key: ToolOptionKey, value: boolean): void {
+    const next = { ...(this._toolSettings[key] || {}), [tool]: value };
+    this.updateToolSettings({ [key]: next } as Partial<ToolSettings>);
   }
   get suppressAutoPanels() { return this._suppressAutoPanels; }
   public setSuppressAutoPanels(value: boolean) { this._suppressAutoPanels = value; }
@@ -306,6 +328,7 @@ class StateStore {
 
     this._activeDocument = doc;
     if (doc) {
+      pruneUnsupportedAnnotations(doc);
       this._openDocuments.set(doc.id, doc);
       if (!this._documentTabs.some(t => t.id === doc.id)) {
         this._documentTabs.push({ id: doc.id, name: doc.name });
@@ -313,7 +336,9 @@ class StateStore {
       this._activePageIndex = doc.activePageIndex || 0;
     }
     this._selectedAnnotationIds.clear();
-    this._editingNoteId = null;
+    // Page indices are document-scoped; keeping them across a switch would
+    // highlight unrelated pages in the next document.
+    this._selectedPageIndices.clear();
     this.notify();
   }
 
@@ -330,7 +355,6 @@ class StateStore {
       this._activeDocument = targetDoc;
       this._activePageIndex = targetDoc.activePageIndex || 0;
       this._selectedAnnotationIds.clear();
-      this._editingNoteId = null;
       this.notify();
     }
   }
@@ -361,7 +385,7 @@ class StateStore {
       }
     }
     this._selectedAnnotationIds.clear();
-    this._editingNoteId = null;
+    this._selectedPageIndices.clear();
     this.notify();
   }
 
@@ -372,7 +396,7 @@ class StateStore {
     this._activeDocument = null;
     this._activePageIndex = 0;
     this._selectedAnnotationIds.clear();
-    this._editingNoteId = null;
+    this._selectedPageIndices.clear();
     this.notify();
   }
 
@@ -518,8 +542,8 @@ class StateStore {
       highlighterCursor: 'rectangle',
       stampPreset: 'APPROVED',
       redactionColor: '#000000',
-      stickyPaper: 'lined',
-      stickyColor: '#fef08a'
+      snapAngle15: {},
+      connectLines: {}
     };
     this._appSettings = {
       theme: 'dark',
@@ -539,9 +563,7 @@ class StateStore {
       smoothScroll: true,
       invertDocumentOled: false,
       targetDPI: 150,
-      toolbarDock: 'top',
-      snapAngle15: false,
-      connectLines: false
+      toolbarDock: 'top'
     };
     this.notify();
   }
@@ -574,6 +596,48 @@ class StateStore {
 
   public setClipboard(annotations: Annotation[]) {
     this._clipboardAnnotations = [...annotations];
+  }
+
+  // Page selection & clipboard (thumbnail list)
+
+  get selectedPageIndices() { return this._selectedPageIndices; }
+
+  get pageClipboard() { return this._pageClipboard; }
+
+  public setPageClipboard(clipboard: PageClipboard | null) {
+    this._pageClipboard = clipboard;
+    this.notify();
+  }
+
+  /** Replaces the page selection; a missing set clears it. */
+  public setSelectedPageIndices(indices: Iterable<number>) {
+    this._selectedPageIndices = new Set(indices);
+    this.notify();
+  }
+
+  /**
+   * Ctrl-style toggling for thumbnail clicks. Anchoring is left to the caller:
+   * shift-range needs the previous anchor, which only the click handler knows.
+   */
+  public togglePageIndex(index: number) {
+    if (this._selectedPageIndices.has(index)) this._selectedPageIndices.delete(index);
+    else this._selectedPageIndices.add(index);
+    this.notify();
+  }
+
+  /**
+   * Selection used by the page menu and keyboard shortcuts: an explicit
+   * selection wins, otherwise the page under the cursor, otherwise the page
+   * currently on screen.
+   */
+  public effectivePageSelection(preferred?: number): number[] {
+    if (this._selectedPageIndices.size > 0) {
+      return [...this._selectedPageIndices].sort((a, b) => a - b);
+    }
+    const doc = this._activeDocument;
+    if (!doc) return [];
+    const fallback = preferred ?? this._activePageIndex;
+    return fallback >= 0 && fallback < doc.pageCount ? [fallback] : [];
   }
 
   // Toolbar customization

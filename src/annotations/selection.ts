@@ -76,27 +76,10 @@ export function moveAnnotationsInZOrder<T extends Annotation>(
 }
 
 /**
- * Returns the selection box for an annotation.
- * For collapsed sticky notes, returns the pin badge anchor.
- * For expanded sticky notes and all other annotations, returns the full bounding box
- * enabling universal 8-handle resizing and rotation.
+ * Returns the selection box for an annotation: its bounding box, which enables
+ * universal 8-handle resizing and rotation.
  */
 export function getAnnotationSelectionBox(ann: Annotation): BoundingBox {
-  if (ann.type === 'sticky-note') {
-    const note = ann as any;
-    if (note.collapsed) {
-      const anchor = note.anchor || { x: ann.box.x, y: ann.box.y };
-      const size = 26;
-      return {
-        x: anchor.x - size / 2,
-        y: anchor.y - size / 2,
-        width: size,
-        height: size,
-        rotation: ann.rotation
-      };
-    }
-    return ann.box;
-  }
   return ann.box;
 }
 
@@ -146,44 +129,13 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   } else if (a.points !== undefined) {
     next.points = a.points;
   }
-  if (ann.type === 'callout') {
-    next.arrowPoint = mapPt(a.arrowPoint);
-    if (a.knee) next.knee = mapPt(a.knee);
-  }
-  if (ann.type === 'sticky-note') {
-    // Anchor rides with the box; ink/texts are note-local.
-    // On pure moves they stay valid; on resizes scale them with the box.
-    if (a.anchor) next.anchor = mapPt(a.anchor);
-    const localScale = (): { sx: number; sy: number } => {
-      const w = Math.max(1, ann.box.width);
-      const h = Math.max(1, ann.box.height);
-      const nw = Math.max(1, next.box.width);
-      const nh = Math.max(1, next.box.height);
-      return { sx: nw / w, sy: nh / h };
-    };
-    if (Array.isArray(a.ink)) {
-      const { sx, sy } = localScale();
-      next.ink = a.ink.map((s: any) => ({
-        ...s,
-        points: s.points.map((p: any) => ({ ...p, x: p.x * sx, y: p.y * sy })),
-        strokeWidth: Math.max(0.5, s.strokeWidth * ((sx + sy) / 2 || 1))
-      }));
-    }
-    if (Array.isArray(a.texts)) {
-      const { sx, sy } = localScale();
-      next.texts = a.texts.map((tx: any) => ({
-        ...tx,
-        x: tx.x * sx,
-        y: tx.y * sy,
-        w: tx.w * sx,
-        fontSize: Math.max(4, tx.fontSize * ((sx + sy) / 2 || 1))
-      }));
-    }
+  if (a.points !== undefined) {
+    next.points = a.points;
   }
   if ('strokeWidth' in a && typeof a.strokeWidth === 'number') {
     next.strokeWidth = Math.max(0.5, a.strokeWidth * meanScale);
   }
-  if ((ann.type === 'text' || ann.type === 'callout') && typeof a.fontSize === 'number') {
+  if (ann.type === 'text' && typeof a.fontSize === 'number') {
     next.fontSize = Math.max(4, a.fontSize * meanScale);
   }
   return next as T;
@@ -266,15 +218,6 @@ export class SelectionManager {
     for (let i = annotations.length - 1; i >= 0; i--) {
       const ann = annotations[i];
       if (ann.locked) continue;
-      if (ann.type === 'sticky-note') {
-        const note = ann as any;
-        if (note.anchor) {
-          const dx = point.x - note.anchor.x;
-          const dy = point.y - note.anchor.y;
-          if (Math.hypot(dx, dy) <= 16) return ann;
-        }
-        if (note.collapsed) continue;
-      }
       // Rotated annotations hit-test in their unrotated frame.
       const local = ann.rotation ? rotatePoint(point, boxCenter(ann.box), -ann.rotation) : point;
       if (isPointInBox(local, ann.box)) {
@@ -333,7 +276,7 @@ export class SelectionManager {
     if (boxHitsPoly || polyHitsBox || edgesCross) {
       // Box-like annotations are decided by box overlap alone.
       if (ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'text' ||
-          ann.type === 'stamp' || ann.type === 'redaction' || ann.type === 'callout' ||
+          ann.type === 'stamp' || ann.type === 'redaction' ||
           ann.type === 'signature') {
         return true;
       }
@@ -420,13 +363,11 @@ export class SelectionManager {
     // A lone rotated annotation gets a rotated box; groups use the merged
     // axis-aligned box.
     const rotation = annotations.length === 1 ? annotations[0].rotation || 0 : 0;
-    const isSingleCollapsedSticky = annotations.length === 1 && annotations[0].type === 'sticky-note' && !!(annotations[0] as any).collapsed;
     this.renderSelectionBox(
       ctx,
       mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox)),
       scale,
-      rotation,
-      isSingleCollapsedSticky
+      rotation
     );
   }
 
@@ -469,7 +410,7 @@ export class SelectionManager {
     ctx.stroke();
 
     if (isIconOnly) {
-      // Icon-only selection (e.g. collapsed sticky note pin): show clean border without cluttering resize handles
+      // Icon-only selection: clean border without cluttering resize handles.
       ctx.restore();
       return;
     }

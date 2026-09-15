@@ -4,7 +4,12 @@ import { store } from '../../core/store';
 
 export type TranslationKey = keyof typeof en;
 
-export function t(path: string): string {
+/**
+ * Looks up a dotted key and substitutes `{name}` placeholders. Unknown keys
+ * fall back to the key itself so a missing translation is visible rather than
+ * blank.
+ */
+export function t(path: string, params?: Record<string, string | number>): string {
   const lang = store.appSettings.language;
   const dict = lang === 'fa' ? fa : en;
 
@@ -19,5 +24,10 @@ export function t(path: string): string {
     }
   }
 
-  return typeof curr === 'string' ? curr : path;
+  if (typeof curr !== 'string') return path;
+  if (!params) return curr;
+
+  return curr.replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
+  );
 }

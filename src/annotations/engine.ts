@@ -19,10 +19,8 @@ import { renderSmoothStroke } from './spline';
 import { textTool } from './tools/text';
 import { stampTool } from './tools/stamp';
 import { measureTool } from './tools/measure';
-import { calloutTool } from './tools/callout';
 import { signatureTool } from './tools/signature';
 import { redactionTool } from './tools/redaction';
-import { stickyNoteTool } from './tools/sticky-note';
 
 export class AnnotationEngine {
   /**
@@ -224,20 +222,12 @@ export class AnnotationEngine {
         measureTool.renderToCanvas(ctx, ann, scale);
         break;
 
-      case 'callout':
-        calloutTool.renderToCanvas(ctx, ann, scale);
-        break;
-
       case 'signature':
         signatureTool.renderToCanvas(ctx, ann, scale);
         break;
 
       case 'redaction':
         redactionTool.renderToCanvas(ctx, ann, scale);
-        break;
-
-      case 'sticky-note':
-        stickyNoteTool.renderToCanvas(ctx, ann as any, scale);
         break;
     }
   }

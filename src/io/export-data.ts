@@ -68,13 +68,6 @@ export class DataExporter {
           xfdf += `    <freetext page="${pageIndex}" rect="${rectStr}" color="${ann.color}">\n`;
           xfdf += `      <contents>${escapeXml(ann.text)}</contents>\n`;
           xfdf += `    </freetext>\n`;
-        } else if (ann.type === 'sticky-note') {
-          const note = ann as any;
-          const txt = (note.texts || []).map((t: any) => t.text).join('\n')
-            || ((note.ink || []).length > 0 ? '(handwritten note)' : '(empty note)');
-          xfdf += `    <text page="${pageIndex}" rect="${rectStr}" color="#b45309" veditor:id="${note.id}" veditor:collapsed="${note.collapsed ? 1 : 0}">\n`;
-          xfdf += `      <contents>${escapeXml(txt)}</contents>\n`;
-          xfdf += `    </text>\n`;
         }
       }
     }

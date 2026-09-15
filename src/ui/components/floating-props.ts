@@ -187,10 +187,7 @@ export class FloatingPropsBarComponent {
 
     const first = selected[0] as any;
     const isShape = selected.some(a => ['rectangle', 'ellipse', 'polygon', 'freeform-shape'].includes(a.type));
-    const isSticky = selected.some(a => a.type === 'sticky-note');
-    const currentColor = isSticky
-      ? (first.paper?.paperColor || '#fef08a')
-      : (first.color || '#4f46e5');
+    const currentColor = first.color || '#4f46e5';
     const currentWidth = Math.round(Number(first.strokeWidth || first.fontSize || 3));
     const currentOpacity = Math.round((first.opacity ?? 1.0) * 100);
     const isLocked = first.locked === true;
@@ -209,7 +206,6 @@ export class FloatingPropsBarComponent {
             <button class="props-mini-swatch" data-fp-color="#10b981" style="background: #10b981;" title="Emerald"></button>
             <button class="props-mini-swatch" data-fp-color="#f59e0b" style="background: #f59e0b;" title="Amber"></button>
             <button class="props-mini-swatch" data-fp-color="#f43f5e" style="background: #f43f5e;" title="Rose"></button>
-            ${isSticky ? `<button class="props-mini-swatch" data-fp-color="#fef08a" style="background: #fef08a;" title="Yellow note"></button>` : ''}
           </div>
         </div>
 
@@ -364,16 +360,7 @@ export class FloatingPropsBarComponent {
   private applyColor(selected: Annotation[], color: string): void {
     selected.forEach(ann => {
       const prev = ann as any;
-      let next: any;
-      if (ann.type === 'sticky-note') {
-        next = {
-          ...prev,
-          paper: { ...(prev.paper || {}), paperColor: color },
-          updatedAt: Date.now()
-        };
-      } else {
-        next = { ...prev, color, updatedAt: Date.now() };
-      }
+      const next = { ...prev, color, updatedAt: Date.now() };
       history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
     });
     store.setActivePageIndex(selected[0].pageIndex);

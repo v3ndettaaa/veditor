@@ -21,7 +21,7 @@ import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
-import { openDocumentSession, getDocumentSession, createDocumentId } from './io/storage';
+import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle } from './io/save';
 import { selectionManager } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
@@ -34,6 +34,7 @@ import { history, DeleteAnnotationsCommand } from './core/history';
 import { duplicateSelectedAnnotations } from './annotations/duplicate';
 import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
+import { onPageStructureChanged } from './core/page-ops';
 import { gestureEngine } from './input/gestures';
 
 class VeditorApp {
@@ -47,13 +48,30 @@ class VeditorApp {
     patternCanvas: HTMLCanvasElement;
     annotCanvas: HTMLCanvasElement;
     scratchCanvas: HTMLCanvasElement;
-    overlay: HTMLElement;
+    /**
+     * Signature of the layout that produced this element's current size
+     * (zoom | render dpr | page rotation). A change means every backing store
+     * was resized — and therefore blanked — so both the PDF raster and the
+     * annotation layers have to be regenerated before the page is shown again.
+     */
+    geomKey?: string;
+    /** PDF raster is stale (geometry changed) and must be re-rendered. */
+    needsRaster?: boolean;
+    /** Annotation/pattern layers were blanked by a resize and need a repaint. */
+    needsRepaint?: boolean;
   }> = new Map();
 
   private _lastZoom: number = 1.0;
   private _lastDocId: string | null = null;
   private _lastViewMode: string = 'continuous';
   private _lastRotationSig: string = '';
+  /**
+   * `fileData` reference at the last page-structure apply. Page ops that change
+   * the bytes always install a fresh `Uint8Array`, so identity inequality is an
+   * exact "the PDF was rewritten" test — a record-only change (page rotation)
+   * then skips both the engine reload and the full IndexedDB re-save.
+   */
+  private _structureBytes: { doc: DocumentSession; bytes: Uint8Array } | null = null;
   /** Generation token: concurrent tab switches invalidate stale async work. */
   private _docSwitchSeq: number = 0;
 
@@ -173,6 +191,14 @@ class VeditorApp {
     notebookController.init(() => {
       this.clearRenderedPages();
       viewportManager.updateLayout(true);
+    });
+
+    // A page operation rewrites the bytes and renumbers every page, so the
+    // cached pdf.js proxy is worthless and every mounted element is stale.
+    // This runs for undo/redo as well, since PageOpsCommand restores snapshots
+    // through the same path.
+    onPageStructureChanged((doc) => {
+      void this.reloadPageStructure(doc);
     });
 
     // 4. Setup Drag & Drop and File Select
@@ -488,6 +514,57 @@ class VeditorApp {
       }
     }
     this._renderedPages.clear();
+  }
+
+  /**
+   * Re-mounts the whole document after a page operation changed its bytes.
+   *
+   * The pdf.js proxy for this doc id points at the previous file, so it has to
+   * be dropped before the new bytes are parsed; every mounted element is then
+   * stale by construction (page numbers all shifted), which is why this starts
+   * clean rather than trying to patch individual pages.
+   */
+  private async reloadPageStructure(doc: DocumentSession): Promise<void> {
+    if (store.activeDocument?.id !== doc.id) return;
+
+    // Only re-parse and re-persist when the page op actually rewrote the PDF.
+    // Rotation lives in the record layer, so it needs a re-layout and a
+    // re-raster (the engine keys its bitmap cache by page@scale:rotation) but
+    // not a reload of the same bytes.
+    const bytes = doc.fileData;
+    const previous = this._structureBytes;
+    const bytesChanged = !previous || previous.doc !== doc || previous.bytes !== bytes;
+    this._structureBytes = bytes ? { doc, bytes } : null;
+
+    this.resetZoomPreviewState();
+    if (bytesChanged) {
+      pdfEngine.unloadDoc(doc.id);
+      try {
+        // loadFromBytes copies internally, so passing the live bytes is safe.
+        if (bytes) await pdfEngine.loadFromBytes(bytes, doc.id);
+      } catch (err) {
+        console.error('Could not reload the document after a page operation:', err);
+      }
+      // The user may have switched tabs while the PDF was parsing.
+      if (store.activeDocument?.id !== doc.id) return;
+    }
+
+    this.clearRenderedPages();
+    viewportManager.clearVisible();
+    viewportManager.updateLayout(true);
+
+    const target = Math.max(0, Math.min(doc.pageCount - 1, store.activePageIndex));
+    viewportManager.scrollToPage(target, { behavior: 'auto' });
+
+    // Page ops are structural edits, so they are saved immediately rather than
+    // waiting for the autosave debounce.
+    if (bytesChanged) {
+      void saveDocumentSession(doc, { includeBytes: true }).catch(err => {
+        console.warn('Could not persist the page operation:', err);
+      });
+    }
+
+    store.notify();
   }
 
   private async handleStoreUpdate() {
@@ -899,11 +976,16 @@ class VeditorApp {
       }
     }
 
-    // 2. Mount and render newly visible pages
+    const docStillCurrent = () => store.activeDocument?.id === docId && !store.isDocSwitching;
+    const visibleSet = new Set(visibleIndices);
+
+    // 2. Mount: create the DOM for visible pages that have no element yet.
+    // Geometry, rasterising and repaints all happen in later passes so that
+    // *every* mounted page — visible or merely retained in the warm window —
+    // is reconciled against the same layout.
     for (const pageIndex of visibleIndices) {
-      if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
-      const layout = viewportManager.getLayout(pageIndex);
-      if (!layout) continue;
+      if (!docStillCurrent()) return;
+      if (!viewportManager.getLayout(pageIndex)) continue;
 
       let pageElements = this._renderedPages.get(pageIndex);
       // Stale container from a previous document (same index, different doc):
@@ -928,8 +1010,6 @@ class VeditorApp {
         pdfCanvas.className = 'pdf-page-canvas';
         pdfCanvas.dataset.pageIndex = String(pageIndex);
         pdfCanvas.dataset.docId = docId;
-        pdfCanvas.style.width = `${layout.width}px`;
-        pdfCanvas.style.height = `${layout.height}px`;
 
         const patternCanvas = document.createElement('canvas');
         patternCanvas.className = 'pattern-canvas';
@@ -945,68 +1025,140 @@ class VeditorApp {
           store.zoom
         );
 
-        const overlay = document.createElement('div');
-        overlay.className = 'note-toggle-layer';
-
         container.appendChild(pdfCanvas);
         container.appendChild(patternCanvas);
         container.appendChild(annotCanvas);
         container.appendChild(scratchCanvas);
-        container.appendChild(overlay);
 
         this._pagesWrapper.appendChild(container);
 
-        pageElements = { container, pdfCanvas, patternCanvas, annotCanvas, scratchCanvas, overlay };
+        pageElements = { container, pdfCanvas, patternCanvas, annotCanvas, scratchCanvas };
         this._renderedPages.set(pageIndex, pageElements);
 
         // Bind Pointer Events to scratchpad canvas
         this.bindPointerEvents(scratchCanvas, pageIndex);
       }
+    }
 
-      // Update position and dimensions from viewport layout
-      pageElements.container.dataset.docId = docId;
-      pageElements.container.style.top = `${layout.top}px`;
-      pageElements.container.style.left = `${layout.left}px`;
-      pageElements.container.style.width = `${layout.width}px`;
-      pageElements.container.style.height = `${layout.height}px`;
-
-      pageElements.pdfCanvas.dataset.pageIndex = String(pageIndex);
-      pageElements.pdfCanvas.dataset.docId = docId;
-      pageElements.pdfCanvas.style.width = `${layout.width}px`;
-      pageElements.pdfCanvas.style.height = `${layout.height}px`;
-      pageElements.overlay.style.width = `${layout.width}px`;
-      pageElements.overlay.style.height = `${layout.height}px`;
-
-      const dpr = clampRenderMultiplier(
-        layout.width,
-        layout.height,
-        resolveRenderDpr(store.appSettings.targetDPI)
-      );
-      const w = layout.width * dpr;
-      const h = layout.height * dpr;
-
-      // Avoid clearing canvas buffers if dimensions haven't changed!
-      [pageElements.patternCanvas, pageElements.annotCanvas, pageElements.scratchCanvas].forEach(c => {
-        if (c.width !== w || c.height !== h) {
-          c.width = w;
-          c.height = h;
-          c.style.width = `${layout.width}px`;
-          c.style.height = `${layout.height}px`;
+    // 3. Geometry pass over EVERY mounted page. Retained pages outside the
+    // visible set are still positioned and sized here; leaving them at the
+    // previous zoom's top/size is what painted stale pages on top of the
+    // corrected ones after a zoom ("everything mixes together"). Their raster
+    // is dropped rather than re-rendered — they are offscreen by definition
+    // and pdfEngine's bitmap cache makes the re-entry render instant.
+    for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
+      if (!docStillCurrent()) return;
+      const layout = viewportManager.getLayout(pageIndex);
+      if (!layout) {
+        // Page no longer exists in the layout (deleted by a page operation).
+        pdfEngine.cancelPageRender(pageIndex);
+        if (p.container.parentNode === this._pagesWrapper) {
+          this._pagesWrapper.removeChild(p.container);
         }
-      });
+        this._renderedPages.delete(pageIndex);
+        continue;
+      }
+      this.applyPageGeometry(pageIndex, p, layout, docId);
+    }
 
-      // Render PDF page base
-      const rot = store.pageRotations[pageIndex] || 0;
-      void pdfEngine.renderPageToCanvas(pageIndex, pageElements.pdfCanvas, store.zoom, rot);
+    // 4. Render pass: rasterise and repaint. Visible pages always repaint;
+    // pages whose backing stores were just resized repaint exactly once, and
+    // the PDF raster is only regenerated for a page that is on screen.
+    for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
+      if (!docStillCurrent()) return;
+      const isVisible = visibleSet.has(pageIndex);
 
-      // Render pattern & annotations
-      this.repaintPageAnnotations(pageIndex, pageElements);
+      if (isVisible) {
+        if (p.needsRaster) {
+          p.needsRaster = false;
+          const rot = store.pageRotations[pageIndex] || 0;
+          void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+        }
+        // An on-screen page always repaints, so a pending flag for it is
+        // redundant — clearing it here keeps the offscreen pages' single
+        // deferred repaint from doubling up on the visible ones.
+        p.needsRepaint = false;
+        this.repaintPageAnnotations(pageIndex, p);
+      } else if (p.needsRepaint) {
+        // Offscreen but its backing stores were resized: repaint now so the
+        // layers are correct the moment it scrolls back in. The PDF raster
+        // itself stays deferred until it is actually on screen.
+        p.needsRepaint = false;
+        this.repaintPageAnnotations(pageIndex, p);
+      }
+    }
+  }
+
+  /**
+   * Positions and sizes one mounted page from its viewport layout rect, and
+   * flags the layers for regeneration when anything actually changed. Split out
+   * of renderVisiblePages so retained (offscreen) pages are reconciled too.
+   */
+  private applyPageGeometry(
+    pageIndex: number,
+    p: { container: HTMLElement; pdfCanvas: HTMLCanvasElement; patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement; geomKey?: string; needsRaster?: boolean; needsRepaint?: boolean },
+    layout: { top: number; left: number; width: number; height: number },
+    docId: string
+  ): void {
+    const dpr = clampRenderMultiplier(
+      layout.width,
+      layout.height,
+      resolveRenderDpr(store.appSettings.targetDPI)
+    );
+    const rot = store.pageRotations[pageIndex] || 0;
+    const geomKey = `${store.zoom.toFixed(4)}|${dpr.toFixed(4)}|${rot}`;
+
+    p.container.dataset.docId = docId;
+    p.container.style.top = `${layout.top}px`;
+    p.container.style.left = `${layout.left}px`;
+    p.container.style.width = `${layout.width}px`;
+    p.container.style.height = `${layout.height}px`;
+
+    p.pdfCanvas.dataset.pageIndex = String(pageIndex);
+    p.pdfCanvas.dataset.docId = docId;
+    p.pdfCanvas.style.width = `${layout.width}px`;
+    p.pdfCanvas.style.height = `${layout.height}px`;
+
+    const w = layout.width * dpr;
+    const h = layout.height * dpr;
+
+    // Avoid clearing canvas buffers if dimensions haven't changed!
+    let resized = false;
+    [p.patternCanvas, p.annotCanvas, p.scratchCanvas].forEach(c => {
+      if (c.width !== w || c.height !== h) {
+        c.width = w;
+        c.height = h;
+        c.style.width = `${layout.width}px`;
+        c.style.height = `${layout.height}px`;
+        resized = true;
+      }
+    });
+
+    if (resized) {
+      // A resized backing store is blank, so both the raster and the layers
+      // are stale regardless of whether the signature changed (e.g. DPI edits
+      // round to the same multiplier).
+      p.needsRepaint = true;
+      if (p.pdfCanvas.width !== w || p.pdfCanvas.height !== h) {
+        p.pdfCanvas.width = w;
+        p.pdfCanvas.height = h;
+      }
+      p.needsRaster = true;
+    }
+
+    if (p.geomKey !== geomKey) {
+      p.geomKey = geomKey;
+      if (p.pdfCanvas.width !== w || p.pdfCanvas.height !== h) {
+        p.pdfCanvas.width = w;
+        p.pdfCanvas.height = h;
+      }
+      p.needsRaster = true;
     }
   }
 
   private repaintPageAnnotations(
     pageIndex: number,
-    p: { patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement; overlay: HTMLElement }
+    p: { patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement }
   ) {
     const cssW = parseFloat(p.patternCanvas.style.width) || p.patternCanvas.width;
     const cssH = parseFloat(p.patternCanvas.style.height) || p.patternCanvas.height;
@@ -1044,60 +1196,6 @@ class VeditorApp {
           selectionManager.render(annCtx, selected, scale);
         }
       }
-    }
-
-    this.updateNoteToggles(pageIndex, p);
-  }
-
-  /**
-   * Maintains one explicit collapse/expand DOM toggle per visible sticky
-   * note. Buttons scroll with their page, drive the same persisted collapsed
-   * state as double-click, and never appear in PDF bytes.
-   */
-  private updateNoteToggles(
-    pageIndex: number,
-    p: { overlay: HTMLElement }
-  ): void {
-    p.overlay.innerHTML = '';
-    const doc = store.activeDocument;
-    if (!doc) return;
-    const notes = (doc.annotations[pageIndex] || []).filter(a => a.type === 'sticky-note');
-    if (notes.length === 0) return;
-
-    for (const note of notes) {
-      const n = note as any;
-      // A locked annotation cannot be edited, including its collapsed state.
-      if (n.locked) continue;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'note-toggle-btn';
-      button.dataset.noteId = n.id;
-      button.title = n.collapsed ? 'Expand note' : 'Collapse note';
-      button.setAttribute('aria-label', n.collapsed ? 'Expand note' : 'Collapse note');
-      button.setAttribute('aria-pressed', n.collapsed ? 'false' : 'true');
-      button.textContent = n.collapsed ? '+' : '−';
-      const left = n.collapsed
-        ? n.anchor.x + 13 - 22
-        : n.box.x + n.box.width - 28;
-      const top = n.collapsed
-        ? n.anchor.y - 13 + 2
-        : n.box.y + 4;
-      button.style.left = `${Math.max(0, left)}px`;
-      button.style.top = `${Math.max(0, top)}px`;
-      button.addEventListener('pointerdown', (e) => {
-        // Keep canvas drawing gestures from starting beneath the control.
-        e.preventDefault();
-        e.stopPropagation();
-      });
-      button.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        pointerHandler.toggleNoteCollapsed(pageIndex, n.id, () => {
-          const pageEls = this._renderedPages.get(pageIndex);
-          if (pageEls) this.repaintPageAnnotations(pageIndex, pageEls);
-        });
-      });
-      p.overlay.appendChild(button);
     }
   }
 
@@ -1272,17 +1370,6 @@ class VeditorApp {
 
     canvas.addEventListener('dblclick', (e) => {
       e.preventDefault();
-      // Sticky notes own dblclick (collapse/edit); everything else keeps
-      // polygon-close, then focal zoom for non-polygon tools.
-      if (pointerHandler.handleNoteDoubleClick(e, pageIndex, canvas, onRepaint)) {
-        this.repaintAllRenderedAnnotations();
-        return;
-      }
-      if (pointerHandler.handleCalloutDoubleClick(e, pageIndex, canvas, () => {
-        this.repaintAllRenderedAnnotations();
-      })) {
-        return;
-      }
       const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
       if (finished) return;
       if (store.activeTool === 'polygon') return;
@@ -1425,10 +1512,6 @@ class VeditorApp {
           store.exitZoomLens();
           return;
         }
-        if (store.editingNoteId) {
-          store.setEditingNote(null);
-          return;
-        }
         pointerHandler.cancelPolygon();
         return;
       }
@@ -1503,15 +1586,13 @@ class VeditorApp {
       else if (key === 'g') store.setActiveTool('polygon');
       else if (key === 't') store.setActiveTool('text');
       else if (key === 'm') store.setActiveTool('stamp');
-      else if (key === 'c') store.setActiveTool('callout');
       else if (key === 'k') store.setSignatureModalOpen(true);
-      else if (key === 'u') store.setActiveTool('sticky-note');
+      else if (key === 'q') store.setActiveTool('lasso');
       else if (key === 'n') {
         store.setActiveTool('scratchpad');
         store.setScratchpadOpen(true);
       }
       else if (key === 'x') store.setActiveTool('redaction');
-      else if (key === 'z') store.setActiveTool('laser');
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();

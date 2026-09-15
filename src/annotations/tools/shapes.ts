@@ -68,7 +68,7 @@ export class ShapesTool {
   private _strokeStyle: 'solid' | 'dashed' | 'dotted' = 'solid';
   /** True while Shift is held: preview and finish a regular shape. */
   private _constrain: boolean = false;
-  /** True when 15° angle snapping is active (Shift or the Snap setting). */
+  /** True while 15° angle snapping is active (Shift or the tool's Snap-15° option). */
   private _snapAngle: boolean = false;
 
   public start(
@@ -101,7 +101,7 @@ export class ShapesTool {
   public move(point: Point, constrain: boolean = false, snapAngle: boolean = false): void {
     this._currentPoint = point;
     // Rectangle/ellipse only square up for Shift; line/arrow snap for Shift
-    // OR the global 15° setting; polygon/freeform snap their elastic segment.
+    // OR the tool's Snap-15° option; polygon/freeform snap their elastic segment.
     this._constrain = constrain &&
       (this._type === 'rectangle' || this._type === 'ellipse' ||
        this._type === 'line' || this._type === 'arrow');
@@ -133,6 +133,12 @@ export class ShapesTool {
 
   public isPolygonActive(): boolean {
     return this._type === 'polygon' && this._polygonPoints.length > 0;
+  }
+
+  /** Page the in-progress shape belongs to; the hover elastic uses this to
+   *  refuse to draw on a neighbouring page's canvas. */
+  public get activePageIndex(): number {
+    return this._pageIndex;
   }
 
   public getPolygonPointCount(): number {

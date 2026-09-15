@@ -5,6 +5,7 @@
 
 import { Annotation } from './types';
 import { store } from './store';
+import { PageSnapshot, applyPageSnapshot, notifyPageStructureChanged } from './page-ops';
 
 export interface Command {
   id: string;
@@ -368,5 +369,50 @@ export class ModifyAnnotationCommand implements Command {
       doc.annotations[this.pageIndex][idx] = { ...state, updatedAt: Date.now() };
       doc.lastModifiedAt = Date.now();
     }
+  }
+}
+
+/**
+ * Page structure changes (insert, duplicate, delete, reorder, rotate).
+ *
+ * Restores whole before/after snapshots rather than inverting each splice:
+ * a page op rewrites the bytes, the page geometry and three index-keyed record
+ * maps at once, so an inverse operation would have to be written and kept in
+ * sync five times over. One snapshot pair gives undo and redo for all of them,
+ * and `applyPageSnapshot` is the single place that knows how to install one.
+ */
+export class PageOpsCommand implements Command {
+  id: string = Math.random().toString(36).substring(2, 9);
+  description: string;
+  timestamp: number = Date.now();
+
+  /** End indices that should stay selected after the operation, per direction. */
+  constructor(
+    description: string,
+    private _before: PageSnapshot,
+    private _after: PageSnapshot
+  ) {
+    this.description = description;
+  }
+
+  execute(): void {
+    this.apply(this._after);
+  }
+
+  undo(): void {
+    this.apply(this._before);
+  }
+
+  private apply(snapshot: PageSnapshot): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+    applyPageSnapshot(doc, store.pageRotations, snapshot);
+    store.setActivePageIndex(doc.activePageIndex);
+    // Page indices are document-scoped: an index selected before the op may
+    // point at a different page (or none) afterwards.
+    store.setSelectedPageIndices(
+      [...store.selectedPageIndices].filter(i => i < doc.pageCount)
+    );
+    notifyPageStructureChanged(doc);
   }
 }
