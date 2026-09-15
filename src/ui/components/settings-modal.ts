@@ -8,7 +8,7 @@
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
-import { ThemeMode, LanguageMode, BackgroundPattern, ToolType } from '../../core/types';
+import { AppSettings, ThemeMode, LanguageMode, BackgroundPattern, ToolType } from '../../core/types';
 import { pdfEngine } from '../../core/pdf-engine';
 import { viewportManager } from '../../core/viewport';
 import { clearAllStorage } from '../../io/storage';
@@ -338,6 +338,14 @@ export class SettingsModalComponent {
               <span>Reset Toolbar to Defaults</span>
             </button>
           </div>
+          <div class="settings-section-header">Dock Position</div>
+          <div class="settings-grid is-quad">
+            ${(['top', 'bottom', 'left', 'right'] as const).map(edge => `
+              <button class="secondary-btn ${app.toolbarDock === edge ? 'is-selected' : ''}" data-set-dock="${edge}">
+                ${edge[0].toUpperCase()}${edge.slice(1)}
+              </button>
+            `).join('')}
+          </div>
           <div style="font-size:11px; color:var(--text-muted); text-align:center;">Toolbar settings • b9</div>
         </div>
       `;
@@ -404,6 +412,29 @@ export class SettingsModalComponent {
               <option value="medium" ${tools.strokeSmoothing === 'medium' || !tools.strokeSmoothing ? 'selected' : ''}>Medium (Catmull-Rom Centripetal Spline)</option>
               <option value="high" ${tools.strokeSmoothing === 'high' ? 'selected' : ''}>High (Cinematic Streamline Stabilization)</option>
             </select>
+          </div>
+
+          <!-- Precision snapping for lines, polylines, and connectors -->
+          <div class="setting-card">
+            <div class="setting-info">
+              <div class="setting-title">Snap Segments to 15°</div>
+              <div class="setting-desc">Constrain lines and polyline segments to 15° increments. Holding Shift always snaps, even when this default is off.</div>
+            </div>
+            <label class="setting-switch">
+              <input type="checkbox" id="snap-angle-toggle" ${app.snapAngle15 ? 'checked' : ''}>
+              <span class="setting-slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-card">
+            <div class="setting-info">
+              <div class="setting-title">Connect Coincident Line Endpoints</div>
+              <div class="setting-desc">Merge a newly finished line with nearby line endpoints into one continuous path.</div>
+            </div>
+            <label class="setting-switch">
+              <input type="checkbox" id="connect-lines-toggle" ${app.connectLines ? 'checked' : ''}>
+              <span class="setting-slider"></span>
+            </label>
           </div>
 
           <!-- Intelligent Palm Rejection -->
@@ -514,17 +545,6 @@ export class SettingsModalComponent {
           <div class="settings-callout is-accent">
             <span class="settings-callout-icon">${getIconSvg('zap', 15)}</span>
             <span><strong>Extreme efficiency engine active.</strong> Canvases outside the active viewport are automatically recycled and sized to 1x1, reclaiming gigabytes of uncompressed GPU memory when viewing 100+ page books.</span>
-          </div>
-
-          <div class="setting-card">
-            <div class="setting-info">
-              <div class="setting-title">Target Render DPI</div>
-              <div class="setting-desc">Backing-store resolution for canvas rendering (72–600). Higher values keep vector text sharper at the cost of memory. 72 = 1x; the system default matches your display density.</div>
-            </div>
-            <input type="number" id="target-dpi-input" class="field is-compact"
-                   value="${app.targetDPI ?? ''}" min="72" max="600" step="1"
-                   placeholder="System" title="Target render DPI (72–600)"
-                   style="width:88px;" aria-label="Target render DPI">
           </div>
 
           <!-- Preload buffer -->
@@ -749,6 +769,16 @@ export class SettingsModalComponent {
       store.resetToolbarLayout();
     });
 
+    // Toolbar dock position buttons
+    this._container.querySelectorAll('[data-set-dock]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const dock = btn.getAttribute('data-set-dock') as AppSettings['toolbarDock'] | null;
+        if (dock === 'top' || dock === 'bottom' || dock === 'left' || dock === 'right') {
+          store.updateAppSettings({ toolbarDock: dock });
+        }
+      });
+    });
+
     // Master Pressure Sensitivity Toggle
     const pressureToggle = this._container.querySelector<HTMLInputElement>('#pressure-master-toggle');
     pressureToggle?.addEventListener('change', () => {
@@ -779,10 +809,20 @@ export class SettingsModalComponent {
       store.updateToolSettings({ strokeSmoothing: smoothingSelect.value as any });
     });
 
+    // Angle-snapping and line-connection defaults
+    const snapAngleToggle = this._container.querySelector<HTMLInputElement>('#snap-angle-toggle');
+    snapAngleToggle?.addEventListener('change', () => {
+      store.updateAppSettings({ snapAngle15: snapAngleToggle.checked });
+    });
+    const connectLinesToggle = this._container.querySelector<HTMLInputElement>('#connect-lines-toggle');
+    connectLinesToggle?.addEventListener('change', () => {
+      store.updateAppSettings({ connectLines: connectLinesToggle.checked });
+    });
+
     // Palm toggle
     const palmToggle = this._container.querySelector<HTMLInputElement>('#palm-toggle');
     palmToggle?.addEventListener('change', () => {
-      store.updateToolSettings({ palmRejectionEnabled: palmToggle.checked });
+      store.updateAppSettings({ palmRejectionEnabled: palmToggle.checked });
     });
 
     // Inverted eraser toggle

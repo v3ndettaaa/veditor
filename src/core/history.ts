@@ -275,6 +275,70 @@ export class BulkModifyCommand implements Command {
   }
 }
 
+export class BulkAddAnnotationsCommand implements Command {
+  id: string = Math.random().toString(36).substring(2, 9);
+  timestamp: number = Date.now();
+  description: string;
+
+  constructor(
+    private pageIndex: number,
+    private annotations: Annotation[],
+    description?: string
+  ) {
+    this.description = description ?? `Paste ${annotations.length} annotation(s) on page ${pageIndex + 1}`;
+  }
+
+  execute(): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+    if (!doc.annotations[this.pageIndex]) {
+      doc.annotations[this.pageIndex] = [];
+    }
+    doc.annotations[this.pageIndex].push(...this.annotations);
+    doc.lastModifiedAt = Date.now();
+  }
+
+  undo(): void {
+    const doc = store.activeDocument;
+    if (!doc || !doc.annotations[this.pageIndex]) return;
+    const addedIds = new Set(this.annotations.map(a => a.id));
+    doc.annotations[this.pageIndex] = doc.annotations[this.pageIndex].filter(
+      a => !addedIds.has(a.id)
+    );
+    doc.lastModifiedAt = Date.now();
+  }
+}
+
+export class ReorderAnnotationsCommand implements Command {
+  id: string = Math.random().toString(36).substring(2, 9);
+  timestamp: number = Date.now();
+  description: string;
+
+  constructor(
+    private pageIndex: number,
+    private before: Annotation[],
+    private after: Annotation[],
+    description?: string
+  ) {
+    this.description = description ?? `Reorder ${after.length} annotation(s) on page ${pageIndex + 1}`;
+  }
+
+  private apply(order: Annotation[]): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+    doc.annotations[this.pageIndex] = order.map(a => ({ ...a }));
+    doc.lastModifiedAt = Date.now();
+  }
+
+  execute(): void {
+    this.apply(this.after);
+  }
+
+  undo(): void {
+    this.apply(this.before);
+  }
+}
+
 export class ModifyAnnotationCommand implements Command {
   id: string = Math.random().toString(36).substring(2, 9);
   description: string;

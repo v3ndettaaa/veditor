@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { store } from '../src/core/store';
-import { DEFAULT_TOOLBAR_ORDER, toolbarFamily, ToolType } from '../src/core/types';
+import { DEFAULT_TOOLBAR_ORDER, classifyToolbarDock, toolbarFamily, ToolType } from '../src/core/types';
 
 describe('Toolbar layout customization', () => {
   it('defaults to every known tool visible in default order', () => {
@@ -25,6 +25,19 @@ describe('Toolbar layout customization', () => {
     const hidden = store.toolbarLayout.filter(l => !l.visible).map(l => l.id);
     expect(hidden).toEqual(['laser']);
     store.resetToolbarLayout();
+  });
+
+  it('remembers the selected dock edge', () => {
+    store.updateAppSettings({ toolbarDock: 'left' });
+    expect(store.appSettings.toolbarDock).toBe('left');
+    store.updateAppSettings({ toolbarDock: 'top' });
+  });
+
+  it('classifies drag releases by the nearest window edge', () => {
+    expect(classifyToolbarDock(10, 400, 1000, 800)).toBe('left');
+    expect(classifyToolbarDock(990, 400, 1000, 800)).toBe('right');
+    expect(classifyToolbarDock(500, 10, 1000, 800)).toBe('top');
+    expect(classifyToolbarDock(500, 790, 1000, 800)).toBe('bottom');
   });
 
   it('groups tools into stable families for separators', () => {

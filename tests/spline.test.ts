@@ -41,6 +41,22 @@ describe('Spline & Pressure Engine', () => {
     expect(segments[0].cp2).toBeDefined();
   });
 
+  it('still generates cubic interpolation when pressure sensitivity is disabled', () => {
+    const points = [
+      { x: 0, y: 0, pressure: 0.1 },
+      { x: 20, y: 15, pressure: 0.9 },
+      { x: 45, y: 30, pressure: 0.2 }
+    ];
+    const segments = generateSmoothSegments(points, 8, 'linear', false);
+    expect(segments.length).toBe(2);
+    for (const segment of segments) {
+      expect(segment.widthStart).toBe(8);
+      expect(segment.widthEnd).toBe(8);
+      expect(segment.cp1).toBeDefined();
+      expect(segment.cp2).toBeDefined();
+    }
+  });
+
   it('returns uniform stroke width when pressure sensitivity is disabled', () => {
     const baseWidth = 8;
     // When pressure sensitivity is off, line width is strictly uniform

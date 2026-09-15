@@ -4,7 +4,9 @@ import {
   normalizeDragBox,
   transformAnnotation,
   rotatePoint,
-  boxCenter
+  boxCenter,
+  moveAnnotationsInZOrder,
+  offsetAnnotation
 } from '../src/annotations/selection';
 import { store } from '../src/core/store';
 import { PenAnnotation, ShapeAnnotation } from '../src/core/types';
@@ -185,5 +187,30 @@ describe('Annotation transforms', () => {
     const next = transformAnnotation(rect, { dx: 10, dy: 10, scaleX: 1, scaleY: 1, originX: 0, originY: 0 });
     expect(next.box).toMatchObject({ x: 10, y: 10, width: 50, height: 50 });
     expect(next.points).toBeUndefined();
+  });
+});
+
+describe('Annotation clipboard and z-order helpers', () => {
+  it('offsets nested signature strokes without mutating the source', () => {
+    const source = {
+      ...pen('sig', 10, 20),
+      type: 'signature' as const,
+      points: [
+        [{ x: 10, y: 20, pressure: 0.5 }, { x: 14, y: 24, pressure: 0.5 }],
+        [{ x: 20, y: 30, pressure: 0.5 }]
+      ]
+    };
+    const next = offsetAnnotation(source, 5, -2);
+    expect(next.box).toMatchObject({ x: 15, y: 18 });
+    expect(next.points[0][1]).toMatchObject({ x: 19, y: 22 });
+    expect(next.points[1][0]).toMatchObject({ x: 25, y: 28 });
+    expect(source.box).toMatchObject({ x: 10, y: 20 });
+    expect(source.points[0][1]).toMatchObject({ x: 14, y: 24 });
+  });
+
+  it('moves selected annotations to the front or back while preserving their order', () => {
+    const annotations = [pen('a', 0, 0), pen('b', 10, 10), pen('c', 20, 20)];
+    expect(moveAnnotationsInZOrder(annotations, ['a', 'c'], 'front').map(a => a.id)).toEqual(['b', 'a', 'c']);
+    expect(moveAnnotationsInZOrder(annotations, ['b', 'c'], 'back').map(a => a.id)).toEqual(['b', 'c', 'a']);
   });
 });

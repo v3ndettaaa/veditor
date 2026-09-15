@@ -59,6 +59,9 @@ export class FloatingPropsBarComponent {
    */
   public setHoverState(isHovered: boolean): void {
     this._isHoveredOverItem = isHovered;
+    // Programmatic selection after creation must not summon the contextual
+    // bar; hovering remains the only implicit trigger.
+    if (isHovered && store.suppressAutoPanels) return;
     if (isHovered) {
       this.show();
     } else {
@@ -97,6 +100,17 @@ export class FloatingPropsBarComponent {
   private hideImmediate(): void {
     this._container.classList.add('is-hidden');
     this._isVisible = false;
+  }
+
+  /**
+   * Used after programmatic selection of a newly created annotation. The
+   * selection itself is needed for transform handles, but the contextual bar
+   * must stay out of the way until the user deliberately hovers or acts.
+   */
+  public hideForProgrammaticSelection(): void {
+    this._isHoveredOverItem = false;
+    this._isHoveredOverBar = false;
+    this.hideImmediate();
   }
 
   private updateState(): void {

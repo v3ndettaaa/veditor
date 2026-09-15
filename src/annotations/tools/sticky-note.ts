@@ -76,7 +76,7 @@ export class StickyNoteTool {
       type: 'sticky-note',
       box,
       anchor: { x: anchor.x, y: anchor.y },
-      collapsed: false,
+      collapsed: true,
       paper: { ...paper },
       ink: [],
       texts: [],

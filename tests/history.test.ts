@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, ReplaceAnnotationsCommand } from '../src/core/history';
+import { history, AddAnnotationCommand, BulkAddAnnotationsCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, ReorderAnnotationsCommand, ReplaceAnnotationsCommand } from '../src/core/history';
 import { store } from '../src/core/store';
 import { PenAnnotation, DocumentSession } from '../src/core/types';
 
@@ -155,6 +155,52 @@ describe('Undo / Redo History System', () => {
     // Redo replace
     history.redo();
     expect(store.activeDocument?.annotations[0].length).toBe(2);
+  });
+
+  it('pastes multiple annotations as one undoable command', () => {
+    const pasted: PenAnnotation[] = [1, 2].map(n => ({
+      id: `paste-${n}`,
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'pen',
+      box: { x: n * 10, y: n * 10, width: 10, height: 10 },
+      points: [],
+      color: '#000000',
+      strokeWidth: 2,
+      opacity: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }));
+
+    history.execute(new BulkAddAnnotationsCommand(0, pasted));
+    expect(store.activeDocument?.annotations[0].map(a => a.id)).toEqual(['paste-1', 'paste-2']);
+    history.undo();
+    expect(store.activeDocument?.annotations[0].length).toBe(0);
+    history.redo();
+    expect(store.activeDocument?.annotations[0].map(a => a.id)).toEqual(['paste-1', 'paste-2']);
+  });
+
+  it('reorders annotations and restores z-order on undo', () => {
+    const make = (id: string): PenAnnotation => ({
+      id,
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'pen',
+      box: { x: 0, y: 0, width: 10, height: 10 },
+      points: [],
+      color: '#000000',
+      strokeWidth: 2,
+      opacity: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    const before = [make('a'), make('b'), make('c')];
+    store.activeDocument!.annotations[0] = before.map(a => ({ ...a }));
+    const after = [before[1], before[2], before[0]];
+    history.execute(new ReorderAnnotationsCommand(0, before, after));
+    expect(store.activeDocument?.annotations[0].map(a => a.id)).toEqual(['b', 'c', 'a']);
+    history.undo();
+    expect(store.activeDocument?.annotations[0].map(a => a.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('maintains isolated undo/redo stacks when switching document tabs', () => {

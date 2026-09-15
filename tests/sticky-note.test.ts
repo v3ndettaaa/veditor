@@ -25,14 +25,14 @@ const note = (): StickyNoteAnnotation => ({
 });
 
 describe('sticky notes', () => {
-  it('creates expanded notes with paper + anchor', () => {
+  it('creates compact collapsed notes with paper + anchor', () => {
     const n = stickyNoteTool.createNote(
       { x: 50, y: 60 }, 0, 'layer-default',
       { pattern: 'grid', spacing: 22, lineColor: '#d9c66c', paperColor: '#fef9c3', margin: false },
       200, 150
     );
     expect(n.type).toBe('sticky-note');
-    expect(n.collapsed).toBe(false);
+    expect(n.collapsed).toBe(true);
     expect(n.anchor).toEqual({ x: 50, y: 60 });
     expect(n.box).toMatchObject({ x: 50, y: 60, width: 200, height: 150 });
     expect(n.ink).toEqual([]);

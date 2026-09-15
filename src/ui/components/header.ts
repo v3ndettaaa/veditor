@@ -6,6 +6,7 @@
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
+import { isFullscreen, toggleFullscreen } from '../fullscreen';
 import { showToast } from './toast';
 import { t } from '../i18n';
 import { notebookController } from '../../core/notebook';
@@ -17,6 +18,7 @@ export class HeaderComponent {
   private _onAddTabRequested: () => void;
   /** Zoom never changes header output — skip full rebuilds on zoom-only notifies. */
   private _lastRenderKey: string = '';
+  private _isFullscreen = false;
 
   constructor(
     container: HTMLElement,
@@ -29,6 +31,7 @@ export class HeaderComponent {
     // instead of jumping straight to the file picker.
     this._onAddTabRequested = onAddTabRequested ?? onOpenFileRequested;
     store.subscribe(() => this.render());
+    document.addEventListener('fullscreenchange', () => this.render());
     this.render();
   }
 
@@ -38,14 +41,16 @@ export class HeaderComponent {
     const lang = store.appSettings.language;
     const theme = store.appSettings.theme;
     const isNotebook = notebookController.isNotebook(activeDoc);
+    const fullscreen = isFullscreen();
 
     const renderKey = [
       activeDoc?.id ?? '',
       tabs.map(t => `${t.id}:${t.name}:${isDocumentDirty(t.id) ? 1 : 0}`).join(','),
-      lang, theme, isNotebook ? 1 : 0
+      lang, theme, isNotebook ? 1 : 0, fullscreen ? 1 : 0
     ].join('|');
     if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') return;
     this._lastRenderKey = renderKey;
+    this._isFullscreen = fullscreen;
 
     this._container.innerHTML = `
       <div class="header-left">
@@ -112,6 +117,10 @@ export class HeaderComponent {
           <span class="header-language-label">${lang === 'en' ? 'FA' : 'EN'}</span>
         </button>
 
+        <button id="header-fullscreen-btn" class="header-btn" title="${t('view.fullscreen')}" aria-pressed="${fullscreen ? 'true' : 'false'}">
+          ${getIconSvg(fullscreen ? 'compress' : 'expand', 15)}
+        </button>
+
         <button id="header-theme-btn" class="header-btn" title="Toggle Dark/Light Mode">
           ${getIconSvg(theme === 'dark' ? 'sun' : 'moon', 15)}
         </button>
@@ -164,6 +173,15 @@ export class HeaderComponent {
 
     this._container.querySelector('#header-lang-btn')?.addEventListener('click', () => {
       store.updateAppSettings({ language: lang === 'en' ? 'fa' : 'en' });
+    });
+
+    this._container.querySelector('#header-fullscreen-btn')?.addEventListener('click', async () => {
+      try {
+        await toggleFullscreen();
+      } catch (err) {
+        console.error('Fullscreen unavailable:', err);
+        showToast('Fullscreen is unavailable in this browser context', 'error');
+      }
     });
 
     this._container.querySelector('#header-theme-btn')?.addEventListener('click', () => {

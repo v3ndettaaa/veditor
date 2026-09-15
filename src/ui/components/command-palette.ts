@@ -11,6 +11,7 @@ import { dataExporter } from '../../io/export-data';
 import { showToast } from './toast';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
+import { toggleFullscreen } from '../fullscreen';
 import { t } from '../i18n';
 
 interface PaletteCommand {
@@ -71,6 +72,14 @@ export class CommandPaletteComponent {
       { id: 'view-single', title: 'View: Single Page Mode', category: 'View', action: () => store.setViewMode('single') },
       { id: 'view-twopage', title: 'View: Two-Page Facing Mode', category: 'View', action: () => store.setViewMode('two-page') },
       { id: 'view-focus', title: 'Toggle Focus Mode', category: 'View', action: () => store.toggleFocusMode() },
+      {
+        id: 'view-fullscreen',
+        title: 'Toggle Fullscreen Mode',
+        category: 'View',
+        action: () => {
+          toggleFullscreen().catch(() => showToast('Fullscreen is unavailable in this browser context', 'error'));
+        }
+      },
 
       {
         id: 'file-save',

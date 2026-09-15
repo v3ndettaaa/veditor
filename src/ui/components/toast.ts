@@ -16,7 +16,17 @@ const VARIANT_ICONS: Record<ToastVariant, string | null> = {
   progress: null
 };
 
-export function showToast(message: string, variant: ToastVariant = 'info', durationMs = 3000): void {
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+export function showToast(
+  message: string,
+  variant: ToastVariant = 'info',
+  durationMs = 3000,
+  action?: ToastAction
+): void {
   const container = document.getElementById('toast-container');
   if (!container) return;
 
@@ -35,14 +45,29 @@ export function showToast(message: string, variant: ToastVariant = 'info', durat
   label.innerText = message;
 
   toast.append(icon, label);
+  if (action) {
+    const actionButton = document.createElement('button');
+    actionButton.type = 'button';
+    actionButton.className = 'toast-action';
+    actionButton.textContent = action.label;
+    actionButton.addEventListener('click', () => {
+      try {
+        action.onClick();
+      } finally {
+        dismiss();
+      }
+    });
+    toast.append(actionButton);
+  }
   container.appendChild(toast);
 
-  setTimeout(() => {
+  const dismiss = () => {
     toast.classList.add('is-leaving');
     setTimeout(() => {
       if (toast.parentNode === container) {
         container.removeChild(toast);
       }
     }, 220);
-  }, durationMs);
+  };
+  setTimeout(dismiss, Math.max(500, durationMs));
 }

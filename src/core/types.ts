@@ -324,7 +324,38 @@ export interface DocumentSession {
 
 export type DrawingCursorType = 'pen' | 'dot' | 'circle' | 'crosshair';
 
-export type SidebarTab = 'thumbnails' | 'outline' | 'layers' | 'search' | 'history';
+export type ToolbarDock = 'top' | 'bottom' | 'left' | 'right';
+
+/**
+ * Returns the window edge nearest a toolbar drag release, so a dropped bar
+ * docks to the flank the user was aiming at.
+ */
+export function classifyToolbarDock(
+  clientX: number,
+  clientY: number,
+  viewportWidth: number,
+  viewportHeight: number
+): ToolbarDock {
+  const w = Math.max(1, viewportWidth);
+  const h = Math.max(1, viewportHeight);
+  const distances = {
+    left: clientX,
+    right: w - clientX,
+    top: clientY,
+    bottom: h - clientY
+  };
+  let best: ToolbarDock = 'top';
+  let bestDistance = distances.top;
+  (Object.keys(distances) as ToolbarDock[]).forEach(edge => {
+    if (distances[edge] < bestDistance) {
+      best = edge;
+      bestDistance = distances[edge];
+    }
+  });
+  return best;
+}
+
+export type SidebarTab = 'thumbnails' | 'outline' | 'search' | 'history';
 
 export interface ToolSettings {
   penColor: string;
@@ -388,7 +419,7 @@ export interface AppSettings {
    */
   targetDPI: number;
   /** Which window edge the floating toolbar is docked to. */
-  toolbarDock: 'top' | 'bottom' | 'left' | 'right';
+  toolbarDock: ToolbarDock;
   /** Constrain drawn line/polygon segments to 15° increments. */
   snapAngle15: boolean;
   /** Merge coincident line endpoints into a continuous path. */

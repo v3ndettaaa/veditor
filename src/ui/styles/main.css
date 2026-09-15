@@ -376,6 +376,70 @@ body.no-page-shadows .pdf-page-container {
   pointer-events: auto;
 }
 
+.floating-toolbar[data-dock='bottom'] {
+  top: auto;
+  bottom: 16px;
+}
+
+.floating-toolbar[data-dock='left'] {
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%);
+}
+
+.floating-toolbar[data-dock='right'] {
+  top: 50%;
+  left: auto;
+  right: 16px;
+  transform: translateY(-50%);
+}
+
+.floating-toolbar[data-dock='left'] .toolbar-main-row,
+.floating-toolbar[data-dock='right'] .toolbar-main-row {
+  flex-direction: column;
+  align-items: stretch;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.floating-toolbar[data-dock='left'] .toolbar-group,
+.floating-toolbar[data-dock='right'] .toolbar-group {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.floating-toolbar[data-dock='left'] .toolbar-separator,
+.floating-toolbar[data-dock='right'] .toolbar-separator {
+  width: 70%;
+  height: 1px;
+  margin: 4px auto;
+}
+
+.floating-toolbar[data-dock='left'] .tool-btn,
+.floating-toolbar[data-dock='right'] .tool-btn {
+  width: 100%;
+}
+
+.toolbar-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: move;
+  touch-action: none;
+}
+
+.toolbar-drag-handle:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
 .toolbar-main-row {
   background: var(--bg-glass);
   backdrop-filter: blur(14px);
@@ -669,9 +733,9 @@ body.no-page-shadows .pdf-page-container {
   color: #ffffff;
 }
 
-/* Tool Button Wrapper & Hover Popover Cards */
+/* Tool Button Wrapper & Click-Pinned Popover Cards */
 
-/* Deliberately NOT a containing block: the hover cards inside it are
+/* Deliberately NOT a containing block: the pinned cards inside it are
    absolutely positioned against `.floating-toolbar` so they centre under the
    whole toolbar instead of under one narrow button. Anchoring them to the
    button pushed the wide cards (the pen card is ~1200px) off-screen for every
@@ -746,13 +810,49 @@ body.no-page-shadows .pdf-page-container {
   height: 14px;
 }
 
-.tool-btn-wrapper:hover .tool-hover-card,
-.tool-btn-wrapper.is-pinned .tool-hover-card,
-.tool-btn-wrapper:focus-within .tool-hover-card,
-.tool-hover-card:hover {
+.tool-btn-wrapper.is-pinned .tool-hover-card {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+.floating-toolbar[data-dock='bottom'] .tool-hover-card {
+  top: auto;
+  bottom: calc(100% + 10px);
+  transform: translateY(-4px);
+}
+
+.floating-toolbar[data-dock='bottom'] .tool-btn-wrapper.is-pinned .tool-hover-card {
+  transform: translateY(0);
+}
+
+.floating-toolbar[data-dock='left'] .tool-hover-card,
+.floating-toolbar[data-dock='right'] .tool-hover-card {
+  top: 0;
+  bottom: auto;
+  inset-inline: auto;
+  width: max-content;
+  max-width: min(70vw, 720px);
+}
+
+.floating-toolbar[data-dock='left'] .tool-hover-card {
+  left: calc(100% + 10px);
+  right: auto;
+  transform: translateX(4px);
+}
+
+.floating-toolbar[data-dock='right'] .tool-hover-card {
+  right: calc(100% + 10px);
+  left: auto;
+  transform: translateX(-4px);
+}
+
+.floating-toolbar[data-dock='left'] .tool-btn-wrapper.is-pinned .tool-hover-card {
+  transform: translateX(0);
+}
+
+.floating-toolbar[data-dock='right'] .tool-btn-wrapper.is-pinned .tool-hover-card {
+  transform: translateX(0);
 }
 
 .toolbar-group {
@@ -856,6 +956,44 @@ body.invert-pdf-document .pdf-page-canvas {
   z-index: 4;
   touch-action: none;
   cursor: crosshair;
+}
+
+/* DOM toggles above canvas ink: explicit sticky-note collapse/expand buttons. */
+.note-toggle-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.note-toggle-btn {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-medium);
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.note-toggle-btn:hover {
+  background: var(--bg-surface-hover);
+}
+
+.note-toggle-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Floating View Controls */
@@ -981,6 +1119,28 @@ body.invert-pdf-document .pdf-page-canvas {
 .scratchpad-resize:hover {
   color: var(--accent-primary, #6366f1);
   opacity: 1;
+}
+
+.scratchpad-resize-edge {
+  position: absolute;
+  z-index: 11;
+  touch-action: none;
+}
+
+.scratchpad-resize-edge.is-n {
+  top: 0;
+  left: 20px;
+  right: 20px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.scratchpad-resize-edge.is-e {
+  top: 20px;
+  right: 0;
+  bottom: 20px;
+  width: 8px;
+  cursor: ew-resize;
 }
 
 .scratchpad-resize:active {
@@ -1437,6 +1597,23 @@ input.prop-hex-input:focus {
 .toast-label {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.toast-action {
+  flex: 0 0 auto;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .toast.is-info .toast-icon { color: var(--accent); }

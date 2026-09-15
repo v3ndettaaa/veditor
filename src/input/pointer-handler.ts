@@ -126,6 +126,20 @@ export class PointerHandler {
     return f !== 1 ? base / f : base;
   }
 
+  /**
+   * Selects a newly created annotation while keeping transient panels closed.
+   * Transform handles still appear; inspector/sidebar state is untouched.
+   */
+  private selectCreatedAnnotation(id: string): void {
+    store.setSuppressAutoPanels(true);
+    try {
+      store.selectAnnotation(id);
+    } finally {
+      store.setSuppressAutoPanels(false);
+      floatingPropsBar?.hideForProgrammaticSelection();
+    }
+  }
+
   /** Default paper for new sticky notes from the toolbar paper choice. */
   private defaultNotePaper(): PaperStyle {
     const pattern = store.toolSettings.stickyPaper || 'lined';
@@ -663,7 +677,7 @@ export class PointerHandler {
         );
         history.execute(new AddAnnotationCommand(pageIndex, textAnn));
         store.setActiveTool('select');
-        store.selectAnnotation(textAnn.id);
+        this.selectCreatedAnnotation(textAnn.id);
         onNeedRepaint();
         break;
       }
@@ -684,7 +698,7 @@ export class PointerHandler {
         }
         history.execute(new AddAnnotationCommand(pageIndex, stampBase));
         store.setActiveTool('select');
-        store.selectAnnotation(stampBase.id);
+        this.selectCreatedAnnotation(stampBase.id);
         onNeedRepaint();
         break;
 
@@ -1157,9 +1171,7 @@ export class PointerHandler {
             // Expose transform handles immediately without surfacing the
             // contextual properties bar (creation stays non-intrusive).
             store.setActiveTool('select');
-            store.setSuppressAutoPanels(true);
-            store.selectAnnotation(shapeAnn.id);
-            store.setSuppressAutoPanels(false);
+            this.selectCreatedAnnotation(shapeAnn.id);
           }
         } else {
           const penAnn = penTool.finish(defaultLayerId);
@@ -1270,9 +1282,9 @@ export class PointerHandler {
             box.height
           );
           history.execute(new AddAnnotationCommand(pageIndex, note));
-          // Open for inner editing right away + select for transform handles.
-          store.setEditingNote(note.id);
-          store.selectAnnotation(note.id);
+          // Collapsed notes start compact; the overlay toggle expands them.
+          if (!note.collapsed) store.setEditingNote(note.id);
+          this.selectCreatedAnnotation(note.id);
           store.setActiveTool('select');
         }
         break;
@@ -1314,9 +1326,7 @@ export class PointerHandler {
           );
           history.execute(new AddAnnotationCommand(pageIndex, callout));
           store.setActiveTool('select');
-          store.setSuppressAutoPanels(true);
-          store.selectAnnotation(callout.id);
-          store.setSuppressAutoPanels(false);
+          this.selectCreatedAnnotation(callout.id);
           // Immediate inline text editing.
           this.openCalloutEditor(pageIndex, callout, scratchCanvas, onNeedRepaint);
         }
@@ -1401,6 +1411,31 @@ export class PointerHandler {
       }
     }
     // Toggle collapse (pin <-> card) as one undo step + select the note.
+    const prev = cloneAnnotation(note);
+    const next = cloneAnnotation(note);
+    next.collapsed = !next.collapsed;
+    next.updatedAt = Date.now();
+    history.execute(new ModifyAnnotationCommand(pageIndex, prev, next));
+    if (next.collapsed) {
+      if (store.editingNoteId === next.id) store.setEditingNote(null);
+    } else {
+      store.setEditingNote(next.id);
+    }
+    store.selectAnnotation(next.id);
+    onRepaint();
+    return true;
+  }
+
+  /**
+   * Explicit collapse/expand control for a sticky note. Unlike double-click,
+   * this never opens the note text prompt: it only flips the persisted
+   * collapsed state and selects the annotation.
+   */
+  public toggleNoteCollapsed(pageIndex: number, noteId: string, onRepaint: () => void): boolean {
+    const doc = store.activeDocument;
+    if (!doc) return false;
+    const note = doc.annotations[pageIndex]?.find(a => a.id === noteId) as StickyNoteAnnotation | undefined;
+    if (!note || note.type !== 'sticky-note') return false;
     const prev = cloneAnnotation(note);
     const next = cloneAnnotation(note);
     next.collapsed = !next.collapsed;
@@ -1859,6 +1894,16 @@ export class PointerHandler {
     } else {
       history.pushCommitted(new DeleteAnnotationsCommand(pageIndex, removed));
     }
+  }
+
+  /** Page coordinates for events that do not draw, such as context menus. */
+  public pagePointForEvent(e: MouseEvent, canvas: HTMLCanvasElement): Point {
+    const rect = canvas.getBoundingClientRect();
+    const zoom = store.zoom;
+    return {
+      x: (e.clientX - rect.left) / zoom,
+      y: (e.clientY - rect.top) / zoom
+    };
   }
 
   private getPointInPage(e: PointerEvent, canvas: HTMLCanvasElement): StrokePoint {

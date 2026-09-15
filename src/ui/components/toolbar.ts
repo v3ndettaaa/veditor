@@ -1,6 +1,7 @@
 /**
- * Floating & Dockable Toolbar Component with Interactive Hover & Click-to-Pin Configuration Cards
- * Hovering or clicking any tool reveals its floating configuration card.
+ * Floating & Dockable Toolbar Component with Click-to-Pin Configuration Cards
+ * Clicking a tool reveals its configuration card. The bar can be dragged to
+ * any window edge, with a matching vertical layout on the left/right flanks.
  * In-place DOM updates ensure clicking swatches, size pills, or sliders never closes the popup!
  */
 
@@ -8,7 +9,7 @@ import { store } from '../../core/store';
 import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
-import { ToolType, EraserMode, toolbarFamily } from '../../core/types';
+import { ToolType, EraserMode, toolbarFamily, ToolbarDock, classifyToolbarDock } from '../../core/types';
 
 /** Short labels for tools, reused by Settings → Toolbar. */
 export const TOOL_SHORT_LABELS: Record<string, string> = {
@@ -60,6 +61,7 @@ export class ToolbarComponent {
   private _lastSelectedCount: number = 0;
   private _lastHasDoc: boolean = false;
   private _lastLayoutKey: string = '';
+  private _lastDock: ToolbarDock | null = null;
   private _pinnedTool: string | null = null;
 
   constructor(container: HTMLElement) {
@@ -82,6 +84,7 @@ export class ToolbarComponent {
     const canRedo = history.canRedo;
     const selectedCount = store.selectedAnnotationIds.size;
     const layoutKey = JSON.stringify(store.toolbarLayout);
+    const dock = store.appSettings.toolbarDock;
 
     if (
       hasDoc !== this._lastHasDoc ||
@@ -89,7 +92,8 @@ export class ToolbarComponent {
       canUndo !== this._lastCanUndo ||
       canRedo !== this._lastCanRedo ||
       selectedCount !== this._lastSelectedCount ||
-      layoutKey !== this._lastLayoutKey
+      layoutKey !== this._lastLayoutKey ||
+      dock !== this._lastDock
     ) {
       this._lastHasDoc = hasDoc;
       this._lastLayoutKey = layoutKey;
@@ -109,6 +113,7 @@ export class ToolbarComponent {
   }
 
   public render(): void {
+    this._container.dataset.dock = store.appSettings.toolbarDock;
     if (!store.activeDocument) {
       this._container.style.display = 'none';
       return;
@@ -126,6 +131,7 @@ export class ToolbarComponent {
     this._lastCanRedo = canRedo;
     this._lastSelectedCount = selectedIds.length;
     this._lastLayoutKey = JSON.stringify(store.toolbarLayout);
+    this._lastDock = store.appSettings.toolbarDock;
 
     const penColors = ['#000000', '#ffffff', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
     const penWidths = [1, 2, 4, 8, 14];
@@ -141,6 +147,9 @@ export class ToolbarComponent {
 
     this._container.innerHTML = `
       <div class="toolbar-main-row">
+        <button type="button" class="toolbar-drag-handle" title="Drag to dock top, bottom, left, or right" aria-label="Drag toolbar to dock">
+          ${getIconSvg('moreVertical', 14)}
+        </button>
         <!-- Selection Tool -->
         <div class="tool-btn-wrapper ${this._pinnedTool === 'select' ? 'is-pinned' : ''}" data-wrapper-tool="select">
           <button class="tool-btn ${activeTool === 'select' ? 'active' : ''}" data-tool="select" title="${t('tools.select')} (V)">
@@ -593,7 +602,7 @@ export class ToolbarComponent {
     // in Settings → Toolbar). byId keeps references to every tool element
     // (with listeners intact), so removal here is safe.
     row.querySelectorAll(':scope > *').forEach(n => {
-      if (n !== undoGroup) n.remove();
+      if (n !== undoGroup && !(n instanceof HTMLElement && n.classList.contains('toolbar-drag-handle'))) n.remove();
     });
 
     let lastFamily: string | null = null;
@@ -1568,6 +1577,44 @@ export class ToolbarComponent {
         }
       }
       store.clearSelection();
+    });
+
+    this.bindDockDrag();
+  }
+
+  /** Drag-to-dock handle: dropping near a window edge persists that dock. */
+  private bindDockDrag(): void {
+    const handle = this._container.querySelector<HTMLElement>('.toolbar-drag-handle');
+    if (!handle) return;
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startDock = store.appSettings.toolbarDock;
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      const preview = (ev: PointerEvent) => {
+        this._container.dataset.dock = classifyToolbarDock(ev.clientX, ev.clientY, window.innerWidth, window.innerHeight);
+      };
+      const finish = (ev: PointerEvent | null, commit: boolean) => {
+        handle.removeEventListener('pointermove', preview);
+        handle.removeEventListener('pointerup', commitUp);
+        handle.removeEventListener('pointercancel', cancelDrag);
+        if (commit && ev) {
+          const dock = classifyToolbarDock(ev.clientX, ev.clientY, window.innerWidth, window.innerHeight);
+          if (dock !== startDock) {
+            store.updateAppSettings({ toolbarDock: dock });
+            return;
+          }
+        }
+        this._container.dataset.dock = startDock;
+      };
+      const commitUp = (ev: PointerEvent) => finish(ev, true);
+      const cancelDrag = () => finish(null, false);
+      handle.addEventListener('pointermove', preview);
+      handle.addEventListener('pointerup', commitUp);
+      handle.addEventListener('pointercancel', cancelDrag);
     });
   }
 

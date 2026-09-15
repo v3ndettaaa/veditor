@@ -42,6 +42,39 @@ export function cloneAnnotation<T extends Annotation>(ann: T): T {
   return JSON.parse(JSON.stringify(ann)) as T;
 }
 
+/** Deep clone an annotation, then translate its page-space geometry. */
+export function offsetAnnotation<T extends Annotation>(ann: T, dx: number, dy: number): T {
+  const next = cloneAnnotation(ann);
+  const shift = <P extends Point>(p: P): P => ({ ...p, x: p.x + dx, y: p.y + dy });
+  next.box = { ...next.box, x: next.box.x + dx, y: next.box.y + dy };
+
+  const value = next as any;
+  if (Array.isArray(value.points) && value.points.length > 0) {
+    value.points = Array.isArray(value.points[0])
+      ? value.points.map((stroke: Point[]) => stroke.map(shift))
+      : value.points.map(shift);
+  }
+  if (value.arrowPoint) value.arrowPoint = shift(value.arrowPoint);
+  if (value.knee) value.knee = shift(value.knee);
+  if (value.anchor) value.anchor = shift(value.anchor);
+  return next;
+}
+
+/**
+ * Reorders annotations without changing their payloads. Later array entries
+ * paint above earlier entries and hit-test first.
+ */
+export function moveAnnotationsInZOrder<T extends Annotation>(
+  annotations: T[],
+  ids: string[],
+  position: 'front' | 'back'
+): T[] {
+  const selectedIds = new Set(ids);
+  const selected = annotations.filter(ann => selectedIds.has(ann.id));
+  const rest = annotations.filter(ann => !selectedIds.has(ann.id));
+  return position === 'front' ? [...rest, ...selected] : [...selected, ...rest];
+}
+
 /**
  * Returns the selection box for an annotation.
  * For collapsed sticky notes, returns the pin badge anchor.

@@ -23,7 +23,6 @@ import { calloutTool } from './tools/callout';
 import { signatureTool } from './tools/signature';
 import { redactionTool } from './tools/redaction';
 import { stickyNoteTool } from './tools/sticky-note';
-import { layerManager } from './layers';
 
 export class AnnotationEngine {
   /**
@@ -120,8 +119,9 @@ export class AnnotationEngine {
     if (!doc) return;
 
     ctx.imageSmoothingEnabled = true;
-    const allAnnotations = doc.annotations[pageIndex] || [];
-    const visibleAnnotations = layerManager.filterVisibleAnnotations(pageIndex, allAnnotations);
+    // Layers were removed as a user-facing feature. Every stored annotation
+    // renders so legacy documents cannot lose content to orphan layer state.
+    const visibleAnnotations = doc.annotations[pageIndex] || [];
 
     for (const ann of visibleAnnotations) {
       ctx.save();

@@ -1,12 +1,11 @@
 /**
  * Collapsible Side Panels Component
- * Manages Page Thumbnails, Document Outline/Bookmarks, Layers, Search, and Action History.
+ * Manages Page Thumbnails, Document Outline/Bookmarks, Search, and Action History.
  */
 
 import { store } from '../../core/store';
 import { history } from '../../core/history';
 import { viewportManager } from '../../core/viewport';
-import { layerManager } from '../../annotations/layers';
 import { pdfEngine } from '../../core/pdf-engine';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
@@ -63,9 +62,6 @@ export class SidePanelsComponent {
           </button>
           <button class="sidebar-tab-btn ${activeTab === 'outline' ? 'active' : ''}" data-tab="outline">
             ${t('sidebar.outline')}
-          </button>
-          <button class="sidebar-tab-btn ${activeTab === 'layers' ? 'active' : ''}" data-tab="layers">
-            ${t('sidebar.layers')}
           </button>
           <button class="sidebar-tab-btn ${activeTab === 'search' ? 'active' : ''}" data-tab="search">
             ${t('sidebar.search')}
@@ -149,48 +145,6 @@ export class SidePanelsComponent {
           </div>
         `;
       }
-    } else if (tab === 'layers') {
-      const pIdx = store.activePageIndex;
-      const layers = layerManager.getOrCreateDefaultLayers(pIdx);
-
-      el.innerHTML = `
-        <div class="panel-subhead">
-          <span>Page ${pIdx + 1} layers</span>
-          <button id="add-layer-btn" class="secondary-btn is-compact">
-            ${getIconSvg('plus', 12)} Add layer
-          </button>
-        </div>
-        <div class="panel-stack">
-          ${layers.map(l => `
-            <div class="list-card">
-              <span class="list-card-title" style="flex:1; min-width:0;">${escapeHtml(l.name)}</span>
-              <button class="icon-btn is-small layer-toggle-btn" data-layer-id="${l.id}"
-                      title="${l.visible ? 'Hide layer' : 'Show layer'}"
-                      aria-pressed="${l.visible ? 'true' : 'false'}">
-                ${getIconSvg(l.visible ? 'eye' : 'eyeOff', 14)}
-              </button>
-              <button class="icon-btn is-small layer-lock-btn" data-layer-id="${l.id}"
-                      title="${l.locked ? 'Unlock layer' : 'Lock layer'}"
-                      aria-pressed="${l.locked ? 'true' : 'false'}">
-                ${getIconSvg(l.locked ? 'lock' : 'unlock', 14)}
-              </button>
-            </div>
-          `).join('')}
-        </div>
-      `;
-
-      el.querySelector('#add-layer-btn')?.addEventListener('click', () => {
-        layerManager.addLayer(pIdx);
-        store.setActivePageIndex(pIdx);
-      });
-
-      el.querySelectorAll('.layer-toggle-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const lId = btn.getAttribute('data-layer-id') || '';
-          layerManager.toggleLayerVisibility(pIdx, lId);
-          store.setActivePageIndex(pIdx);
-        });
-      });
     } else if (tab === 'search') {
       el.innerHTML = `
         <div class="panel-stack">

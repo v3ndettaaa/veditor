@@ -19,6 +19,7 @@ import { ShortcutsModalComponent } from './ui/components/shortcuts-modal';
 import { SettingsModalComponent } from './ui/components/settings-modal';
 import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
+import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
 import { openDocumentSession, getDocumentSession, createDocumentId } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle } from './io/save';
@@ -46,6 +47,7 @@ class VeditorApp {
     patternCanvas: HTMLCanvasElement;
     annotCanvas: HTMLCanvasElement;
     scratchCanvas: HTMLCanvasElement;
+    overlay: HTMLElement;
   }> = new Map();
 
   private _lastZoom: number = 1.0;
@@ -86,6 +88,7 @@ class VeditorApp {
   } | null = null;
   /** Tool to restore when a held Space (temporary hand) is released. */
   private _spacePrevTool: ToolType | null = null;
+  private _annotationMenu = new AnnotationContextMenu();
 
   constructor() {
     this._scrollContainer = document.getElementById('document-scroll-container') as HTMLElement;
@@ -512,7 +515,11 @@ class VeditorApp {
 
     if (floatingToolbar) floatingToolbar.style.display = '';
     if (viewControls) viewControls.style.display = '';
-    if (propertiesPanel) propertiesPanel.style.display = 'none';
+    // The inspector never opens on creation because selection does not touch
+    // this flag; it appears only for explicit actions such as Properties.
+    if (propertiesPanel) {
+      propertiesPanel.style.display = store.propertiesPanelOpen ? '' : 'none';
+    }
 
     this._emptyStateView.style.display = 'none';
 
@@ -938,14 +945,18 @@ class VeditorApp {
           store.zoom
         );
 
+        const overlay = document.createElement('div');
+        overlay.className = 'note-toggle-layer';
+
         container.appendChild(pdfCanvas);
         container.appendChild(patternCanvas);
         container.appendChild(annotCanvas);
         container.appendChild(scratchCanvas);
+        container.appendChild(overlay);
 
         this._pagesWrapper.appendChild(container);
 
-        pageElements = { container, pdfCanvas, patternCanvas, annotCanvas, scratchCanvas };
+        pageElements = { container, pdfCanvas, patternCanvas, annotCanvas, scratchCanvas, overlay };
         this._renderedPages.set(pageIndex, pageElements);
 
         // Bind Pointer Events to scratchpad canvas
@@ -963,6 +974,8 @@ class VeditorApp {
       pageElements.pdfCanvas.dataset.docId = docId;
       pageElements.pdfCanvas.style.width = `${layout.width}px`;
       pageElements.pdfCanvas.style.height = `${layout.height}px`;
+      pageElements.overlay.style.width = `${layout.width}px`;
+      pageElements.overlay.style.height = `${layout.height}px`;
 
       const dpr = clampRenderMultiplier(
         layout.width,
@@ -993,7 +1006,7 @@ class VeditorApp {
 
   private repaintPageAnnotations(
     pageIndex: number,
-    p: { patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement }
+    p: { patternCanvas: HTMLCanvasElement; annotCanvas: HTMLCanvasElement; scratchCanvas: HTMLCanvasElement; overlay: HTMLElement }
   ) {
     const cssW = parseFloat(p.patternCanvas.style.width) || p.patternCanvas.width;
     const cssH = parseFloat(p.patternCanvas.style.height) || p.patternCanvas.height;
@@ -1032,6 +1045,60 @@ class VeditorApp {
         }
       }
     }
+
+    this.updateNoteToggles(pageIndex, p);
+  }
+
+  /**
+   * Maintains one explicit collapse/expand DOM toggle per visible sticky
+   * note. Buttons scroll with their page, drive the same persisted collapsed
+   * state as double-click, and never appear in PDF bytes.
+   */
+  private updateNoteToggles(
+    pageIndex: number,
+    p: { overlay: HTMLElement }
+  ): void {
+    p.overlay.innerHTML = '';
+    const doc = store.activeDocument;
+    if (!doc) return;
+    const notes = (doc.annotations[pageIndex] || []).filter(a => a.type === 'sticky-note');
+    if (notes.length === 0) return;
+
+    for (const note of notes) {
+      const n = note as any;
+      // A locked annotation cannot be edited, including its collapsed state.
+      if (n.locked) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'note-toggle-btn';
+      button.dataset.noteId = n.id;
+      button.title = n.collapsed ? 'Expand note' : 'Collapse note';
+      button.setAttribute('aria-label', n.collapsed ? 'Expand note' : 'Collapse note');
+      button.setAttribute('aria-pressed', n.collapsed ? 'false' : 'true');
+      button.textContent = n.collapsed ? '+' : '−';
+      const left = n.collapsed
+        ? n.anchor.x + 13 - 22
+        : n.box.x + n.box.width - 28;
+      const top = n.collapsed
+        ? n.anchor.y - 13 + 2
+        : n.box.y + 4;
+      button.style.left = `${Math.max(0, left)}px`;
+      button.style.top = `${Math.max(0, top)}px`;
+      button.addEventListener('pointerdown', (e) => {
+        // Keep canvas drawing gestures from starting beneath the control.
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      button.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        pointerHandler.toggleNoteCollapsed(pageIndex, n.id, () => {
+          const pageEls = this._renderedPages.get(pageIndex);
+          if (pageEls) this.repaintPageAnnotations(pageIndex, pageEls);
+        });
+      });
+      p.overlay.appendChild(button);
+    }
   }
 
   private gestureCallbacks() {
@@ -1050,6 +1117,14 @@ class VeditorApp {
       const pageEls = this._renderedPages.get(pageIndex);
       if (pageEls) this.repaintPageAnnotations(pageIndex, pageEls);
     };
+
+    // Suppress the browser's middle-click autoscroll affordance; the app pans.
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
+    canvas.addEventListener('auxclick', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
 
     canvas.addEventListener('pointerdown', (e) => {
       // A pending zoom preview leaves the wrapper CSS-scaled, so page
@@ -1071,6 +1146,25 @@ class VeditorApp {
           return;
         }
       }
+      // Middle-click pans in every tool. Mouse strokes start only on the
+      // primary button; alternate buttons are reserved for menus and pans.
+      if (e.pointerType === 'mouse' && e.button === 1) {
+        e.preventDefault();
+        try {
+          canvas.setPointerCapture(e.pointerId);
+        } catch (_) {}
+        this._handPan = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          scrollL: this._scrollContainer.scrollLeft,
+          scrollT: this._scrollContainer.scrollTop,
+          canvas
+        };
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       // Hand tool: drag pans the page like a trackpad — never draws.
       if (store.activeTool === 'hand') {
         e.preventDefault();
@@ -1197,6 +1291,22 @@ class VeditorApp {
         this.zoomAtPoint(2.0 / Math.max(store.zoom, MIN_ZOOM), { x: e.clientX, y: e.clientY });
       } else {
         viewportManager.fitToWidth();
+      }
+    });
+
+    canvas.addEventListener('contextmenu', (e) => {
+      if (!store.activeDocument || pointerHandler.isPointerDown) return;
+      // A pending zoom preview must settle first so hit-testing uses layout
+      // coordinates rather than CSS-transformed visual coordinates.
+      if (this._zoomPreviewActive) this.commitZoomPreview();
+      const handled = this._annotationMenu.handleCanvasContextMenu(e, {
+        pageIndex,
+        point: pointerHandler.pagePointForEvent(e, canvas),
+        onRepaint
+      });
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
       }
     });
   }

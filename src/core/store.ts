@@ -655,6 +655,13 @@ class StateStore {
     this.notify();
   }
 
+  public setPropertiesPanelOpen(open: boolean) {
+    if (this._propertiesPanelOpen !== open) {
+      this._propertiesPanelOpen = open;
+      this.notify();
+    }
+  }
+
   public toggleFocusMode() {
     this._focusMode = !this._focusMode;
     this.notify();

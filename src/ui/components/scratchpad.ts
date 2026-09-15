@@ -125,6 +125,8 @@ export class ScratchpadComponent {
             <button id="scratchpad-export-btn" class="header-btn" title="Export as PNG">${getIconSvg('download', 13)}</button>
           </div>
         </div>
+        <div id="scratchpad-resize-n" class="scratchpad-resize-edge is-n" title="Resize height"></div>
+        <div id="scratchpad-resize-e" class="scratchpad-resize-edge is-e" title="Resize width"></div>
         <div id="scratchpad-resize" class="scratchpad-resize" title="Resize">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
             <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
@@ -185,6 +187,55 @@ export class ScratchpadComponent {
     panel.style.height = `${this._geom.h}px`;
     this.fitCanvas();
     this.redraw();
+  }
+
+  private bindResizeEdge(
+    selector: string,
+    edges: { horizontal: 'none' | 'end'; vertical: 'none' | 'start' | 'end' }
+  ): void {
+    const panel = this.panel;
+    const handle = this._container.querySelector<HTMLElement>(selector);
+    if (!panel || !handle) return;
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startGeom = { ...this._geom };
+      const startTop = panel.offsetTop;
+      const move = (ev: PointerEvent) => {
+        if (edges.horizontal === 'end') {
+          this._geom.w = Math.max(MIN_W, startGeom.w + ev.clientX - startX);
+          panel.style.width = `${this._geom.w}px`;
+        }
+        if (edges.vertical === 'end') {
+          this._geom.h = Math.max(MIN_H, startGeom.h + ev.clientY - startY);
+          panel.style.height = `${this._geom.h}px`;
+        } else if (edges.vertical === 'start') {
+          this._geom.h = Math.max(MIN_H, startGeom.h - (ev.clientY - startY));
+          panel.style.height = `${this._geom.h}px`;
+          panel.style.top = `${startTop + (startGeom.h - this._geom.h)}px`;
+        }
+        this.fitCanvas();
+        this.redraw();
+      };
+      const up = (ev: PointerEvent) => {
+        try {
+          handle.releasePointerCapture(ev.pointerId);
+        } catch (_) {}
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        this._geom.y = panel.offsetTop;
+        this.persistGeom();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+    });
   }
 
   private fitCanvas(): void {
@@ -314,40 +365,11 @@ export class ScratchpadComponent {
       header.addEventListener('pointercancel', up);
     });
 
-    // Free Corner resize (enlarge and shrink without distorting canvas contents)
-    const grip = this._container.querySelector<HTMLElement>('#scratchpad-resize');
-    grip?.addEventListener('pointerdown', (e) => {
-      if (!panel) return;
-      e.preventDefault();
-      e.stopPropagation();
-      try {
-        grip.setPointerCapture(e.pointerId);
-      } catch (_) {}
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const startW = this._geom.w;
-      const startH = this._geom.h;
-      const move = (ev: PointerEvent) => {
-        this._geom.w = Math.max(MIN_W, startW + ev.clientX - startX);
-        this._geom.h = Math.max(MIN_H, startH + ev.clientY - startY);
-        panel.style.width = `${this._geom.w}px`;
-        panel.style.height = `${this._geom.h}px`;
-        this.fitCanvas();
-        this.redraw();
-      };
-      const up = (ev: PointerEvent) => {
-        try {
-          grip.releasePointerCapture(ev.pointerId);
-        } catch (_) {}
-        grip.removeEventListener('pointermove', move);
-        grip.removeEventListener('pointerup', up);
-        grip.removeEventListener('pointercancel', up);
-        this.persistGeom();
-      };
-      grip.addEventListener('pointermove', move);
-      grip.addEventListener('pointerup', up);
-      grip.addEventListener('pointercancel', up);
-    });
+    // Free resizing from the north, east, and southeast edges without
+    // distorting the canvas contents.
+    this.bindResizeEdge('#scratchpad-resize-n', { horizontal: 'none', vertical: 'start' });
+    this.bindResizeEdge('#scratchpad-resize-e', { horizontal: 'end', vertical: 'none' });
+    this.bindResizeEdge('#scratchpad-resize', { horizontal: 'end', vertical: 'end' });
 
     // Tool buttons
     this._container.querySelector('#scratchpad-pen-btn')?.addEventListener('click', () => {
@@ -386,14 +408,24 @@ export class ScratchpadComponent {
       });
     });
 
-    // Clear Pad with confirmation & storage wipe
+    // Clear Pad immediately: no confirmation modal; offer a brief undo toast.
     this._container.querySelector('#scratchpad-clear-btn')?.addEventListener('click', () => {
       if (this._strokes.length === 0) return;
-      if (!window.confirm('Clear all scratchpad drawings?')) return;
+      const cleared: PadStroke[] = this._strokes.map(stroke => ({
+        ...stroke,
+        points: stroke.points.map(point => ({ ...point }))
+      }));
       this._strokes = [];
       this.persistStrokes();
       this.redraw();
-      showToast('Scratchpad cleared', 'info');
+      showToast('Scratchpad cleared', 'info', 5000, {
+        label: 'Undo',
+        onClick: () => {
+          this._strokes = cleared;
+          this.persistStrokes();
+          this.redraw();
+        }
+      });
     });
 
     // Export as PNG
