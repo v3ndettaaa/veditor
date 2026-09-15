@@ -43,6 +43,8 @@ export class SidePanelsComponent {
   private _structureRevision = 0;
   /** Last page whose thumbnail was scrolled into view (avoids re-scrolling). */
   private _lastActivePageIndex: number = -1;
+  /** Lazy thumbnail rasteriser for the current list generation. */
+  private _thumbObserver: IntersectionObserver | null = null;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -114,9 +116,6 @@ export class SidePanelsComponent {
             ${t('sidebar.history')}
           </button>
         </div>
-        <button id="sidebar-close-btn" class="icon-btn" title="Close sidebar" aria-label="Close sidebar">
-          ${getIconSvg('close', 14)}
-        </button>
       </div>
 
       <div class="sidebar-content" id="sidebar-tab-content"></div>
@@ -128,10 +127,6 @@ export class SidePanelsComponent {
         const tab = el.getAttribute('data-tab') as any;
         if (tab) store.setSidebarTab(tab);
       });
-    });
-
-    this._container.querySelector('#sidebar-close-btn')?.addEventListener('click', () => {
-      store.toggleSidebar();
     });
 
     const contentArea = this._container.querySelector('#sidebar-tab-content') as HTMLElement;
@@ -539,13 +534,13 @@ export class SidePanelsComponent {
       { kind: 'separator' },
       { kind: 'action', id: 'page-duplicate', label: t('sidebar.pages.duplicate'), icon: 'plus',
         run: () => { void this.runPageAction(() => pageActions.duplicatePages(selection)); } },
-      { kind: 'action', id: 'page-blank-before', label: t('sidebar.pages.insertBlankBefore'), icon: 'blankPage',
+      { kind: 'action', id: 'page-blank-before', label: t('sidebar.pages.insertBlankBefore'), icon: 'pagePlus',
         run: () => { void this.runPageAction(async () => {
           const ok = await pageActions.insertBlankPages(selection[0], 1);
           if (ok) showToast(t('sidebar.pages.blankInserted'), 'success');
           return ok;
         }); } },
-      { kind: 'action', id: 'page-blank-after', label: t('sidebar.pages.insertBlankAfter'), icon: 'blankPage',
+      { kind: 'action', id: 'page-blank-after', label: t('sidebar.pages.insertBlankAfter'), icon: 'pagePlus',
         run: () => { void this.runPageAction(async () => {
           const ok = await pageActions.insertBlankPages(selection[selection.length - 1] + 1, 1);
           if (ok) showToast(t('sidebar.pages.blankInserted'), 'success');
@@ -597,20 +592,26 @@ export class SidePanelsComponent {
    * Renders each page preview once and reuses it afterwards, so switching tabs
    * or moving between pages does not re-rasterise the whole document.
    */
-  private async fillThumbnails(el: HTMLElement, docId: string, pageCount: number, revision: number): Promise<void> {
-    for (let idx = 0; idx < pageCount; idx++) {
-      const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
-      if (!frame) continue;
+  private fillThumbnails(el: HTMLElement, docId: string, pageCount: number, revision: number): void {
+    // One observer per fill pass; drop the previous pass's observer so a
+    // rebuilt list never keeps dead elements alive.
+    this._thumbObserver?.disconnect();
 
+    const fillFrame = async (frame: HTMLElement, idx: number): Promise<void> => {
       // `revision` is the page-structure generation: a page op renumbers every
       // page, so a cache entry from before it would show the wrong page. The
-      // handler above also clears the cache, which makes this belt-and-braces.
+      // structure handler also clears the cache, which makes this
+      // belt-and-braces.
       const key = `${docId}:${revision}:${idx}`;
       let src = this._thumbnailCache.get(key);
 
       if (!src) {
-        const rendered = await pdfEngine.renderThumbnail(idx);
-        if (!rendered) continue;
+        // Fast path: pages the reader has already viewed have a full-res
+        // bitmap in the engine cache — one synchronous downscale, zero pdf.js
+        // work, and the preview appears immediately.
+        const fast = pdfEngine.thumbnailFromCache(idx);
+        const rendered = fast ?? await pdfEngine.renderThumbnail(idx);
+        if (!rendered) return;
         src = rendered.toDataURL('image/png');
         this._thumbnailCache.set(key, src);
       }
@@ -620,9 +621,29 @@ export class SidePanelsComponent {
 
       const img = document.createElement('img');
       img.src = src;
+      img.decoding = 'async';
       img.alt = `Page ${idx + 1} preview`;
       frame.classList.remove('is-loading');
       frame.prepend(img);
+    };
+
+    // Lazy rasterisation: only thumbnails near the visible part of the list
+    // render. Opening the sidebar on a 500-page document no longer rasterises
+    // all 500 pages up front; each card fills as it scrolls into view (with a
+    // one-screen lookahead) and is unobserved once filled.
+    this._thumbObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        this._thumbObserver?.unobserve(entry.target);
+        const frame = entry.target as HTMLElement;
+        const idx = Number(frame.dataset.thumbFrame);
+        if (Number.isFinite(idx)) void fillFrame(frame, idx);
+      }
+    }, { rootMargin: '600px' });
+
+    for (let idx = 0; idx < pageCount; idx++) {
+      const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
+      if (frame) this._thumbObserver.observe(frame);
     }
   }
 }

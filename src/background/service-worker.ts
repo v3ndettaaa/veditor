@@ -32,7 +32,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 // Handle context menu clicks
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener((info: any, _tab: any) => {
   if (info.menuItemId === 'veditor-open-link' && info.linkUrl) {
     const editorUrl = chrome.runtime.getURL(`index.html?pdfUrl=${encodeURIComponent(info.linkUrl)}`);
     chrome.tabs.create({ url: editorUrl });
@@ -43,7 +43,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 // Message listener for opening editor or managing tabs
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: (response: any) => void) => {
   if (message.type === 'OPEN_VEDITOR') {
     const url = message.pdfUrl
       ? chrome.runtime.getURL(`index.html?pdfUrl=${encodeURIComponent(message.pdfUrl)}`)

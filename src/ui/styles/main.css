@@ -15,7 +15,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Custom Sleek Scrollbar */
+/* Custom Sleek Scrollbar — panels, menus, dialogs (thin, unobtrusive) */
 ::-webkit-scrollbar {
   width: 7px;
   height: 7px;
@@ -26,9 +26,22 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--border-medium);
   border-radius: var(--radius-full);
+  min-height: 32px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox equivalents for the thin panel scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) transparent;
 }
 
 /* App Layout */
@@ -894,13 +907,55 @@ body.no-page-shadows .pdf-page-container {
   box-shadow: 0 2px 8px var(--accent-glow);
 }
 
-/* Document Scroll Area */
+/* Document Scroll Area — the primary reading surface gets a wider,
+   easier-to-grab scrollbar than the UI panels: long documents shrink the
+   thumb, so it needs a real minimum size, a padded pill look, and an accent
+   highlight while dragging (the thumb doubles as the fastest way to move
+   through a large PDF). `scrollbar-gutter` reserves symmetric space so pages
+   stay centered and don't shift when scrollbars appear at zoom changes. */
 .document-scroll-container {
   flex: 1;
   width: 100%;
   height: 100%;
   overflow: auto;
   position: relative;
+  scrollbar-gutter: stable both-edges;
+  /* Firefox: full-size scrollbar with a quiet track. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.document-scroll-container::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.document-scroll-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.document-scroll-container::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  /* Transparent border + content-box clip = floating pill with grab padding. */
+  border: 4px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-full);
+  min-height: 48px;
+  min-width: 48px;
+}
+
+.document-scroll-container::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+  border-width: 3px;
+}
+
+.document-scroll-container::-webkit-scrollbar-thumb:active {
+  background-color: var(--accent);
+  border-width: 3px;
+}
+
+.document-scroll-container::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .document-pages-wrapper {
@@ -974,6 +1029,12 @@ body.invert-pdf-document .pdf-page-canvas {
   padding: 4px 8px;
   z-index: 25;
   transition: opacity var(--transition-normal), transform var(--transition-normal), padding var(--transition-fast);
+}
+
+/* A bottom-docked toolbar occupies the same strip: lift the zoom controls
+   above it so neither overlays the other. */
+body[data-toolbar-dock='bottom'] .floating-view-controls {
+  bottom: 88px;
 }
 
 .floating-view-controls.is-collapsed {

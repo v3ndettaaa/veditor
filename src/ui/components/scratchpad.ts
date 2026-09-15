@@ -382,7 +382,15 @@ export class ScratchpadComponent {
     });
 
     header?.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('button')) return;
+      const target = e.target as HTMLElement;
+      // Delegated minimize toggle: sync() swaps the button's inner icon on
+      // every store notify, so a listener bound to the icon (or a click whose
+      // target was replaced mid-press) could miss. The header always exists.
+      if (target.closest('#scratchpad-min-btn')) {
+        store.setScratchpadMinimized(!store.scratchpadMinimized);
+        return;
+      }
+      if (target.closest('button')) return;
       if (store.scratchpadMinimized) store.setScratchpadMinimized(false);
     });
 
@@ -414,9 +422,7 @@ export class ScratchpadComponent {
       this.redraw();
       showToast('Scratchpad view centered', 'info');
     });
-    this._container.querySelector('#scratchpad-min-btn')?.addEventListener('click', () => {
-      store.setScratchpadMinimized(!store.scratchpadMinimized);
-    });
+
 
     // Width pills
     this._container.querySelectorAll('[data-pad-w]').forEach(btn => {

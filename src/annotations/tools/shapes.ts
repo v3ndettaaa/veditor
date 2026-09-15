@@ -4,7 +4,8 @@
  */
 
 import { Point, ShapeAnnotation, ToolType, BoundingBox } from '../../core/types';
-import { computePointsBoundingBox } from '../../utils/geometry';
+import { computePointsBoundingBox, traceRoundedPolygon } from '../../utils/geometry';
+import { SHAPE_CORNER_RADIUS } from '../engine';
 
 export type ConstrainedShapeType = 'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'freeform-shape';
 
@@ -186,10 +187,16 @@ export class ShapesTool {
       const y = Math.min(sp.y, cp.y);
       const w = Math.abs(cp.x - sp.x);
       const h = Math.abs(cp.y - sp.y);
+      // Preview with the same rounded corners the committed shape will have.
+      const r = Math.min(SHAPE_CORNER_RADIUS, w / 2, h / 2);
+      ctx.beginPath();
+      traceRoundedPolygon(ctx, [
+        { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }
+      ], r, true);
       if (this._fillColor && this._fillColor !== 'transparent') {
-        ctx.fillRect(x, y, w, h);
+        ctx.fill();
       }
-      if (outline) ctx.strokeRect(x, y, w, h);
+      if (outline) ctx.stroke();
     } else if (this._type === 'ellipse') {
       const cx = (sp.x + cp.x) / 2;
       const cy = (sp.y + cp.y) / 2;
@@ -210,14 +217,9 @@ export class ShapesTool {
       this.drawArrow(ctx, sp, cp);
     } else if (this._type === 'polygon') {
       if (this._polygonPoints.length > 0) {
+        const previewPts = cp ? [...this._polygonPoints, cp] : [...this._polygonPoints];
         ctx.beginPath();
-        ctx.moveTo(this._polygonPoints[0].x, this._polygonPoints[0].y);
-        for (let i = 1; i < this._polygonPoints.length; i++) {
-          ctx.lineTo(this._polygonPoints[i].x, this._polygonPoints[i].y);
-        }
-        if (cp) {
-          ctx.lineTo(cp.x, cp.y);
-        }
+        traceRoundedPolygon(ctx, previewPts, SHAPE_CORNER_RADIUS, false);
         if (this._fillColor && this._fillColor !== 'transparent') {
           ctx.fill();
         }
@@ -240,11 +242,7 @@ export class ShapesTool {
     } else if (this._type === 'freeform-shape') {
       if (this._polygonPoints.length > 1) {
         ctx.beginPath();
-        ctx.moveTo(this._polygonPoints[0].x, this._polygonPoints[0].y);
-        for (let i = 1; i < this._polygonPoints.length; i++) {
-          ctx.lineTo(this._polygonPoints[i].x, this._polygonPoints[i].y);
-        }
-        ctx.closePath();
+        traceRoundedPolygon(ctx, this._polygonPoints, SHAPE_CORNER_RADIUS, true);
         if (this._fillColor && this._fillColor !== 'transparent') {
           ctx.fill();
         }
@@ -318,6 +316,8 @@ export class ShapesTool {
     ctx.strokeStyle = this._strokeColor;
     ctx.fillStyle = this._fillColor;
     ctx.lineWidth = this._strokeWidth;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     if (this._strokeStyle === 'dashed') {
       ctx.setLineDash([8, 6]);
     } else if (this._strokeStyle === 'dotted') {

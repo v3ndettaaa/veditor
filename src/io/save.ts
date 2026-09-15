@@ -170,8 +170,11 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
     openSaveAsDialog({
       defaultFilename: suggested,
       pageCount,
+      selectedPageIndices: [...store.selectedPageIndices],
       hasRedactions: hasRed,
       supportsPicker,
+      displayedDark: store.appSettings.invertDocumentOled ||
+        document.body.classList.contains('invert-pdf-document'),
       onClose: () => resolve(false),
       onSubmit: async (opts: SaveAsOptions) => {
         try {
@@ -180,7 +183,9 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
             dpi: opts.dpi,
             flatten: opts.flatten,
             applyRedactions: opts.applyRedactions,
-            pageRange: opts.pageRange
+            darkMode: opts.darkMode === true,
+            pageRange: opts.pageRange,
+            pageIndices: opts.pageIndices
           });
           const { handle, cancelled } = await pdfExporter.saveToFileWithResult(bytes, opts.filename);
           if (cancelled) {
@@ -189,6 +194,29 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
           }
           const chosenName: string = (handle as any)?.name || opts.filename;
 
+          // Save As with a range creates a new, smaller document. Keep its
+          // in-memory annotation map in the same coordinate system as the
+          // copied PDF pages; otherwise a later save could draw annotations
+          // onto the wrong page.
+          if (opts.pageRange || opts.pageIndices?.length) {
+            const sourcePages = opts.pageIndices?.length
+              ? opts.pageIndices
+              : Array.from(
+                { length: opts.pageRange!.end - opts.pageRange!.start + 1 },
+                (_, offset) => opts.pageRange!.start - 1 + offset
+              );
+            const selectedAnnotations: typeof doc.annotations = {};
+            sourcePages.forEach((sourceIndex, targetIndex) => {
+              const annotations = doc.annotations[sourceIndex];
+              if (!annotations?.length) return;
+              selectedAnnotations[targetIndex] = annotations.map(annotation => ({
+                ...annotation,
+                pageIndex: targetIndex
+              }));
+            });
+            doc.annotations = selectedAnnotations;
+            doc.activePageIndex = Math.max(0, sourcePages.indexOf(doc.activePageIndex));
+          }
           doc.fileData = bytes;
           doc.name = chosenName;
           doc.lastModifiedAt = Date.now();

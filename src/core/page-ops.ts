@@ -101,7 +101,11 @@ function loadDoc(bytes: Uint8Array): Promise<PDFDocument> {
 
 async function finish(doc: PDFDocument): Promise<PageBytesResult> {
   const bytes = await doc.save();
-  const pages = readPageInfo(doc);
+  // pdf-lib caches `getPages()`, so a document that just had pages removed
+  // still reports the old page list. Reading the metadata from a reload of
+  // the saved bytes always reflects the true structure.
+  const reloaded = await loadDoc(bytes);
+  const pages = readPageInfo(reloaded);
   return { bytes, pages, pageCount: pages.length };
 }
 

@@ -15,9 +15,9 @@ export type FittedShape =
   | { kind: 'polygon'; points: Point[] };
 
 /** Minimum stroke diagonal (page pt) to consider fitting. */
-export const FIT_MIN_SIZE = 12;
+export const FIT_MIN_SIZE = 10;
 /** Minimum raw points to consider fitting. */
-export const FIT_MIN_POINTS = 8;
+export const FIT_MIN_POINTS = 6;
 
 export function pathLength(points: Point[]): number {
   let len = 0;
@@ -170,7 +170,7 @@ export function fitStroke(raw: Point[]): FittedShape | null {
   let maxDev = 0;
   for (const p of pts) maxDev += perpendicularDistance(p, first, last);
   const meanDev = maxDev / pts.length;
-  if (closure > 0.25 && meanDev / diag < 0.06) {
+  if (closure > 0.25 && meanDev / diag < 0.08) {
     // Arrowhead hook: path notably longer than the chord.
     if (len / Math.max(endDist, 1) > 1.18) {
       return { kind: 'arrow', p0: { ...first }, p1: { ...last } };
@@ -201,18 +201,24 @@ export function fitStroke(raw: Point[]): FittedShape | null {
     const aspect = rx / Math.max(ry, 1);
     const areaRatio = polygonArea(pts) / Math.max(Math.PI * rx * ry, 1);
     const isElliptical = aspect > 0.35 && aspect < 2.8 && areaRatio > 0.7 && areaRatio < 1.2;
-    if (variance < 0.1 && isElliptical) {
+    if (variance < 0.12 && isElliptical) {
       return { kind: 'ellipse', cx, cy, rx, ry };
     }
 
-    const band = 0.06 * diag;
+    // Generous rectangle band: hand-drawn rectangles bow their edges, and a
+    // tight band used to reject them into 5-6 vertex polygons. Edge proximity
+    // alone is not enough: a right triangle lies on two box edges, so require
+    // the enclosed area to actually fill the box (triangles fill ~50%).
+    const band = 0.09 * diag;
     let nearEdge = 0;
     for (const p of pts) {
       const dx = Math.min(p.x - box.x, box.x + box.width - p.x);
       const dy = Math.min(p.y - box.y, box.y + box.height - p.y);
       if (Math.min(dx, dy) <= band) nearEdge++;
     }
-    if (nearEdge / pts.length > 0.65) {
+    const nearEdgeFraction = nearEdge / pts.length;
+    const boxAreaRatio = polygonArea(pts) / Math.max(box.width * box.height, 1);
+    if (nearEdgeFraction > 0.65 && boxAreaRatio > 0.78) {
       return {
         kind: 'rectangle',
         box: { x: box.x, y: box.y, width: Math.max(4, box.width), height: Math.max(4, box.height) }
@@ -227,8 +233,8 @@ export function fitStroke(raw: Point[]): FittedShape | null {
     // otherwise an aggressive simplification could turn a scribble into a
     // false triangle.
     const fitErr = polygonFitError(pts, simp) / diag;
-    if (fitErr > 0.12) {
-      if (variance < 0.15 && isElliptical) {
+    if (fitErr > 0.2) {
+      if (variance < 0.18 && isElliptical) {
         return { kind: 'ellipse', cx, cy, rx, ry };
       }
       return null;
@@ -239,11 +245,25 @@ export function fitStroke(raw: Point[]): FittedShape | null {
       return { kind: 'polygon', points: simp.map(p => ({ ...p })) };
     }
 
-    if (variance < 0.15 && isElliptical) {
+    if (variance < 0.18 && isElliptical) {
       return { kind: 'ellipse', cx, cy, rx, ry };
     }
 
-    if (simp.length >= 4 && simp.length <= 8) {
+    // Second-chance rectangle: a shaky rectangle that failed the edge-band
+    // check over-splits into a 5-6 vertex polygon. If the stroke fills nearly
+    // the whole bounding box (triangles fill ~50%, circles ~78%) and most of
+    // it still tracks the box edges, the user meant a rectangle.
+    if (simp.length >= 4 && boxAreaRatio > 0.8 && nearEdgeFraction > 0.45) {
+      return {
+        kind: 'rectangle',
+        box: { x: box.x, y: box.y, width: Math.max(4, box.width), height: Math.max(4, box.height) }
+      };
+    }
+
+    // Cap deliberate polygons at 6 vertices; noisier corner sets are almost
+    // always a shaky rectangle/ellipse that failed its primary check, and
+    // snapping those to a heptagon reads as wrong.
+    if (simp.length >= 4 && simp.length <= 6) {
       return { kind: 'polygon', points: simp.map(p => ({ ...p })) };
     }
   }

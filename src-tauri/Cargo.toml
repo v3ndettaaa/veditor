@@ -1,6 +1,6 @@
 [package]
 name = "veditor"
-version = "1.0.0"
+version = "2.0.0"
 description = "Veditor - Fast, beautiful PDF editor and annotator"
 authors = ["v3ndettaaa"]
 edition = "2021"
@@ -16,3 +16,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Smaller, faster release binaries for distribution.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "s"
+panic = "abort"

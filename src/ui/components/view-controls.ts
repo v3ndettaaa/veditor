@@ -394,17 +394,17 @@ export class ViewControlsComponent {
       viewportManager.fitToPage();
     });
 
-    this._container.querySelector('#view-rotate-cw')?.addEventListener('click', (e: MouseEvent) => {
+    this._container.querySelector('#view-rotate-cw')?.addEventListener('click', (e) => {
       // Single commit: rotate notifies once → rotation path lays out once.
-      if (e.shiftKey) {
+      if ((e as MouseEvent).shiftKey) {
         store.rotateAllPages(90);
       } else {
         store.rotatePage(store.activePageIndex, 90);
       }
     });
 
-    this._container.querySelector('#view-rotate-ccw')?.addEventListener('click', (e: MouseEvent) => {
-      if (e.shiftKey) {
+    this._container.querySelector('#view-rotate-ccw')?.addEventListener('click', (e) => {
+      if ((e as MouseEvent).shiftKey) {
         store.rotateAllPages(-90);
       } else {
         store.rotatePage(store.activePageIndex, -90);

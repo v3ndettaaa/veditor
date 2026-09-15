@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampRenderMultiplier, resolveRenderDpr } from '../src/utils/dpi';
+import { clampRenderMultiplier, resolveRenderDpr, MAX_RENDER_DIMENSION } from '../src/utils/dpi';
 
 describe('Render DPI helpers', () => {
   it('maps an explicit target DPI to a backing-store multiplier', () => {
@@ -9,8 +9,8 @@ describe('Render DPI helpers', () => {
   });
 
   it('caps extreme backing stores without changing CSS dimensions', () => {
-    expect(clampRenderMultiplier(612, 792, 8)).toBeLessThan(8);
-    expect(792 * clampRenderMultiplier(612, 792, 8)).toBeLessThanOrEqual(4096);
+    expect(clampRenderMultiplier(612, 792, 12)).toBeLessThan(12);
+    expect(792 * clampRenderMultiplier(612, 792, 12)).toBeLessThanOrEqual(MAX_RENDER_DIMENSION);
     expect(clampRenderMultiplier(612, 792, 2)).toBe(2);
   });
 });

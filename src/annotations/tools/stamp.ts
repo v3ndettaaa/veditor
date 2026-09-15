@@ -153,6 +153,15 @@ export class StampTool {
 
   /** Cache decoded images so repeated paints don't re-trigger a network load. */
   private _imageCache: Map<string, HTMLImageElement> = new Map();
+
+  /**
+   * Seeds the render cache with an already-decoded image so the first paint
+   * after an insert (e.g. clipboard paste) draws immediately instead of
+   * waiting for a second decode of the same data URL.
+   */
+  public primeImage(src: string, img: HTMLImageElement): void {
+    if (img.complete && img.naturalWidth > 0) this._imageCache.set(src, img);
+  }
   private getImage(src: string): HTMLImageElement {
     let img = this._imageCache.get(src);
     if (!img) {

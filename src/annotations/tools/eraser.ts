@@ -1,4 +1,4 @@
-import { Point, Annotation, EraserMode } from '../../core/types';
+import { Point, StrokePoint, Annotation, EraserMode } from '../../core/types';
 import { distance, distanceToSegment, isPointInBox, computePointsBoundingBox } from '../../utils/geometry';
 import { rotatePoint, boxCenter } from '../../annotations/selection';
 
@@ -92,9 +92,10 @@ export class EraserTool {
           if (anyHit) {
             toRemove.push(ann);
 
-            // Break points into runs of points outside the eraser circle
-            const runs: Point[][] = [];
-            let currentRun: Point[] = [];
+            // Break points into runs of points outside the eraser circle.
+            // Typed as StrokePoint so split pen strokes keep their pressure.
+            const runs: StrokePoint[][] = [];
+            let currentRun: StrokePoint[] = [];
 
             for (let i = 0; i < ann.points.length; i++) {
               const pt = ann.points[i];

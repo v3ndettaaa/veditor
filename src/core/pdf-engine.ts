@@ -397,7 +397,13 @@ export class PDFEngine {
         canvas.height = targetHeight;
       }
       const ctx = canvas.getContext('2d', { alpha: false });
-      ctx?.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
+      if (ctx) {
+        // Scaled placeholder blit: bicubic-quality resampling minimizes both
+        // shimmer when upscaling and moiré when downscaling a cached frame.
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
+      }
 
       if (cached.scale === scale && cached.rotation === totalRotation && cached.width === targetWidth && cached.height === targetHeight) {
         return;
@@ -418,6 +424,9 @@ export class PDFEngine {
     offCtx.fillRect(0, 0, targetWidth, targetHeight);
 
     const renderContext = {
+      // pdf.js v6 accepts either `canvas` or a raw 2d context; the offscreen
+      // element is passed explicitly to satisfy the stricter typings.
+      canvas: offscreen,
       canvasContext: offCtx,
       viewport: viewport,
       intent: 'display'
@@ -482,6 +491,28 @@ export class PDFEngine {
    * reusing it here would let a thumbnail cancel a visible page's render and
    * would evict high-resolution bitmaps in favour of tiny ones.
    */
+  /**
+   * Instant thumbnail from an already-rendered main-view bitmap: one
+   * synchronous downscale blit, no pdf.js render pass at all. Returns null
+   * when the page has never been rasterised (caller falls back to
+   * `renderThumbnail`). Quality matches or beats a direct thumbnail render
+   * because the source is a full-resolution page bitmap.
+   */
+  public thumbnailFromCache(pageIndex: number, maxWidth = 120, maxHeight = 156): HTMLCanvasElement | null {
+    const cached = this.findAnyBitmap(pageIndex);
+    if (!cached || cached.width <= 0 || cached.height <= 0) return null;
+    const scale = Math.min(maxWidth / cached.width, maxHeight / cached.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(cached.width * scale));
+    canvas.height = Math.max(1, Math.round(cached.height * scale));
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(cached.canvas, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
   public async renderThumbnail(pageIndex: number, maxWidth = 120, maxHeight = 156): Promise<HTMLCanvasElement | null> {
     if (!this._pdfDoc) return null;
 
