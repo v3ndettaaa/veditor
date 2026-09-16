@@ -550,6 +550,28 @@ body.no-page-shadows .pdf-page-container {
   transform: scale(1.08);
 }
 
+/* "My Colors": a saved custom swatch (right-click removes it) and the "+"
+   affordance that adds the tool's current color to that shared palette. */
+.color-swatch.custom-palette-swatch {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.color-swatch.add-to-palette-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1.5px dashed var(--border-color, rgba(255, 255, 255, 0.3));
+  color: var(--text-secondary, currentColor);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.color-swatch.add-to-palette-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .color-picker-wrapper {
   position: relative;
   width: 22px;

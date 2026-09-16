@@ -107,6 +107,21 @@ export async function openDocumentSession(name: string, fileData: Uint8Array, fo
   return id;
 }
 
+/**
+ * Finds an existing session by its native on-disk path (desktop only), so
+ * opening the same file twice resumes it instead of creating a duplicate.
+ */
+export async function getDocumentSessionByPath(path: string): Promise<DocumentSession | undefined> {
+  try {
+    const db = await getDB();
+    const all = await db.getAll('documents');
+    return all.find(d => d.nativeFilePath === path);
+  } catch (err) {
+    console.warn('Could not look up document by path:', err);
+    return undefined;
+  }
+}
+
 export async function getDocumentSession(id: string): Promise<DocumentSession | undefined> {
   try {
     const db = await getDB();
@@ -293,6 +308,33 @@ export function triggerAutoSave() {
       await saveDocumentSession(doc);
     }
   }, 1500);
+}
+
+/**
+ * Debounced "where was I" persistence: reading page + scrolling doesn't
+ * rewrite the (potentially huge) PDF bytes, only the lightweight position
+ * fields, so it's cheap enough to run on every scroll/page change and
+ * survive a crash or force-quit, not just a clean Save.
+ */
+const positionSaveTimers = new Map<string, any>();
+
+export function persistDocPosition(doc: DocumentSession): void {
+  const existing = positionSaveTimers.get(doc.id);
+  if (existing) clearTimeout(existing);
+  positionSaveTimers.set(doc.id, setTimeout(() => {
+    positionSaveTimers.delete(doc.id);
+    void saveDocumentSession(doc, { includeBytes: false }).catch(() => {});
+  }, 800));
+}
+
+/** Immediately flushes any pending position save for `doc` (tab close / app exit). */
+export async function flushDocPosition(doc: DocumentSession): Promise<void> {
+  const existing = positionSaveTimers.get(doc.id);
+  if (existing) {
+    clearTimeout(existing);
+    positionSaveTimers.delete(doc.id);
+  }
+  await saveDocumentSession(doc, { includeBytes: false }).catch(() => {});
 }
 
 export async function clearAllStorage(): Promise<void> {

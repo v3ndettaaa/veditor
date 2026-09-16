@@ -374,12 +374,12 @@ export class ViewControlsComponent {
     });
 
     this._container.querySelector('#view-zoom-in')?.addEventListener('click', () => {
-      // Single commit via notify path (no explicit updateLayout → no double layout).
-      store.setZoom(store.zoom * 1.15);
+      // Anchored to the viewport center so the visible content doesn't drift.
+      viewportManager.zoomByFactor(1.15);
     });
 
     this._container.querySelector('#view-zoom-out')?.addEventListener('click', () => {
-      store.setZoom(store.zoom / 1.15);
+      viewportManager.zoomByFactor(1 / 1.15);
     });
 
     this._container.querySelector('#view-exit-lens')?.addEventListener('click', () => {

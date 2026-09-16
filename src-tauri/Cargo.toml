@@ -14,8 +14,15 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Forwards a double-clicked file's path from a second launch into the
+# already-running instance instead of opening a second window.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
 
 # Smaller, faster release binaries for distribution.
 [profile.release]

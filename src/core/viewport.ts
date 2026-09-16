@@ -5,6 +5,7 @@
 
 import { store } from './store';
 import { PageInfo, ViewMode, MIN_ZOOM, MAX_ZOOM } from './types';
+import { persistDocPosition } from '../io/storage';
 
 export interface ViewportPageRect {
   pageIndex: number;
@@ -42,6 +43,17 @@ export class ViewportManager {
    * otherwise the wrong pages mount (blank cracks) and eviction churns.
    */
   private _previewScale: number = 1;
+  /**
+   * rAF coalescing for the scroll listener: a fast fling, a scrollbar drag
+   * across hundreds of pages, or the scroll correction after a zoom can fire
+   * dozens of native `scroll` events before the browser paints once. Without
+   * this, each one raced its own full visible-set recompute + mount/render
+   * pass, and the pile-up of overlapping passes was the actual cause of the
+   * post-zoom stutter and long-jump freezes — not any single pass being slow.
+   * At most one `handleScroll` runs per animation frame, always reading the
+   * latest scroll position when it does.
+   */
+  private _scrollRafId: number | null = null;
 
   public setPreviewScale(scale: number): void {
     this._previewScale = scale > 0 && Number.isFinite(scale) ? scale : 1;
@@ -56,8 +68,16 @@ export class ViewportManager {
     this._pagesWrapper = pagesWrapper;
     this._onVisiblePagesChange = onVisiblePagesChange;
 
-    this._scrollContainer.addEventListener('scroll', () => this.handleScroll(), { passive: true });
+    this._scrollContainer.addEventListener('scroll', () => this.scheduleScrollCheck(), { passive: true });
     window.addEventListener('resize', () => this.updateLayout(), { passive: true });
+  }
+
+  private scheduleScrollCheck(): void {
+    if (this._scrollRafId !== null) return;
+    this._scrollRafId = requestAnimationFrame(() => {
+      this._scrollRafId = null;
+      this.handleScroll();
+    });
   }
 
   /** Drops visible-set tracking (tab switch / mode change needs a clean pass). */
@@ -222,6 +242,7 @@ export class ViewportManager {
     if (doc && !store.isDocSwitching) {
       doc.savedScrollTop = rawTop;
       doc.savedScrollLeft = this._scrollContainer.scrollLeft;
+      persistDocPosition(doc);
     }
 
     // Update active page index based on scroll position
@@ -296,6 +317,36 @@ export class ViewportManager {
     const containerW = this._scrollContainer.clientWidth - 64;
     const containerH = this._scrollContainer.clientHeight - 80;
     store.setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(containerW / baseW, containerH / baseH))));
+  }
+
+  /**
+   * Zooms by `factor` anchored to the viewport's own center, so the content
+   * the user is actually looking at stays put instead of drifting toward
+   * whatever happens to be at the scroll container's top-left — the bug
+   * behind zoom +/− (toolbar buttons and Ctrl+/Ctrl−) appearing to "jump" to
+   * an unrelated page. Mirrors the scroll-compensation `zoomAtPoint` already
+   * does for click/wheel zoom, just anchored at the center instead of a
+   * pointer position.
+   */
+  public zoomByFactor(factor: number): void {
+    if (!this._scrollContainer || !Number.isFinite(factor) || factor <= 0) return;
+    const oldZoom = store.zoom;
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldZoom * factor));
+    if (Math.abs(newZoom - oldZoom) < 0.0005) return;
+    const ratio = newZoom / oldZoom;
+    const cx = this._scrollContainer.clientWidth / 2;
+    const cy = this._scrollContainer.clientHeight / 2;
+    const targetLeft = (this._scrollContainer.scrollLeft + cx) * ratio - cx;
+    const targetTop = (this._scrollContainer.scrollTop + cy) * ratio - cy;
+    store.beginZoomAdjust();
+    try {
+      store.setZoom(newZoom);
+      this._scrollContainer.scrollLeft = targetLeft;
+      this._scrollContainer.scrollTop = targetTop;
+    } finally {
+      store.endZoomAdjust();
+    }
+    this.handleScroll(true);
   }
 }
 

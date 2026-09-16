@@ -12,6 +12,8 @@ import type { PDFExportOptions } from './export-pdf';
 import { saveDocumentSession } from './storage';
 import { showToast } from '../ui/components/toast';
 import { openSaveAsDialog, type SaveAsOptions } from '../ui/components/save-as-dialog';
+import { isDesktop } from '../core/platform';
+import { nativeSaveAsDialog, nativeWriteFile, nativeConfirm } from './native-fs';
 
 const fileHandles = new Map<string, any>();
 
@@ -94,7 +96,7 @@ export async function saveActiveDocument(): Promise<boolean> {
     return false;
   }
   if (hasPendingRedactions()) {
-    const ok = window.confirm('This document contains redactions. Saving burns them in permanently. Continue?');
+    const ok = await nativeConfirm('This document contains redactions. Saving burns them in permanently. Continue?');
     if (!ok) return false;
   }
   showToast('Saving…', 'progress');
@@ -105,6 +107,33 @@ export async function saveActiveDocument(): Promise<boolean> {
     doc.lastSavedAt = Date.now();
     await saveDocumentSession(doc, { includeBytes: true });
     await refreshEngineFromSavedBytes(doc.id, bytes);
+
+    if (isDesktop()) {
+      // Native shell: write straight to the file this document was opened
+      // from — no dialog. A document with no known path yet (new notebook,
+      // or opened by some other means) is asked once, and that path is then
+      // remembered for every subsequent Save.
+      let path = doc.nativeFilePath;
+      if (!path) {
+        const filename = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
+        path = await nativeSaveAsDialog(filename) ?? undefined;
+        if (!path) {
+          showToast('Save cancelled', 'info');
+          return false;
+        }
+        doc.nativeFilePath = path;
+        doc.name = path.split(/[\\/]/).pop() || filename;
+      }
+      const wrote = await nativeWriteFile(path, bytes);
+      if (wrote) {
+        showToast('Saved', 'success');
+      } else {
+        showToast('Could not write to the original file (saved in session only)', 'error');
+      }
+      store.notify();
+      viewportManager.updateLayout(true);
+      return wrote;
+    }
 
     let handle = fileHandles.get(doc.id);
     if (!handle && typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
@@ -150,6 +179,26 @@ export async function saveActiveDocument(): Promise<boolean> {
   }
 }
 
+/** Writes exported bytes to disk, native path first, browser picker/download otherwise. */
+async function writeExportedBytes(
+  bytes: Uint8Array,
+  suggestedFilename: string
+): Promise<{ chosenName: string; nativeFilePath?: string; handle?: any; cancelled: boolean }> {
+  if (isDesktop()) {
+    const path = await nativeSaveAsDialog(suggestedFilename);
+    if (!path) return { chosenName: suggestedFilename, cancelled: true };
+    const wrote = await nativeWriteFile(path, bytes);
+    if (!wrote) {
+      showToast('Could not write the file to disk', 'error');
+      return { chosenName: suggestedFilename, cancelled: true };
+    }
+    return { chosenName: path.split(/[\\/]/).pop() || suggestedFilename, nativeFilePath: path, cancelled: false };
+  }
+  const { handle, cancelled } = await pdfExporter.saveToFileWithResult(bytes, suggestedFilename);
+  if (cancelled) return { chosenName: suggestedFilename, cancelled: true };
+  return { chosenName: (handle as any)?.name || suggestedFilename, handle, cancelled: false };
+}
+
 /**
  * Save As: opens the options dialog (name, location hint, quality, pages),
  * then always prompts for file/location via the OS picker or download.
@@ -164,7 +213,7 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
   const suggested = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
   const hasRed = hasPendingRedactions();
   const pageCount = doc.pageCount;
-  const supportsPicker = typeof window !== 'undefined' && 'showSaveFilePicker' in window;
+  const supportsPicker = isDesktop() || (typeof window !== 'undefined' && 'showSaveFilePicker' in window);
 
   return new Promise<boolean>((resolve) => {
     openSaveAsDialog({
@@ -187,12 +236,12 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
             pageRange: opts.pageRange,
             pageIndices: opts.pageIndices
           });
-          const { handle, cancelled } = await pdfExporter.saveToFileWithResult(bytes, opts.filename);
-          if (cancelled) {
+          const result = await writeExportedBytes(bytes, opts.filename);
+          if (result.cancelled) {
             resolve(false);
             return;
           }
-          const chosenName: string = (handle as any)?.name || opts.filename;
+          const chosenName = result.chosenName;
 
           // Save As with a range creates a new, smaller document. Keep its
           // in-memory annotation map in the same coordinate system as the
@@ -219,12 +268,13 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
           }
           doc.fileData = bytes;
           doc.name = chosenName;
+          if (result.nativeFilePath) doc.nativeFilePath = result.nativeFilePath;
           doc.lastModifiedAt = Date.now();
           doc.lastSavedAt = Date.now();
           const tabs = (store as any)._documentTabs as Array<{ id: string; name: string }> | undefined;
           const tab = tabs?.find(t => t.id === doc.id);
           if (tab) tab.name = chosenName;
-          if (handle) rememberFileHandle(doc.id, handle);
+          if (result.handle) rememberFileHandle(doc.id, result.handle);
           await saveDocumentSession(doc, { includeBytes: true });
           await refreshEngineFromSavedBytes(doc.id, bytes);
           store.notify();

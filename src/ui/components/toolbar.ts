@@ -39,6 +39,47 @@ function clampTypedNumber(raw: string, min: number, max: number, fallback: numbe
   return Math.min(max, Math.max(min, n));
 }
 
+/**
+ * Built-in swatches for `groupKey` (e.g. "pen"), minus any the user removed
+ * from that specific picker. Every swatch — default or custom — can be
+ * right-clicked off; `data-remove-key` tells the shared handler which list
+ * (the group's hidden-defaults, or the shared custom palette) to update.
+ */
+function renderDefaultSwatches(groupKey: string, dataAttr: string, swatchClass: string, colors: string[], activeColor: string, extraStyle: string = ''): string {
+  const removed = new Set(store.appSettings.removedDefaultColors);
+  return colors
+    .filter(c => !removed.has(`${groupKey}:${c}`))
+    .map(c => `
+      <button type="button" class="color-swatch ${swatchClass} ${activeColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
+              style="background-color:${c};${extraStyle}" data-${dataAttr}="${c}" data-remove-key="default:${groupKey}:${c}"
+              title="${c} \u2014 right-click to remove" aria-label="${c}"
+              aria-pressed="${activeColor.toLowerCase() === c.toLowerCase()}"></button>
+    `).join('');
+}
+
+/**
+ * Extra swatches for the user's own saved colors (`appSettings.customPalette`),
+ * shared by every pen/highlighter/shape/text color picker so "my colors"
+ * follow the user across tools instead of being siloed or re-typed each time.
+ */
+function renderCustomPaletteSwatches(dataAttr: string, swatchClass: string, activeColor: string): string {
+  return store.appSettings.customPalette.map(c => `
+    <button type="button" class="color-swatch ${swatchClass} custom-palette-swatch" style="background-color:${c};"
+            data-${dataAttr}="${c}" data-remove-key="custom:${c}"
+            title="${c} \u2014 right-click to remove from My Colors" aria-label="${c}"
+            aria-pressed="${activeColor.toLowerCase() === c.toLowerCase()}"></button>
+  `).join('');
+}
+
+/** "+" affordance that opens a native color picker (seeded at the tool's current color) and saves the chosen color into the shared custom palette. */
+function renderAddToPaletteButton(seed: string = '#000000'): string {
+  const safeSeed = /^#[0-9a-fA-F]{6}$/.test(seed) ? seed : '#000000';
+  return `
+    <button type="button" class="color-swatch add-to-palette-btn" data-add-palette-trigger title="Pick a color to save to My Colors">+</button>
+    <input type="color" class="add-to-palette-input" data-add-palette-input value="${safeSeed}" style="position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;">
+  `;
+}
+
 /** Validates free-typed hex colors (`#rrggbb`, `#rgb`, with/without `#`). */
 function parseHexColor(raw: string): string | null {
   let h = String(raw ?? '').trim().toLowerCase();
@@ -195,12 +236,9 @@ export class ToolbarComponent {
               <div class="sub-row-section">
                 <span class="sub-row-label">Ink</span>
                 <div class="color-swatches-group">
-                  ${penColors.map(c => `
-                    <button type="button" class="color-swatch pen-swatch ${s.penColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
-                            style="background-color:${c};" data-pen-color="${c}"
-                            title="Ink ${c}" aria-label="Ink ${c}"
-                            aria-pressed="${s.penColor.toLowerCase() === c.toLowerCase()}"></button>
-                  `).join('')}
+                  ${renderDefaultSwatches('pen', 'pen-color', 'pen-swatch', penColors, s.penColor)}
+                  ${renderCustomPaletteSwatches('pen-color', 'pen-swatch', s.penColor)}
+                  ${renderAddToPaletteButton(s.penColor)}
                   <div class="color-picker-wrapper" title="Custom color picker">
                     <input type="color" id="hover-pen-color-picker" class="color-picker-input" value="${s.penColor}">
                   </div>
@@ -249,12 +287,9 @@ export class ToolbarComponent {
               <div class="sub-row-section">
                 <span class="sub-row-label">Tint</span>
                 <div class="color-swatches-group">
-                  ${hlColors.map(c => `
-                    <button type="button" class="color-swatch hl-swatch ${s.highlighterColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
-                            style="background-color:${c}; opacity:0.85;" data-hl-color="${c}"
-                            title="Highlighter ${c}" aria-label="Highlighter ${c}"
-                            aria-pressed="${s.highlighterColor.toLowerCase() === c.toLowerCase()}"></button>
-                  `).join('')}
+                  ${renderDefaultSwatches('highlighter', 'hl-color', 'hl-swatch', hlColors, s.highlighterColor, ' opacity:0.85;')}
+                  ${renderCustomPaletteSwatches('hl-color', 'hl-swatch', s.highlighterColor)}
+                  ${renderAddToPaletteButton(s.highlighterColor)}
                   <div class="color-picker-wrapper" title="Custom highlighter color">
                     <input type="color" id="hover-hl-color-picker" class="color-picker-input" value="${s.highlighterColor}">
                   </div>
@@ -420,12 +455,9 @@ export class ToolbarComponent {
               <div class="sub-row-section">
                 <span class="sub-row-label">Color</span>
                 <div class="color-swatches-group">
-                  ${textColors.map(c => `
-                    <button type="button" class="color-swatch text-swatch ${s.textColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
-                            style="background-color:${c};" data-text-color="${c}"
-                            title="Text ${c}" aria-label="Text ${c}"
-                            aria-pressed="${s.textColor.toLowerCase() === c.toLowerCase()}"></button>
-                  `).join('')}
+                  ${renderDefaultSwatches('text', 'text-color', 'text-swatch', textColors, s.textColor)}
+                  ${renderCustomPaletteSwatches('text-color', 'text-swatch', s.textColor)}
+                  ${renderAddToPaletteButton(s.textColor)}
                   <div class="color-picker-wrapper" title="Custom text color">
                     <input type="color" id="hover-text-color-picker" class="color-picker-input" value="${s.textColor}">
                   </div>
@@ -831,12 +863,9 @@ export class ToolbarComponent {
       <div class="sub-row-section">
         <span class="sub-row-label">Stroke</span>
         <div class="color-swatches-group">
-          ${shapeColors.map(c => `
-            <button type="button" class="color-swatch shape-swatch ${s.shapeColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
-                    style="background-color:${c};" data-shape-color="${c}"
-                    title="Stroke ${c}" aria-label="Stroke ${c}"
-                    aria-pressed="${s.shapeColor.toLowerCase() === c.toLowerCase()}"></button>
-          `).join('')}
+          ${renderDefaultSwatches('shape', 'shape-color', 'shape-swatch', shapeColors, s.shapeColor)}
+          ${renderCustomPaletteSwatches('shape-color', 'shape-swatch', s.shapeColor)}
+          ${renderAddToPaletteButton(s.shapeColor)}
           <div class="color-picker-wrapper" title="Custom stroke color">
             <input type="color" class="color-picker-input shape-color-picker" value="${s.shapeColor}">
           </div>
@@ -884,12 +913,9 @@ export class ToolbarComponent {
           <span class="sub-row-label">Fill</span>
           <div class="color-swatches-group">
             <button class="mode-toggle-btn ${s.shapeFillColor === 'transparent' ? 'active' : ''}" data-shape-fill="transparent" title="No Fill">None</button>
-            ${shapeColors.map(c => `
-              <button type="button" class="color-swatch shape-fill-swatch ${s.shapeFillColor.toLowerCase() === c.toLowerCase() ? 'active' : ''}"
-                      style="background-color:${c};" data-shape-fill-color="${c}"
-                      title="Fill with ${c}" aria-label="Fill with ${c}"
-                      aria-pressed="${s.shapeFillColor.toLowerCase() === c.toLowerCase()}"></button>
-            `).join('')}
+            ${renderDefaultSwatches('shape-fill', 'shape-fill-color', 'shape-fill-swatch', shapeColors, s.shapeFillColor)}
+            ${renderCustomPaletteSwatches('shape-fill-color', 'shape-fill-swatch', s.shapeFillColor)}
+            ${renderAddToPaletteButton(s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor)}
             <div class="color-picker-wrapper" title="Custom Fill Color">
               <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
             </div>
@@ -1475,6 +1501,58 @@ export class ToolbarComponent {
         }
       }
       store.clearSelection();
+    });
+
+    // My Colors: "+" opens a native color picker whose choice is saved to
+    // the shared palette; right-click on ANY swatch removes it (a default
+    // hides only from its own picker group, a custom leaves the palette).
+    this._container.querySelectorAll<HTMLElement>('[data-add-palette-trigger]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const input = btn.parentElement?.querySelector<HTMLInputElement>('[data-add-palette-input]')
+          ?? btn.nextElementSibling as HTMLInputElement | null;
+        if (!input) return;
+        try {
+          const picker = input as HTMLInputElement & { showPicker?: () => void };
+          if (typeof picker.showPicker === 'function') picker.showPicker();
+          else input.click();
+        } catch { input.click(); }
+      });
+    });
+    this._container.querySelectorAll<HTMLInputElement>('[data-add-palette-input]').forEach(input => {
+      // 'change' (not 'input') commits once the picker closes, so the
+      // re-render can't tear the native dialog down mid-drag.
+      input.addEventListener('change', () => {
+        const color = input.value;
+        if (!color) return;
+        const current = store.appSettings.customPalette;
+        if (current.some(c => c.toLowerCase() === color.toLowerCase())) return;
+        store.updateAppSettings({ customPalette: [...current, color].slice(-24) });
+        this.render();
+      });
+    });
+    this._container.querySelectorAll<HTMLElement>('[data-remove-key]').forEach(swatch => {
+      swatch.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = swatch.getAttribute('data-remove-key');
+        if (!key) return;
+        if (key.startsWith('custom:')) {
+          const color = key.slice('custom:'.length);
+          store.updateAppSettings({
+            customPalette: store.appSettings.customPalette.filter(c => c.toLowerCase() !== color.toLowerCase())
+          });
+        } else if (key.startsWith('default:')) {
+          const entry = key.slice('default:'.length);
+          if (entry.indexOf(':') < 0) return;
+          const current = store.appSettings.removedDefaultColors;
+          if (current.includes(entry)) return;
+          store.updateAppSettings({ removedDefaultColors: [...current, entry] });
+        } else {
+          return;
+        }
+        this.render();
+      });
     });
 
     this.bindDockDrag();

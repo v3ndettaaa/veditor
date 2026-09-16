@@ -284,6 +284,15 @@ export interface DocumentSession {
   lastSavedAt?: number;
   /** Present only for generated notebooks; see NotebookSpec. */
   notebook?: NotebookSpec;
+  /**
+   * Absolute on-disk path this session was opened from (desktop only).
+   * Lets re-opening the same file — via the file picker, a double-click
+   * file association, or the second-instance handoff — resume the same
+   * session (last page, scroll position, unsaved annotations) instead of
+   * starting a second, disconnected tab, and lets Save write straight back
+   * to this path without a dialog.
+   */
+  nativeFilePath?: string;
 }
 
 /**
@@ -403,6 +412,19 @@ export interface AppSettings {
   targetDPI: number;
   /** Which window edge the floating toolbar is docked to. */
   toolbarDock: ToolbarDock;
+  /**
+   * User-added colors, offered as extra swatches after the built-in set on
+   * every pen/highlighter/shape/text color picker so a personal palette
+   * carries across tools and sessions instead of being re-typed each time.
+   */
+  customPalette: string[];
+  /**
+   * Built-in swatches the user removed, as `"${group}:${color}"` entries
+   * (e.g. `"pen:#000000"`) — the group keeps removal scoped to the picker it
+   * was removed from instead of hiding that color everywhere it happens to
+   * also appear as a default.
+   */
+  removedDefaultColors: string[];
 }
 
 export interface PDFFolder {

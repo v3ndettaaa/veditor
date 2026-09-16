@@ -4,10 +4,11 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist';
-import { PageInfo, PDFBookmarkItem } from './types';
+import { PageInfo, PDFBookmarkItem, PenAnnotation, StrokePoint } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
 import { MAX_RENDER_DIMENSION, resolveRenderDpr } from '../utils/dpi';
+import { bytesMayContainInkAnnotations, stripNativeInkAnnotationsFromBytes } from './native-ink';
 
 /** Backing-store multiplier over CSS pixels for the current target DPI. */
 function effectiveDpr(): number {
@@ -127,7 +128,15 @@ export class PDFEngine {
     }
 
     // Pass a fresh slice so PDF.js worker transfer never detaches the original buffer!
-    const dataCopy = data.slice(0);
+    // Some external tools (PDF Annotator and similar) save freehand ink as a
+    // native /Ink annotation whose /AP is a rasterized image baked at a fixed,
+    // usually low, DPI. Stripping it here — before pdf.js ever parses it — is
+    // what keeps that baked raster from being drawn (chalky at any zoom);
+    // extractNativeInkStrokes() below separately reconstructs the same
+    // annotations from their vector /InkList so nothing is actually lost.
+    const dataCopy = bytesMayContainInkAnnotations(data)
+      ? await stripNativeInkAnnotationsFromBytes(data.slice(0))
+      : data.slice(0);
 
     const localBase = (() => {
       try { return extensionApi.runtime.getURL(''); } catch (_) { return './'; }
@@ -282,6 +291,93 @@ export class PDFEngine {
       pageIndex: typeof item.pageIndex === 'number' ? item.pageIndex : undefined,
       items: item.items && Array.isArray(item.items) ? this.formatOutline(item.items) : undefined
     }));
+  }
+
+  /**
+   * Reconstructs any native /Ink annotations in `bytes` as veditor pen
+   * strokes, reading their raw vector /InkList points (never the /AP raster)
+   * so they render through the same smoothed, resolution-independent spline
+   * pipeline as strokes drawn in the app. Pure and side-effect free —
+   * callers decide whether/where to add the results; called once per file
+   * open, never on every reload, so re-opening a session never duplicates
+   * strokes that were already imported.
+   */
+  public async extractNativeInkStrokes(bytes: Uint8Array): Promise<Array<{ pageIndex: number; annotation: PenAnnotation }>> {
+    if (!bytesMayContainInkAnnotations(bytes)) return [];
+    const results: Array<{ pageIndex: number; annotation: PenAnnotation }> = [];
+    let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
+    try {
+      const localBase = (() => {
+        try { return extensionApi.runtime.getURL(''); } catch (_) { return './'; }
+      })();
+      loadingTask = pdfjsLib.getDocument({
+        data: bytes.slice(0),
+        cMapUrl: `${localBase}cmaps/`,
+        cMapPacked: true,
+        standardFontDataUrl: `${localBase}standard_fonts/`
+      });
+      const doc = await loadingTask.promise;
+
+      for (let n = 1; n <= doc.numPages; n++) {
+        const page = await doc.getPage(n);
+        const annotations = await page.getAnnotations({ intent: 'display' }).catch(() => []);
+        const inkAnnotations = annotations.filter((a: any) => a.subtype === 'Ink' && Array.isArray(a.inkLists) && a.inkLists.length > 0);
+        if (inkAnnotations.length === 0) continue;
+
+        const viewport = page.getViewport({ scale: 1.0 });
+        for (const a of inkAnnotations) {
+          const color = Array.isArray(a.color) && a.color.length >= 3
+            ? `#${a.color.slice(0, 3).map((c: number) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('')}`
+            : '#000000';
+          const width = Number.isFinite(a.borderStyle?.width) && a.borderStyle.width > 0 ? a.borderStyle.width : 1.5;
+          const opacity = Number.isFinite(a.opacity) ? a.opacity : 1;
+
+          // A single Ink annotation can hold several disconnected strokes
+          // (one pen-down/up per array) — each becomes its own pen
+          // annotation so none of the original drawing is merged or lost.
+          for (const list of a.inkLists as number[][]) {
+            const points: StrokePoint[] = [];
+            for (let p = 0; p + 1 < list.length; p += 2) {
+              const [vx, vy] = viewport.convertToViewportPoint(list[p], list[p + 1]);
+              points.push({ x: vx, y: vy, pressure: 0.5 });
+            }
+            if (points.length < 2) continue;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const pt of points) {
+              if (pt.x < minX) minX = pt.x;
+              if (pt.y < minY) minY = pt.y;
+              if (pt.x > maxX) maxX = pt.x;
+              if (pt.y > maxY) maxY = pt.y;
+            }
+
+            const now = Date.now();
+            results.push({
+              pageIndex: n - 1,
+              annotation: {
+                id: `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`,
+                pageIndex: n - 1,
+                layerId: 'default',
+                type: 'pen',
+                box: { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
+                createdAt: now,
+                updatedAt: now,
+                opacity,
+                points,
+                color,
+                strokeWidth: width,
+                smoothing: true
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not import native ink annotations:', e);
+    } finally {
+      try { await loadingTask?.destroy(); } catch (_) {}
+    }
+    return results;
   }
 
   /**

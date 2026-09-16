@@ -2,10 +2,13 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import fs from 'fs';
 
+const pkg = JSON.parse(fs.readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf-8'));
+
 export default defineConfig(({ mode }) => {
   const isDesktop = mode === 'desktop';
   const isFirefox = mode === 'firefox';
-  const outDir = isDesktop ? 'dist/desktop' : (isFirefox ? 'dist/firefox' : 'dist/chrome');
+  const outDir = isDesktop ? 'dist/desktop' : (isFirefox ? 'dist/firefox' : 'dist/chrome')
+;
 
   const input: Record<string, string> = isDesktop
     ? { main: resolve(import.meta.dirname, 'index.html') }
@@ -17,6 +20,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: './',
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version)
+    },
     build: {
       outDir,
       emptyOutDir: true,

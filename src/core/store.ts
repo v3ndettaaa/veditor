@@ -39,7 +39,7 @@ class StateStore {
   private _activeDocument: DocumentSession | null = null;
   private _documentTabs: Array<{ id: string; name: string }> = [];
   private _openDocuments: Map<string, DocumentSession> = new Map();
-  private _closeTabListeners: Set<(tabId: string) => void> = new Set();
+  private _closeTabListeners: Set<(tabId: string, closedDoc?: DocumentSession) => void> = new Set();
 
   // Navigation & Viewport State
   private _zoom: number = 1.0;
@@ -126,7 +126,9 @@ class StateStore {
     smoothScroll: true,
     invertDocumentOled: false,
     targetDPI: 150,
-    toolbarDock: 'top'
+    toolbarDock: 'top',
+    customPalette: [],
+    removedDefaultColors: []
   };
 
   // Selection & Clipboard State
@@ -315,7 +317,7 @@ class StateStore {
   get scratchpadMinimized() { return this._scratchpadMinimized; }
 
   // Setters & Actions
-  public onTabClosed(listener: (tabId: string) => void) {
+  public onTabClosed(listener: (tabId: string, closedDoc?: DocumentSession) => void) {
     this._closeTabListeners.add(listener);
     return () => this._closeTabListeners.delete(listener);
   }
@@ -360,6 +362,7 @@ class StateStore {
   }
 
   public closeDocumentTab(tabId: string) {
+    const closedDoc = this._openDocuments.get(tabId);
     this._documentTabs = this._documentTabs.filter(t => t.id !== tabId);
     this._openDocuments.delete(tabId);
     this._pageRotationsByDoc.delete(tabId);
@@ -367,7 +370,7 @@ class StateStore {
     // Notify listeners (e.g. pdfEngine and history to clean up cache)
     for (const listener of this._closeTabListeners) {
       try {
-        listener(tabId);
+        listener(tabId, closedDoc);
       } catch (e) {
         console.error('Error in closeTab listener:', e);
       }
@@ -563,7 +566,9 @@ class StateStore {
       smoothScroll: true,
       invertDocumentOled: false,
       targetDPI: 150,
-      toolbarDock: 'top'
+      toolbarDock: 'top',
+      customPalette: [],
+      removedDefaultColors: []
     };
     this.notify();
   }

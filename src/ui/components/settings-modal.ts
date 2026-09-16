@@ -16,6 +16,8 @@ import { DEFAULT_ACCENT } from '../theme';
 import { resolveRenderDpr, clampRenderMultiplier } from '../../utils/dpi';
 import { TOOL_SHORT_LABELS } from './toolbar';
 import { shortcutManager, DEFAULT_SHORTCUTS, type ShortcutAction } from '../../input/shortcuts';
+import { getAppVersion } from '../../core/app-version';
+import { isDesktop } from '../../core/platform';
 
 type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'shortcuts' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
 
@@ -667,7 +669,7 @@ export class SettingsModalComponent {
           </div>
           <div>
             <div class="about-name">veditor</div>
-            <div class="about-version">Version 1.0.0 • Manifest V3 &amp; WebExtensions</div>
+            <div class="about-version" id="about-version-text">Version …</div>
           </div>
 
           <p class="about-blurb">
@@ -977,6 +979,17 @@ export class SettingsModalComponent {
       store.setSettingsModalOpen(false);
       store.setShortcutsModalOpen(true);
     });
+
+    // Version is read at runtime (Tauri app metadata / extension manifest)
+    // instead of a string hand-copied here, so it never drifts from the
+    // actual build.
+    const versionEl = this._container.querySelector('#about-version-text');
+    if (versionEl) {
+      const platformLabel = isDesktop() ? 'Desktop App' : 'Manifest V3 & WebExtensions';
+      void getAppVersion().then(version => {
+        versionEl.textContent = `Version ${version} \u2022 ${platformLabel}`;
+      });
+    }
 
     // Keyboard shortcut rebinding: click a row, press the new key.
     const refreshShortcutsPane = () => {

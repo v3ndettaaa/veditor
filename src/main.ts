@@ -22,7 +22,7 @@ import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/flo
 import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
 import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession } from './io/storage';
-import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle } from './io/save';
+import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
 import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { resolveRenderDpr, clampRenderMultiplier } from './utils/dpi';
@@ -38,6 +38,16 @@ import { notebookController } from './core/notebook';
 import { onPageStructureChanged } from './core/page-ops';
 import { gestureEngine } from './input/gestures';
 import { shortcutManager } from './input/shortcuts';
+import { isDesktop } from './core/platform';
+import {
+  nativeOpenPdfDialog,
+  nativeReadFile,
+  onNativeOpenFilePath,
+  onWindowCloseRequested,
+  takeStartupFilePath,
+  nativeConfirm
+} from './io/native-fs';
+import { getDocumentSessionByPath, flushDocPosition } from './io/storage';
 
 class VeditorApp {
   private _scrollContainer: HTMLElement;
@@ -128,6 +138,13 @@ class VeditorApp {
   }
 
   private async init() {
+    // 0. Kill the native browser/OS context menu everywhere. Components that
+    //    want a right-click menu (canvas pages, thumbnails, tabs, library
+    //    items) build their own themed one via openContextMenu() and call
+    //    preventDefault() themselves; this is just the fallback for every
+    //    other surface (empty chrome, header, body) that doesn't.
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+
     // 1. Reflect saved theme, accent, density, direction & focus mode onto the
     //    document, and keep them in sync for the rest of the session.
     initAppearanceSync();
@@ -220,11 +237,31 @@ class VeditorApp {
     // 7. Check URL parameters
     await this.checkUrlParams();
 
+    // 7b. Desktop-only native integration: confirm before the OS actually
+    // closes the window, resume a file double-clicked via the registered
+    // file association, and open whatever file this process was launched
+    // with (or that a second launch forwarded through single-instance).
+    if (isDesktop()) {
+      void onWindowCloseRequested(() => this.confirmAppClose());
+      onNativeOpenFilePath((path) => { void this.openNativeFile(path); });
+      void takeStartupFilePath().then((path) => {
+        if (path && !store.activeDocument) void this.openNativeFile(path);
+      });
+    }
+
     // 8. Clean up cached PDF documents and history when a tab is closed
-    store.onTabClosed((tabId) => {
+    store.onTabClosed((tabId, closedDoc) => {
       pdfEngine.unloadDoc(tabId);
       history.removeDocument(tabId);
       forgetFileHandle(tabId);
+      if (closedDoc) void flushDocPosition(closedDoc);
+      // Nothing left open: the landing page is about to show. Reset the
+      // scroll container so it doesn't inherit a bottom-scrolled offset
+      // from whatever document was just closed.
+      if (store.openDocuments.size === 0) {
+        this._scrollContainer.scrollTop = 0;
+        this._scrollContainer.scrollLeft = 0;
+      }
     });
 
     // 9. Subscribe to document/page changes
@@ -334,6 +371,14 @@ class VeditorApp {
   }
 
   public async requestOpenFile(): Promise<void> {
+    if (isDesktop()) {
+      const picked = await nativeOpenPdfDialog();
+      if (picked) {
+        (document.getElementById('close-add-tab-btn') as HTMLButtonElement | null)?.click();
+        await this.openNativeFile(picked.path, picked.bytes);
+      }
+      return;
+    }
     if ('showOpenFilePicker' in window) {
       try {
         const [handle] = await (window as any).showOpenFilePicker({
@@ -361,6 +406,41 @@ class VeditorApp {
       }
     }
     this._fileInput.click();
+  }
+
+  /**
+   * Opens a PDF by its absolute disk path (desktop only): the native file
+   * picker, a double-clicked file association, or a second app launch
+   * forwarded through the single-instance handler. Reopening a path that
+   * already has a session resumes its last page/scroll instead of starting
+   * a disconnected duplicate tab.
+   */
+  private async openNativeFile(path: string, preloadedBytes?: Uint8Array): Promise<void> {
+    for (const doc of store.openDocuments.values()) {
+      if (doc.nativeFilePath === path) {
+        store.switchDocumentTab(doc.id);
+        return;
+      }
+    }
+    const bytes = preloadedBytes ?? await nativeReadFile(path);
+    if (!bytes) {
+      showToast('Could not read that file', 'error');
+      return;
+    }
+    const name = path.split(/[\\/]/).pop() || 'document.pdf';
+    const existing = await getDocumentSessionByPath(path);
+    await this.loadPDF(
+      name,
+      bytes,
+      existing?.id,
+      existing?.notebook,
+      existing ? {
+        activePageIndex: existing.activePageIndex || 0,
+        savedScrollTop: existing.savedScrollTop,
+        savedScrollLeft: existing.savedScrollLeft
+      } : undefined,
+      path
+    );
   }
 
   private setupFileHandling() {
@@ -436,7 +516,8 @@ class VeditorApp {
     bytes: Uint8Array,
     existingDocId?: string,
     notebook?: NotebookSpec,
-    initialState?: { activePageIndex?: number; savedScrollTop?: number; savedScrollLeft?: number }
+    initialState?: { activePageIndex?: number; savedScrollTop?: number; savedScrollLeft?: number },
+    nativeFilePath?: string
   ): Promise<string | null> {
     this.showPdfLoading(name, 'Opening document…');
     showToast(`Loading ${name}…`, 'progress');
@@ -453,6 +534,16 @@ class VeditorApp {
       this.showPdfLoading(name, 'Parsing PDF structure & pages…');
       const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
 
+      // Brand-new open only — an existing session's annotations (including any
+      // ink imported the first time it was opened) already carry this, and
+      // re-running the import on every reload/resume would duplicate strokes.
+      const importedAnnotations: DocumentSession['annotations'] = {};
+      if (!existingDocId) {
+        for (const { pageIndex, annotation } of await pdfEngine.extractNativeInkStrokes(masterBytes)) {
+          (importedAnnotations[pageIndex] ??= []).push(annotation);
+        }
+      }
+
       const session: DocumentSession = {
         id: docId,
         name,
@@ -460,7 +551,7 @@ class VeditorApp {
         pageCount,
         pages,
         bookmarks,
-        annotations: {},
+        annotations: importedAnnotations,
         layers: {},
         activePageIndex: initialState?.activePageIndex ?? 0,
         savedScrollTop: initialState?.savedScrollTop,
@@ -468,8 +559,15 @@ class VeditorApp {
         createdAt: Date.now(),
         lastModifiedAt: Date.now(),
         lastSavedAt: Date.now(),
-        notebook
+        notebook,
+        nativeFilePath
       };
+      if (nativeFilePath) {
+        // Cheap metadata-only write so a second open-by-path (or the
+        // single-instance handoff) can find this session immediately,
+        // without waiting for the first edit/autosave.
+        void saveDocumentSession(session, { includeBytes: false }).catch(() => {});
+      }
 
       this._lastDocId = docId;
       history.switchDocument(docId);
@@ -930,10 +1028,10 @@ class VeditorApp {
       if (e.ctrlKey || e.metaKey) {
         if (e.key === '+' || e.key === '=') {
           e.preventDefault();
-          store.setZoom(store.zoom * 1.2);
+          viewportManager.zoomByFactor(1.2);
         } else if (e.key === '-' || e.key === '_') {
           e.preventDefault();
-          store.setZoom(store.zoom / 1.2);
+          viewportManager.zoomByFactor(1 / 1.2);
         } else if (e.key === '0') {
           e.preventDefault();
           viewportManager.fitToWidth();
@@ -1752,6 +1850,24 @@ class VeditorApp {
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();
     });
+  }
+
+  /**
+   * Desktop window-close gate: flushes every open document's last-known
+   * position, then asks before quitting if anything is unsaved. Returning
+   * false cancels the OS close request.
+   */
+  private async confirmAppClose(): Promise<boolean> {
+    for (const doc of store.openDocuments.values()) {
+      await flushDocPosition(doc);
+    }
+    const dirty = [...store.openDocuments.values()].filter(doc => isDocumentDirty(doc.id));
+    if (dirty.length === 0) return true;
+    const names = dirty.map(d => d.name).join(', ');
+    const message = dirty.length > 1
+      ? `You have unsaved changes in ${dirty.length} documents (${names}). Quit without saving?`
+      : `"${names}" has unsaved changes. Quit without saving?`;
+    return nativeConfirm(message, 'Unsaved changes');
   }
 
   private async checkUrlParams() {

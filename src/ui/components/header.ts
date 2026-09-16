@@ -11,6 +11,8 @@ import { showToast } from './toast';
 import { t } from '../i18n';
 import { notebookController } from '../../core/notebook';
 import { NotebookDialogComponent } from './notebook-dialog';
+import { nativeConfirm } from '../../io/native-fs';
+import { openContextMenu, type MenuEntry } from './context-menu';
 
 export class HeaderComponent {
   private _container: HTMLElement;
@@ -204,12 +206,12 @@ export class HeaderComponent {
     });
 
     this._container.querySelectorAll('[data-close-tab]').forEach(closeEl => {
-      closeEl.addEventListener('click', (e) => {
+      closeEl.addEventListener('click', async (e) => {
         e.stopPropagation();
         const tabId = closeEl.getAttribute('data-close-tab');
         if (!tabId) return;
         if (isDocumentDirty(tabId)) {
-          const ok = window.confirm('This document has unsaved changes. Close without saving?');
+          const ok = await nativeConfirm('This document has unsaved changes. Close without saving?');
           if (!ok) return;
         }
         forgetFileHandle(tabId);
@@ -217,9 +219,73 @@ export class HeaderComponent {
       });
     });
 
+    this._container.querySelectorAll<HTMLElement>('[data-tab-id]').forEach(tabEl => {
+      tabEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const tabId = tabEl.getAttribute('data-tab-id');
+        if (tabId) this.openTabContextMenu(e as MouseEvent, tabId);
+      });
+    });
+
     this._container.querySelector('#header-add-tab-btn')?.addEventListener('click', () => {
       this._onAddTabRequested();
     });
+  }
+
+  /** Themed right-click menu for a document tab: close/close others/close all, save, save as. */
+  private openTabContextMenu(e: MouseEvent, tabId: string): void {
+    const tabs = store.documentTabs;
+    const isActive = store.activeDocument?.id === tabId;
+    const entries: MenuEntry[] = [
+      {
+        kind: 'action', id: 'switch', label: 'Switch to tab', icon: 'fileText', disabled: isActive,
+        run: () => store.switchDocumentTab(tabId)
+      },
+      { kind: 'separator' },
+      {
+        kind: 'action', id: 'save', label: 'Save', icon: 'save', disabled: !isActive,
+        run: () => { void saveActiveDocument(); }
+      },
+      {
+        kind: 'action', id: 'save-as', label: 'Save As\u2026', icon: 'saveAll', disabled: !isActive,
+        run: () => { void saveActiveDocumentAs(); }
+      },
+      { kind: 'separator' },
+      {
+        kind: 'action', id: 'close', label: 'Close', icon: 'close',
+        run: () => { void this.closeTabWithConfirm(tabId); }
+      },
+      {
+        kind: 'action', id: 'close-others', label: 'Close others', icon: 'close', disabled: tabs.length <= 1,
+        run: () => { void this.closeTabsWithConfirm(tabs.filter(t => t.id !== tabId).map(t => t.id)); }
+      },
+      {
+        kind: 'action', id: 'close-all', label: 'Close all', icon: 'close', danger: true,
+        run: () => { void this.closeTabsWithConfirm(tabs.map(t => t.id)); }
+      }
+    ];
+    openContextMenu(e.clientX, e.clientY, entries);
+  }
+
+  private async closeTabWithConfirm(tabId: string): Promise<void> {
+    if (isDocumentDirty(tabId)) {
+      const ok = await nativeConfirm('This document has unsaved changes. Close without saving?');
+      if (!ok) return;
+    }
+    forgetFileHandle(tabId);
+    store.closeDocumentTab(tabId);
+  }
+
+  private async closeTabsWithConfirm(tabIds: string[]): Promise<void> {
+    const dirtyCount = tabIds.filter(isDocumentDirty).length;
+    if (dirtyCount > 0) {
+      const ok = await nativeConfirm(`${dirtyCount} document${dirtyCount > 1 ? 's' : ''} have unsaved changes. Close without saving?`);
+      if (!ok) return;
+    }
+    for (const tabId of tabIds) {
+      forgetFileHandle(tabId);
+      store.closeDocumentTab(tabId);
+    }
   }
 
   /**
