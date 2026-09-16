@@ -34,9 +34,10 @@ export function isDocumentDirty(docId: string): boolean {
 
 async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
   const isDarkMode = store.appSettings.invertDocumentOled || document.body.classList.contains('invert-pdf-document');
-  // Same high-fidelity path as Export so Save matches what users see.
+  // Vector mode (flatten: false) by default so Save preserves editable native annotations
+  // rather than rasterizing them to a low-quality PNG image.
   return pdfExporter.exportPDF({
-    flatten: opts?.flatten ?? true,
+    flatten: opts?.flatten ?? false,
     dpi: opts?.dpi ?? 150,
     applyRedactions: opts?.applyRedactions ?? true,
     pageRange: opts?.pageRange,

@@ -2,10 +2,38 @@
  * Thin wrapper around Tauri's native dialog/fs/app/window APIs.
  * Every export is a safe no-op (returns null/false) outside the desktop
  * shell, so callers can use these unconditionally without duplicating
- * `isDesktop()` checks, and the browser/extension bundle never has to load
- * `@tauri-apps/*` at all (dynamic imports keep it out of that bundle).
+ * `isDesktop()` checks.
  */
 import { isDesktop } from '../core/platform';
+
+export interface FileNode {
+  id: string;
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  children?: FileNode[];
+}
+
+export interface NativeDirEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+/** Prevents path traversal vulnerability against unauthorized scope escaping. */
+export function sanitizePath(inputPath: string): string {
+  const normalized = inputPath.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(p => p !== '.' && p !== '');
+  const safeParts: string[] = [];
+  for (const part of parts) {
+    if (part === '..') {
+      safeParts.pop();
+    } else {
+      safeParts.push(part);
+    }
+  }
+  return safeParts.join('/');
+}
 
 export async function nativeOpenPdfDialog(): Promise<{ path: string; bytes: Uint8Array } | null> {
   if (!isDesktop()) return null;
@@ -43,7 +71,6 @@ export async function nativeWriteFile(path: string, bytes: Uint8Array): Promise<
   }
 }
 
-/** Native "Save As" location picker. Returns the chosen absolute path, or null if cancelled. */
 export async function nativeSaveAsDialog(suggestedName: string): Promise<string | null> {
   if (!isDesktop()) return null;
   const { save } = await import('@tauri-apps/plugin-dialog');
@@ -54,7 +81,6 @@ export async function nativeSaveAsDialog(suggestedName: string): Promise<string 
   return path ?? null;
 }
 
-/** Native-look confirm dialog; falls back to `window.confirm` outside desktop. */
 export async function nativeConfirm(message: string, title = 'veditor'): Promise<boolean> {
   if (!isDesktop()) return window.confirm(message);
   try {
@@ -63,13 +89,6 @@ export async function nativeConfirm(message: string, title = 'veditor'): Promise
   } catch {
     return window.confirm(message);
   }
-}
-
-/** Recursively lists directory entries (files + folders) under `path`. */
-export interface NativeDirEntry {
-  name: string;
-  path: string;
-  isDirectory: boolean;
 }
 
 export async function nativePickDirectory(): Promise<string | null> {
@@ -97,7 +116,82 @@ export async function nativeReadDir(path: string): Promise<NativeDirEntry[]> {
   }
 }
 
-/** Resolves once with the path from `take_startup_file`, or null if launched without a file argument. */
+/**
+ * PIPE_5: Recursive crawl of directory tree filtering .pdf files.
+ * Sorted [dirs_first: true, alpha: asc].
+ */
+export async function nativeBuildFileTree(rootPath: string): Promise<FileNode | null> {
+  if (!isDesktop()) return null;
+  const safeRoot = sanitizePath(rootPath);
+
+  async function crawl(dirPath: string): Promise<FileNode[]> {
+    const entries = await nativeReadDir(dirPath);
+    const nodes: FileNode[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDirectory) {
+        const children = await crawl(entry.path);
+        nodes.push({
+          id: entry.path,
+          name: entry.name,
+          path: entry.path,
+          isDirectory: true,
+          children
+        });
+      } else if (entry.name.toLowerCase().endsWith('.pdf')) {
+        nodes.push({
+          id: entry.path,
+          name: entry.name,
+          path: entry.path,
+          isDirectory: false
+        });
+      }
+    }
+
+    nodes.sort((a, b) => {
+      if (a.isDirectory && !b.isDirectory) return -1;
+      if (!a.isDirectory && b.isDirectory) return 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+    });
+
+    return nodes;
+  }
+
+  const rootName = safeRoot.split(/[\\/]/).pop() || safeRoot;
+  const children = await crawl(rootPath);
+  return {
+    id: rootPath,
+    name: rootName,
+    path: rootPath,
+    isDirectory: true,
+    children
+  };
+}
+
+export async function nativeRenameFile(oldPath: string, newPath: string): Promise<boolean> {
+  if (!isDesktop()) return false;
+  try {
+    const { rename } = await import('@tauri-apps/plugin-fs');
+    await rename(oldPath, newPath);
+    return true;
+  } catch (e) {
+    console.warn('Native rename failed:', e);
+    return false;
+  }
+}
+
+export async function nativeRemoveFile(path: string): Promise<boolean> {
+  if (!isDesktop()) return false;
+  try {
+    const { remove } = await import('@tauri-apps/plugin-fs');
+    await remove(path);
+    return true;
+  } catch (e) {
+    console.warn('Native remove failed:', e);
+    return false;
+  }
+}
+
 export async function takeStartupFilePath(): Promise<string | null> {
   if (!isDesktop()) return null;
   try {
@@ -108,7 +202,6 @@ export async function takeStartupFilePath(): Promise<string | null> {
   }
 }
 
-/** Fires `handler(path)` whenever a second app launch (file association / "Open with") hands off a file. */
 export function onNativeOpenFilePath(handler: (path: string) => void): void {
   if (!isDesktop()) return;
   void import('@tauri-apps/api/event').then(({ listen }) => {
@@ -116,10 +209,6 @@ export function onNativeOpenFilePath(handler: (path: string) => void): void {
   });
 }
 
-/**
- * Intercepts the OS window-close request (title-bar X, Alt+F4, Cmd+Q).
- * `handler` resolves `true` to allow the close, `false` to cancel it.
- */
 export async function onWindowCloseRequested(handler: () => Promise<boolean>): Promise<void> {
   if (!isDesktop()) return;
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -132,6 +221,10 @@ export async function onWindowCloseRequested(handler: () => Promise<boolean>): P
 
 export async function nativeCloseWindow(): Promise<void> {
   if (!isDesktop()) return;
-  const { getCurrentWindow } = await import('@tauri-apps/api/window');
-  await getCurrentWindow().destroy();
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    await getCurrentWindow().close();
+  } catch (e) {
+    console.warn('Could not close window via Tauri window API:', e);
+  }
 }

@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
       target: 'esnext',
       rollupOptions: {
         input,
+        external: isDesktop ? [] : [/^@tauri-apps\/.*/],
         output: {
           entryFileNames: (chunkInfo) => {
             if (chunkInfo.name === 'service-worker') {

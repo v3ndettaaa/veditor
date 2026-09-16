@@ -352,10 +352,13 @@ export class PDFEngine {
             }
 
             const now = Date.now();
+            const annotId = (typeof a.annotationName === 'string' && a.annotationName)
+              || (typeof a.id === 'string' && a.id)
+              || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`;
             results.push({
               pageIndex: n - 1,
               annotation: {
-                id: `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`,
+                id: annotId,
                 pageIndex: n - 1,
                 layerId: 'default',
                 type: 'pen',
@@ -525,7 +528,8 @@ export class PDFEngine {
       canvas: offscreen,
       canvasContext: offCtx,
       viewport: viewport,
-      intent: 'display'
+      intent: 'display',
+      annotationMode: (pdfjsLib as any).AnnotationMode?.DISABLE ?? 0
     };
 
     const task = page.render(renderContext);
@@ -546,10 +550,17 @@ export class PDFEngine {
         return;
       }
 
-      // Keep recent bitmaps (across a few zoom levels) for instant navigation.
-      if (this._renderedBitmaps.size >= 25) {
+      // PIPE_3 VRAM POOL OOM GUARD: Cap active bitmap cache to 6 max.
+      if (this._renderedBitmaps.size >= 6) {
         const oldestKey = this._renderedBitmaps.keys().next().value;
-        if (oldestKey !== undefined) this._renderedBitmaps.delete(oldestKey);
+        if (oldestKey !== undefined) {
+          const entry = this._renderedBitmaps.get(oldestKey);
+          if (entry?.canvas) {
+            entry.canvas.width = 1;
+            entry.canvas.height = 1;
+          }
+          this._renderedBitmaps.delete(oldestKey);
+        }
       }
       this._renderedBitmaps.set(exactKey, {
         pageIndex,
@@ -574,6 +585,21 @@ export class PDFEngine {
       }
     } finally {
       if (this._activeRenderTasks.get(pageIndex) === task) {
+        this._activeRenderTasks.delete(pageIndex);
+      }
+    }
+  }
+
+  /**
+   * PIPE_4: ASYNC RENDER SCHEDULER
+   * Cancels all in-flight rendering tasks for pages not in the visible window.
+   */
+  public cancelOutdatedRenderTasks(visibleWindow: Set<number>): void {
+    for (const [pageIndex, task] of this._activeRenderTasks) {
+      if (!visibleWindow.has(pageIndex)) {
+        try {
+          task.cancel();
+        } catch (_) {}
         this._activeRenderTasks.delete(pageIndex);
       }
     }
@@ -628,7 +654,13 @@ export class PDFEngine {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     try {
-      await page.render({ canvas, canvasContext: ctx, viewport, intent: 'display' }).promise;
+      await page.render({
+        canvas,
+        canvasContext: ctx,
+        viewport,
+        intent: 'display',
+        annotationMode: (pdfjsLib as any).AnnotationMode?.DISABLE ?? 0
+      }).promise;
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {
         console.error(`Error rendering thumbnail ${pageIndex}:`, err);
@@ -669,7 +701,8 @@ export class PDFEngine {
         canvas,
         canvasContext: ctx,
         viewport,
-        intent: 'display'
+        intent: 'display',
+        annotationMode: (pdfjsLib as any).AnnotationMode?.DISABLE ?? 0
       }).promise;
       return true;
     } catch (err: any) {

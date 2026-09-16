@@ -9,6 +9,8 @@
     "build:firefox": "vite build --mode firefox",
     "build:desktop": "vite build --mode desktop",
     "build": "npm run build:chrome && npm run build:firefox",
+    "tauri": "tauri",
+    "build:app": "tauri build",
     "package": "npm run build && python3 scripts/package-extensions.py",
     "test": "vitest run"
   },
@@ -23,6 +25,7 @@
   },
   "homepage": "https://github.com/v3ndettaaa/veditor#readme",
   "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
     "@types/node": "^26.4.1",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",

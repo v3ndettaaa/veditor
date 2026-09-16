@@ -7,7 +7,7 @@ import { PDFDocument, rgb } from 'pdf-lib';
 import { store } from '../core/store';
 import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
-import { stripNativeInkAnnotations } from '../core/native-ink';
+import { syncNativeInkAnnotations, stripNativeInkAnnotations } from '../core/native-ink';
 
 export interface PDFExportOptions {
   flatten: boolean;
@@ -36,10 +36,8 @@ export class PDFExporter {
 
     // Load original PDF using pdf-lib to preserve structure and metadata
     const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
-    // Any native /Ink annotation was already re-created as a veditor pen
-    // stroke on open (see pdfEngine.extractNativeInkStrokes); dropping the
-    // original here keeps the export from drawing that stroke twice.
-    stripNativeInkAnnotations(pdfDoc);
+    // Bidirectionally sync Veditor pen/highlighter vector ink into native PDF /Ink dicts
+    syncNativeInkAnnotations(pdfDoc, doc.annotations);
     const pages = pdfDoc.getPages();
 
     const selectedIndices = options.pageIndices?.length

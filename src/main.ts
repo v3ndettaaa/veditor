@@ -534,13 +534,15 @@ class VeditorApp {
       this.showPdfLoading(name, 'Parsing PDF structure & pages…');
       const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
 
-      // Brand-new open only — an existing session's annotations (including any
-      // ink imported the first time it was opened) already carry this, and
-      // re-running the import on every reload/resume would duplicate strokes.
-      const importedAnnotations: DocumentSession['annotations'] = {};
-      if (!existingDocId) {
-        for (const { pageIndex, annotation } of await pdfEngine.extractNativeInkStrokes(masterBytes)) {
-          (importedAnnotations[pageIndex] ??= []).push(annotation);
+      const existingSession = existingDocId ? store.openDocuments.get(existingDocId) : null;
+      const importedAnnotations: DocumentSession['annotations'] = existingSession?.annotations
+        ? { ...existingSession.annotations }
+        : {};
+
+      for (const { pageIndex, annotation } of await pdfEngine.extractNativeInkStrokes(masterBytes)) {
+        const list = (importedAnnotations[pageIndex] ??= []);
+        if (!list.some(a => a.id === annotation.id)) {
+          list.push(annotation);
         }
       }
 
@@ -1039,10 +1041,17 @@ class VeditorApp {
       }
     });
 
-    // Window resize
+    // Window & Viewport resize
     window.addEventListener('resize', () => {
       viewportManager.updateLayout(true);
     });
+
+    if (typeof ResizeObserver !== 'undefined' && this._scrollContainer) {
+      const resizeObserver = new ResizeObserver(() => {
+        viewportManager.updateLayout(true);
+      });
+      resizeObserver.observe(this._scrollContainer);
+    }
   }
 
   /**
@@ -1057,11 +1066,11 @@ class VeditorApp {
     if (!doc) return;
     const docId = doc.id;
 
-    // 1. Warm windowing: only evict pages well outside the viewport to prevent
-    // scroll blinking. Never evict mid-preview: the commit 160ms later
-    // re-renders sharp anyway, and evicting scaled-but-correct pages is what
-    // flashed blank cracks.
-    const maxKeepDistance = 6;
+    // PIPE_4: Cancel in-flight render tasks for pages outside visible window
+    pdfEngine.cancelOutdatedRenderTasks(new Set(visibleIndices));
+
+    // PIPE_3: VRAM Pool OOM Guard - Evict pages beyond dist > 1 from viewport
+    const maxKeepDistance = 1;
     for (const [pageIndex, p] of this._renderedPages) {
       if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
       let minDistance = Infinity;
@@ -1071,8 +1080,12 @@ class VeditorApp {
       }
 
       if (!this._zoomPreviewActive && minDistance > maxKeepDistance) {
-        // Cancel in-flight PDF render tasks
         pdfEngine.cancelPageRender(pageIndex);
+        // Explicitly collapse backing stores to 1x1 to release VRAM buffers immediately
+        p.pdfCanvas.width = 1; p.pdfCanvas.height = 1;
+        p.patternCanvas.width = 1; p.patternCanvas.height = 1;
+        p.annotCanvas.width = 1; p.annotCanvas.height = 1;
+        p.scratchCanvas.width = 1; p.scratchCanvas.height = 1;
 
         if (p.container.parentNode === this._pagesWrapper) {
           this._pagesWrapper.removeChild(p.container);
@@ -1709,11 +1722,14 @@ class VeditorApp {
         // If the user picked another tool mid-hold, don't override it.
         if (store.activeTool === 'hand') store.setActiveTool(prev);
       }
-    });
+    }, { capture: true });
 
     window.addEventListener('keydown', (e) => {
-      // Don't trigger tool shortcuts when typing in inputs
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      // Don't trigger tool shortcuts when typing in inputs or contenteditable elements
+      const target = e.target as HTMLElement | null;
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
+        return;
+      }
 
       // Hold Space to pan (ignored with modifiers and on key repeat).
       if (e.key === ' ' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1734,7 +1750,7 @@ class VeditorApp {
           return;
         }
       } else if (e.key === 'Escape') {
-        // Mid-drag marquee/lasso first, then an active lens, then polygons.
+        // Mid-drag marquee/lasso first, then an active lens, then polygons/selection.
         if (pointerHandler.cancelZoomMarquee()) return;
         if (pointerHandler.cancelLasso()) { this.repaintAllRenderedAnnotations(); return; }
         if (store.zoomLensActive) {
@@ -1742,6 +1758,8 @@ class VeditorApp {
           return;
         }
         pointerHandler.cancelPolygon();
+        store.clearSelection();
+        this.repaintAllRenderedAnnotations();
         return;
       }
 
@@ -1778,13 +1796,30 @@ class VeditorApp {
           e.preventDefault();
           this.duplicateSelection();
           return;
+        } else if (key === 'w') {
+          e.preventDefault();
+          const activeDoc = store.activeDocument;
+          if (activeDoc) {
+            if (isDocumentDirty(activeDoc.id)) {
+              nativeConfirm('This document has unsaved changes. Close without saving?').then(ok => {
+                if (ok) {
+                  forgetFileHandle(activeDoc.id);
+                  store.closeDocumentTab(activeDoc.id);
+                }
+              });
+            } else {
+              forgetFileHandle(activeDoc.id);
+              store.closeDocumentTab(activeDoc.id);
+            }
+          }
+          return;
         }
         return;
       }
 
       if (e.altKey) return;
 
-      const key = e.key.toLowerCase();
+      // Tool keys resolve through the user-configurable shortcut registry (shortcutManager)
       const shortcutTool = shortcutManager.actionForEvent(e);
       if (shortcutTool) {
         e.preventDefault();
@@ -1792,9 +1827,9 @@ class VeditorApp {
         return;
       }
 
-      // Arrow keys always operate on one clear target: the current selection
-      // when present, otherwise the document viewport. This keeps browser
-      // scrolling from competing with canvas transforms.
+      const key = e.key.toLowerCase();
+
+      // Arrow keys always operate on one clear target: current selection or document scroll
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
         e.preventDefault();
         const selectedIds = store.selectedAnnotationIds;
@@ -1839,8 +1874,7 @@ class VeditorApp {
         return;
       }
 
-      // Tool keys resolve through the user-configurable shortcut registry;
-      // only non-tool actions keep fixed keys below.
+      // Non-tool shortcuts
       if (key === 'k') store.setSignatureModalOpen(true);
       else if (key === 'n') {
         store.setActiveTool('scratchpad');
@@ -1849,7 +1883,7 @@ class VeditorApp {
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();
-    });
+    }, { capture: true });
   }
 
   /**
