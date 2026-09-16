@@ -13,6 +13,7 @@ import { saveDocumentSession } from './storage';
 import { showToast } from '../ui/components/toast';
 import { openSaveAsDialog, type SaveAsOptions } from '../ui/components/save-as-dialog';
 import { isDesktop } from '../core/platform';
+import { isPdfDisplayedDark } from './save-policy';
 import { nativeSaveAsDialog, nativeWriteFile, nativeConfirm } from './native-fs';
 
 const fileHandles = new Map<string, any>();
@@ -33,15 +34,13 @@ export function isDocumentDirty(docId: string): boolean {
 }
 
 async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
-  const isDarkMode = store.appSettings.invertDocumentOled || document.body.classList.contains('invert-pdf-document');
-  // Vector mode (flatten: false) by default so Save preserves editable native annotations
-  // rather than rasterizing them to a low-quality PNG image.
   return pdfExporter.exportPDF({
     flatten: opts?.flatten ?? false,
     dpi: opts?.dpi ?? 150,
     applyRedactions: opts?.applyRedactions ?? true,
     pageRange: opts?.pageRange,
-    darkMode: opts?.darkMode ?? isDarkMode
+    pageIndices: opts?.pageIndices,
+    darkMode: opts?.darkMode === true
   });
 }
 
@@ -223,8 +222,10 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
       selectedPageIndices: [...store.selectedPageIndices],
       hasRedactions: hasRed,
       supportsPicker,
-      displayedDark: store.appSettings.invertDocumentOled ||
-        document.body.classList.contains('invert-pdf-document'),
+      displayedDark: isPdfDisplayedDark(
+        store.appSettings.invertDocumentOled,
+        document.body.classList.contains('invert-pdf-document')
+      ),
       onClose: () => resolve(false),
       onSubmit: async (opts: SaveAsOptions) => {
         try {

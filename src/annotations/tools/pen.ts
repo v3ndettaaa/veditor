@@ -104,7 +104,7 @@ export class PenTool {
       pressureEnabled: this._pressureEnabled,
       pressureCurve: this._pressureCurve,
       pressureStrength: this._strength,
-      strokeSmoothing: this._smoothing,
+      strokeSmoothing: this._smoothing === 'high' ? 'medium' : this._smoothing,
       opacity: 1.0,
       createdAt: Date.now(),
       updatedAt: Date.now()

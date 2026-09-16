@@ -90,7 +90,23 @@ export class ViewportManager {
    */
   public updateLayout(force = true) {
     const doc = store.activeDocument;
-    if (!doc || !this._scrollContainer || !this._pagesWrapper) return;
+    if (!this._scrollContainer || !this._pagesWrapper) return;
+    if (!doc) {
+      if (this._scrollRafId !== null) {
+        cancelAnimationFrame(this._scrollRafId);
+        this._scrollRafId = null;
+      }
+      this._pageLayouts = [];
+      this._visiblePages.clear();
+      this._previewScale = 1;
+      this._pagesWrapper.style.width = '';
+      this._pagesWrapper.style.height = '';
+      this._pagesWrapper.style.minWidth = '';
+      this._pagesWrapper.style.transform = '';
+      this._pagesWrapper.style.transformOrigin = '';
+      this._scrollContainer.scrollLeft = 0;
+      return;
+    }
 
     const zoom = store.zoom;
     const viewMode = store.viewMode;

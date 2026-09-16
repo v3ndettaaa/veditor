@@ -10,7 +10,7 @@
  */
 
 import { PDFDocument, PDFName, PDFDict, PDFString, PDFNumber } from 'pdf-lib';
-import type { PenAnnotation, StrokePoint } from './types';
+import type { PenAnnotation, HighlighterAnnotation, StrokePoint } from './types';
 
 export interface Point2D {
   x: number;
@@ -162,7 +162,7 @@ export function syncNativeInkAnnotations(
 
     const veditorInkAnns = (annotationsByPage[pageIdx] || []).filter(
       a => (a.type === 'pen' || a.type === 'highlighter') && a.points?.length >= 2
-    ) as PenAnnotation[];
+    ) as Array<PenAnnotation | HighlighterAnnotation>;
 
     const annotsArray = page.node.Annots();
     const existingKeep: any[] = [];
@@ -175,11 +175,11 @@ export function syncNativeInkAnnotations(
         if (subtype?.asString() === INK_NAME && dict) {
           const nmObj = dict.lookupMaybe(PDFName.of('NM'), PDFString);
           const nmStr = nmObj?.asString();
-          if (nmStr) {
+          const managed = dict.lookupMaybe(PDFName.of('VEditorManaged'), PDFNumber)?.asNumber() === 1;
+          if (nmStr && (managed || veditorInkAnns.some(annotation => annotation.id === nmStr))) {
             existingInkMap.set(nmStr, dict);
           } else {
-            // Un-tagged legacy ink; replace with fresh synced annotations
-            changed = true;
+            existingKeep.push(annotsArray.get(i));
           }
         } else {
           existingKeep.push(annotsArray.get(i));
@@ -193,7 +193,7 @@ export function syncNativeInkAnnotations(
       const annotId = ann.id;
       const strokeWidth = ann.strokeWidth || 1.5;
       const [r, g, b] = parseColorRgb(ann.color || '#000000');
-      const filteredPoints = rdpFilter(ann.points, 0.5);
+      const filteredPoints = ann.points;
       if (filteredPoints.length < 2) continue;
 
       // Coordinate conversion: screen (0 top) -> PDF (0 bottom) with rotation handling
@@ -229,6 +229,7 @@ export function syncNativeInkAnnotations(
       }
 
       // Update Dictionary attributes per ISO 32000-1
+      annotDict.set(PDFName.of('VEditorManaged'), PDFNumber.of(1));
       annotDict.set(PDFName.of('Rect'), pdfDoc.context.obj([rectLlx, rectLly, rectUrx, rectUry]));
       annotDict.set(PDFName.of('F'), PDFNumber.of(4)); // Print flag
       annotDict.set(PDFName.of('C'), pdfDoc.context.obj([r, g, b]));
@@ -241,24 +242,23 @@ export function syncNativeInkAnnotations(
       );
       annotDict.set(PDFName.of('InkList'), pdfDoc.context.obj([[...inkListCoords]]));
 
-      if (ann.type === 'highlighter') {
-        annotDict.set(PDFName.of('CA'), PDFNumber.of(0.35));
-      }
+      const opacity = Math.max(0, Math.min(1, ann.type === 'highlighter' ? 0.35 : (ann.opacity ?? 1)));
+      annotDict.set(PDFName.of('CA'), PDFNumber.of(opacity));
 
       // EMIT_ISO: Generate /AP /N FormXObject appearance stream
-      let streamContent = `${strokeWidth.toFixed(2)} w\n${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} RG\n`;
+      let streamContent = `1 J\n1 j\n/GS gs\n${strokeWidth} w\n${r} ${g} ${b} RG\n`;
       streamContent += `${inkListCoords[0].toFixed(2)} ${inkListCoords[1].toFixed(2)} m\n`;
       for (let i = 2; i + 1 < inkListCoords.length; i += 2) {
         streamContent += `${inkListCoords[i].toFixed(2)} ${inkListCoords[i + 1].toFixed(2)} l\n`;
       }
       streamContent += `S\n`;
 
-      const formDict = pdfDoc.context.obj({
+      const formDict = {
         Type: 'XObject',
         Subtype: 'Form',
         BBox: [rectLlx, rectLly, rectUrx, rectUry],
-        Resources: {}
-      });
+        Resources: { ExtGState: { GS: { Type: 'ExtGState', CA: opacity, ca: opacity } } }
+      };
       const appearanceStream = pdfDoc.context.flateStream(
         new TextEncoder().encode(streamContent),
         formDict

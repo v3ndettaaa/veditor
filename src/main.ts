@@ -689,9 +689,18 @@ class VeditorApp {
       // discarded the landing page's own state (open dialogs, folder filter)
       // and re-queried IndexedDB on unrelated updates such as theme changes.
       if (this._lastDocId !== null) {
+        const previousDoc = store.openDocuments.get(this._lastDocId);
+        if (previousDoc) {
+          previousDoc.savedScrollTop = this._scrollContainer.scrollTop;
+          previousDoc.savedScrollLeft = this._scrollContainer.scrollLeft;
+        }
+        this._docSwitchSeq++;
         this._lastDocId = null;
+        this.resetZoomPreviewState();
         history.switchDocument(null);
         this.clearRenderedPages();
+        viewportManager.updateLayout(true);
+        this._scrollContainer.scrollTop = 0;
         this.renderEmptyState();
       }
       return;

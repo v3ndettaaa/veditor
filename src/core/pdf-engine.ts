@@ -303,7 +303,6 @@ export class PDFEngine {
    * strokes that were already imported.
    */
   public async extractNativeInkStrokes(bytes: Uint8Array): Promise<Array<{ pageIndex: number; annotation: PenAnnotation }>> {
-    if (!bytesMayContainInkAnnotations(bytes)) return [];
     const results: Array<{ pageIndex: number; annotation: PenAnnotation }> = [];
     let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
     try {
@@ -326,16 +325,25 @@ export class PDFEngine {
 
         const viewport = page.getViewport({ scale: 1.0 });
         for (const a of inkAnnotations) {
-          const color = Array.isArray(a.color) && a.color.length >= 3
-            ? `#${a.color.slice(0, 3).map((c: number) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('')}`
+          const rawColor = (a as any).color ?? (a as any).C;
+          const colorEntries = rawColor != null
+            ? Array.from(rawColor as ArrayLike<number>)
+            : [];
+          const color = colorEntries.length >= 3
+            ? `#${colorEntries.slice(0, 3).map((c: number) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('')}`
             : '#000000';
           const width = Number.isFinite(a.borderStyle?.width) && a.borderStyle.width > 0 ? a.borderStyle.width : 1.5;
           const opacity = Number.isFinite(a.opacity) ? a.opacity : 1;
+          const annotationName = typeof a.annotationName === 'string' && a.annotationName
+            ? a.annotationName
+            : (typeof a.id === 'string' && a.id ? a.id : '');
 
           // A single Ink annotation can hold several disconnected strokes
           // (one pen-down/up per array) — each becomes its own pen
           // annotation so none of the original drawing is merged or lost.
-          for (const list of a.inkLists as number[][]) {
+          const lists = a.inkLists as number[][];
+          for (let listIndex = 0; listIndex < lists.length; listIndex++) {
+            const list = lists[listIndex];
             const points: StrokePoint[] = [];
             for (let p = 0; p + 1 < list.length; p += 2) {
               const [vx, vy] = viewport.convertToViewportPoint(list[p], list[p + 1]);
@@ -352,9 +360,9 @@ export class PDFEngine {
             }
 
             const now = Date.now();
-            const annotId = (typeof a.annotationName === 'string' && a.annotationName)
-              || (typeof a.id === 'string' && a.id)
-              || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`;
+            const annotId = lists.length > 1
+              ? `${annotationName || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`}#${listIndex}`
+              : (annotationName || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`);
             results.push({
               pageIndex: n - 1,
               annotation: {
@@ -369,7 +377,9 @@ export class PDFEngine {
                 points,
                 color,
                 strokeWidth: width,
-                smoothing: true
+                pressureEnabled: false,
+                smoothing: false,
+                strokeSmoothing: 'none'
               }
             });
           }
