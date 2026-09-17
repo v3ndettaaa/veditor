@@ -313,15 +313,19 @@ export class ViewportManager {
     return this._pageLayouts.find(p => p.pageIndex === pageIndex);
   }
 
-  public fitToWidth() {
+  public fitToWidth(focal?: { x: number; y: number }): void {
     const doc = store.activeDocument;
     if (!doc || !this._scrollContainer) return;
     const activePage = doc.pages[store.activePageIndex || 0] || doc.pages[0];
     if (!activePage) return;
     const { width: baseW } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
     const containerW = this._scrollContainer.clientWidth - 64;
-    // Single commit: setZoom's notify path lays out once.
-    store.setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, containerW / baseW)));
+    const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, containerW / baseW));
+    if (this._pageLayouts.length === 0 || store.isDocSwitching) {
+      store.setZoom(targetZoom);
+      return;
+    }
+    this.zoomByFactor(targetZoom / store.zoom, focal);
   }
 
   public fitToPage() {
@@ -364,7 +368,10 @@ export class ViewportManager {
         nearestDistance = distance;
       }
     }
-    if (!anchor) return;
+    if (!anchor) {
+      store.setZoom(newZoom);
+      return;
+    }
     const offsetX = (contentX - anchor.left) / anchor.width;
     const offsetY = (contentY - anchor.top) / anchor.height;
     const oldLayouts = this._pageLayouts;

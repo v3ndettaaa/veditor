@@ -93,6 +93,7 @@ function parseHexColor(raw: string): string | null {
 
 export class ToolbarComponent {
   private _container: HTMLElement;
+  private _onToggleZoomLens?: () => void;
   private _lastActiveTool: ToolType | null = null;
   private _lastCanUndo: boolean = false;
   private _lastCanRedo: boolean = false;
@@ -102,8 +103,9 @@ export class ToolbarComponent {
   private _lastDock: ToolbarDock | null = null;
   private _pinnedTool: string | null = null;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, onToggleZoomLens?: () => void) {
     this._container = container;
+    this._onToggleZoomLens = onToggleZoomLens;
     store.subscribe(() => this.onStoreUpdate());
     this.render();
 
@@ -945,10 +947,15 @@ export class ToolbarComponent {
         const tool = btn.getAttribute('data-tool') as ToolType;
         if (!tool) return;
 
-        // Re-pressing the lens while inside one exits it (restores pre-lens zoom).
-        if (tool === 'zoom-lens' && store.activeTool === 'zoom-lens' && store.zoomLensActive) {
-          store.exitZoomLens();
-          return;
+        if (tool === 'zoom-lens') {
+          if (this._onToggleZoomLens) {
+            this._onToggleZoomLens();
+            return;
+          }
+          if (store.activeTool === 'zoom-lens' && store.zoomLensActive) {
+            store.exitZoomLens();
+            return;
+          }
         }
 
         store.setActiveTool(tool);

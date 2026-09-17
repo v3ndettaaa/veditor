@@ -152,6 +152,28 @@ describe('Page-relative zoom', () => {
     expect(store.isZoomAdjusting).toBe(false);
     expect(events).toContain('idle');
   });
+
+  it('anchors fitToWidth to an explicit focal point on a later page', () => {
+    store.setZoom(2.5);
+    store.setActivePageIndex(3);
+    viewport.updateLayout();
+    const focal = { x: 450, y: 200 };
+    anchorAt(3, 0.5, 0.41, focal);
+    viewport.fitToWidth(focal);
+    expect(store.zoom).toBeCloseTo((900 - 64) / 595, 8);
+    expectAnchor(3, 0.5, 0.41, focal);
+  });
+
+  it('anchors fitToWidth without a focal point to the scroller center', () => {
+    store.setZoom(2.5);
+    store.setActivePageIndex(3);
+    viewport.updateLayout();
+    const focal = { x: 450, y: 300 };
+    anchorAt(3, 0.5, 0.41, focal);
+    viewport.fitToWidth();
+    expect(store.zoom).toBeCloseTo((900 - 64) / 595, 8);
+    expectAnchor(3, 0.5, 0.41, focal);
+  });
 });
 
 it('clears PDF geometry on home and preserves vertical home scrolling during resize', () => {

@@ -5,7 +5,7 @@
 
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
-import { viewportManager } from './core/viewport';
+import { viewportManager, rotatedPageSize } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
 import { HeaderComponent } from './ui/components/header';
@@ -49,6 +49,12 @@ import {
 } from './io/native-fs';
 import { getDocumentSessionByPath, flushDocPosition } from './io/storage';
 
+
+declare global {
+  interface Window {
+    app?: VeditorApp;
+  }
+}
 class VeditorApp {
   private _scrollContainer: HTMLElement;
   private _pagesWrapper: HTMLElement;
@@ -106,6 +112,8 @@ class VeditorApp {
   } | null = null;
   /** Tool to restore when a held Space (temporary hand) is released. */
   private _spacePrevTool: ToolType | null = null;
+  /** Tool to restore when the zoom tool is toggled off. */
+  private _prevToolBeforeZoom: ToolType = 'select';
   /** Last hand-tool press, for manual double-press quick-select detection. */
   private _lastHandTap: { time: number; x: number; y: number } | null = null;
   private _annotationMenu = new AnnotationContextMenu();
@@ -123,6 +131,7 @@ class VeditorApp {
     this._fileInput.accept = 'application/pdf';
     this._fileInput.style.display = 'none';
     document.body.appendChild(this._fileInput);
+    window.app = this;
 
     this.init();
   }
@@ -145,7 +154,10 @@ class VeditorApp {
       () => void this.requestOpenFile(),
       () => this.openAddTabLanding()
     );
-    new ToolbarComponent(document.getElementById('app-floating-toolbar') as HTMLElement);
+    new ToolbarComponent(
+      document.getElementById('app-floating-toolbar') as HTMLElement,
+      () => this.toggleZoomTool()
+    );
     new SidePanelsComponent(document.getElementById('app-sidebar') as HTMLElement);
     new PropertiesPanelComponent(document.getElementById('app-properties-panel') as HTMLElement);
     new ViewControlsComponent(document.getElementById('app-view-controls') as HTMLElement);
@@ -574,11 +586,8 @@ class VeditorApp {
         store.setActiveDocument(session);
         this.clearRenderedPages();
         this.renderEmptyState();
-        // Apply the user's default zoom for brand-new docs (reopens keep
-        // their restored position/zoom instead).
-        if (!existingDocId && !initialState) {
-          this.applyDefaultZoomMode();
-        }
+        // Apply the user's default zoom (defaults to fitWidth).
+        this.applyDefaultZoomMode();
         viewportManager.updateLayout(true);
         if (typeof session.savedScrollTop === 'number' && session.savedScrollTop > 0) {
           this._scrollContainer.scrollTo({ top: session.savedScrollTop, left: session.savedScrollLeft ?? 0, behavior: 'auto' });
@@ -891,6 +900,45 @@ class VeditorApp {
     if (pointerHandler.isPointerDown || this._handPan) return;
     const rect = this._scrollContainer.getBoundingClientRect();
     viewportManager.zoomByFactor(factor, { x: client.x - rect.left, y: client.y - rect.top });
+  }
+
+  /**
+   * Toggles the zoom tool: hitting it zooms in; hitting it again zooms out to
+   * fit-width (anchored to viewport center) and deselects back to the prior tool.
+   */
+  public toggleZoomTool(): { step: string; tool: ToolType; zoom: number } {
+    if (!store.activeDocument) return { step: 'no-doc', tool: store.activeTool, zoom: store.zoom };
+    this.commitZoomPreview();
+    if (pointerHandler.isPointerDown || this._handPan) {
+      return { step: 'pointer-down-or-hand-pan', tool: store.activeTool, zoom: store.zoom };
+    }
+
+    if (store.activeTool === 'zoom-lens') {
+      // Re-hit: zoom out to fit-width anchored to center, then restore prior tool
+      viewportManager.fitToWidth();
+      const returnTool = this._prevToolBeforeZoom && this._prevToolBeforeZoom !== 'zoom-lens'
+        ? this._prevToolBeforeZoom
+        : 'select';
+      store.setActiveTool(returnTool);
+      if (store.zoomLensActive) {
+        store.exitZoomLens();
+      }
+      return { step: 'zoom-out', tool: store.activeTool, zoom: store.zoom };
+    } else {
+      // First hit: latch prior tool, activate zoom-lens, and zoom in centered
+      this._prevToolBeforeZoom = store.activeTool;
+      store.setActiveTool('zoom-lens');
+      const doc = store.activeDocument;
+      const activePage = doc.pages[store.activePageIndex || 0] || doc.pages[0];
+      const { width: baseW } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
+      const containerW = this._scrollContainer.clientWidth - 64;
+      const fitWidthZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, containerW / baseW));
+      const targetZoom = store.zoom <= fitWidthZoom + 0.05
+        ? Math.max(2.0, fitWidthZoom * 1.5)
+        : store.zoom * 1.5;
+      viewportManager.zoomByFactor(targetZoom / store.zoom);
+      return { step: 'zoom-in', tool: store.activeTool, zoom: store.zoom };
+    }
   }
 
   private setupZoomAndNavigation() {
@@ -1419,10 +1467,20 @@ class VeditorApp {
         }
       }
       // Toggle: zoomed out → 200% at click; zoomed in → fit width.
-      if (store.zoom < 1.5) {
-        this.zoomAtPoint(2.0 / Math.max(store.zoom, MIN_ZOOM), { x: e.clientX, y: e.clientY });
+      this.commitZoomPreview();
+      if (pointerHandler.isPointerDown || this._handPan) return;
+      // Toggle: zoomed out (at or below fit width) → zoom in; zoomed in → fit width.
+      const doc = store.activeDocument;
+      const activePage = doc?.pages[pageIndex] || doc?.pages[0];
+      const baseW = activePage ? rotatedPageSize(activePage, store.pageRotations[pageIndex] || 0).width : 595;
+      const containerW = this._scrollContainer.clientWidth - 64;
+      const fitWidthZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, containerW / baseW));
+      if (store.zoom <= fitWidthZoom + 0.05) {
+        const targetZoom = Math.max(2.0, fitWidthZoom * 1.5);
+        this.zoomAtPoint(targetZoom / Math.max(store.zoom, MIN_ZOOM), { x: e.clientX, y: e.clientY });
       } else {
-        viewportManager.fitToWidth();
+        const rect = this._scrollContainer.getBoundingClientRect();
+        viewportManager.fitToWidth({ x: e.clientX - rect.left, y: e.clientY - rect.top });
       }
     });
 
@@ -1756,6 +1814,10 @@ class VeditorApp {
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();
+      else if (key === 'z') {
+        e.preventDefault();
+        this.toggleZoomTool();
+      }
     }, { capture: true });
   }
 
@@ -1810,7 +1872,23 @@ class VeditorApp {
   }
 }
 
-// Bootstrap application on DOMContentLoaded
-document.addEventListener('DOMContentLoaded', () => {
-  new VeditorApp();
-});
+// Bootstrap application when ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    try {
+      window.app = new VeditorApp();
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      console.error('FAILED TO INIT VEDITOR APP:', err);
+      Object.assign(window, { __appError: err.message + '\n' + err.stack });
+    }
+  });
+} else {
+  try {
+    window.app = new VeditorApp();
+  } catch (e: unknown) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    console.error('FAILED TO INIT VEDITOR APP:', err);
+    Object.assign(window, { __appError: err.message + '\n' + err.stack });
+  }
+}
