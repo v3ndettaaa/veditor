@@ -312,7 +312,6 @@ export function stripNativeInkAnnotations(pdfDoc: PDFDocument): boolean {
 }
 
 export async function stripNativeInkAnnotationsFromBytes(bytes: Uint8Array): Promise<Uint8Array> {
-  if (!bytesMayContainInkAnnotations(bytes)) return bytes;
   try {
     const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
     const changed = stripNativeInkAnnotations(pdfDoc);

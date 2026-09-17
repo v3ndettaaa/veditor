@@ -105,7 +105,7 @@ export class AnnotationEngine {
       // Highlighter ink already carries its translucency in the color alpha;
       // applying `opacity` again would double-fade it (and diverge from the
       // live preview). Every other type uses opacity as the single source.
-      ctx.globalAlpha = ann.type === 'highlighter' ? 1.0 : (ann.opacity ?? 1.0);
+      ctx.globalAlpha = ann.type === 'highlighter' && !ann.quadPoints ? 1.0 : (ann.opacity ?? 1.0);
       if (ann.blendMode && ann.type !== 'highlighter') ctx.globalCompositeOperation = ann.blendMode;
       this.renderSingleAnnotation(ctx, ann, scale);
       ctx.restore();
@@ -130,7 +130,7 @@ export class AnnotationEngine {
       // Highlighter ink already carries its translucency in the color alpha;
       // applying `opacity` again would double-fade it (and diverge from the
       // live preview). Every other type uses opacity as the single source.
-      ctx.globalAlpha = ann.type === 'highlighter' ? 1.0 : (ann.opacity ?? 1.0);
+      ctx.globalAlpha = ann.type === 'highlighter' && !ann.quadPoints ? 1.0 : (ann.opacity ?? 1.0);
       if (ann.blendMode && ann.type !== 'highlighter') {
         // Highlighters always render with translucent source-over (see
         // spline.ts): legacy annotations may still carry `multiply`, which
@@ -199,7 +199,25 @@ export class AnnotationEngine {
       case 'highlighter':
         ctx.save();
         ctx.scale(scale, scale);
-        renderSmoothStroke(ctx, ann.points, ann.color, ann.strokeWidth, 'linear', true, false, 'balanced', ann.tipShape || 'round');
+        if (ann.quadPoints) {
+          ctx.fillStyle = ann.color;
+          ctx.beginPath();
+          for (const quad of ann.quadPoints) {
+            const cx = quad.reduce((sum, p) => sum + p.x, 0) / quad.length;
+            const cy = quad.reduce((sum, p) => sum + p.y, 0) / quad.length;
+            const ordered = [...quad].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+            ordered.forEach((p, index) => {
+              const x = ann.box.x + p.x * ann.box.width;
+              const y = ann.box.y + p.y * ann.box.height;
+              if (index === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            });
+            ctx.closePath();
+          }
+          ctx.fill();
+        } else {
+          renderSmoothStroke(ctx, ann.points, ann.color, ann.strokeWidth, 'linear', true, false, 'balanced', ann.tipShape || 'round');
+        }
         ctx.restore();
         break;
 

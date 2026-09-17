@@ -106,6 +106,7 @@ export interface HighlighterAnnotation extends BaseAnnotation {
   strokeWidth: number;
   blendMode: 'multiply' | 'source-over';
   straightLine?: boolean;
+  quadPoints?: Point[][];
   tipShape?: 'chisel' | 'round';
 }
 

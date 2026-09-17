@@ -54,7 +54,7 @@ export class TextTool {
     ctx.scale(scale, scale);
 
     const b = ann.box;
-    const padding = ann.padding || 8;
+    const padding = ann.padding ?? 8;
 
     if (ann.backgroundColor && ann.backgroundColor !== 'transparent') {
       ctx.fillStyle = ann.backgroundColor;

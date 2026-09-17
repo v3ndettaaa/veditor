@@ -49,7 +49,7 @@ export class EraserTool {
         }
       } else if (this._mode === 'stroke') {
         // Stroke Eraser: Erase pen/highlighter if pointer touches any point or segment
-        if (ann.type === 'pen' || ann.type === 'highlighter') {
+        if (ann.type === 'pen' || (ann.type === 'highlighter' && !ann.quadPoints)) {
           let hit = false;
           const strokePadding = (ann.strokeWidth || 2) / 2;
           for (let i = 0; i < ann.points.length; i++) {
@@ -73,7 +73,7 @@ export class EraserTool {
         }
       } else if (this._mode === 'pixel') {
         // Pixel / Segment Eraser: Slice freehand strokes into remaining sub-segments
-        if (ann.type === 'pen' || ann.type === 'highlighter') {
+        if (ann.type === 'pen' || (ann.type === 'highlighter' && !ann.quadPoints)) {
           const strokePadding = (ann.strokeWidth || 2) / 2;
           const hitRadius = r + strokePadding;
 

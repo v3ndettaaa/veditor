@@ -4,11 +4,13 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist';
+import { PDFDocument } from 'pdf-lib';
+import { importNativeAnnotations, stripImportedNativeAnnotations } from './native-annotations';
 import { PageInfo, PDFBookmarkItem, PenAnnotation, StrokePoint } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
 import { MAX_RENDER_DIMENSION, resolveRenderDpr } from '../utils/dpi';
-import { bytesMayContainInkAnnotations, stripNativeInkAnnotationsFromBytes } from './native-ink';
+import { stripNativeInkAnnotationsFromBytes } from './native-ink';
 
 /** Backing-store multiplier over CSS pixels for the current target DPI. */
 function effectiveDpr(): number {
@@ -134,9 +136,11 @@ export class PDFEngine {
     // what keeps that baked raster from being drawn (chalky at any zoom);
     // extractNativeInkStrokes() below separately reconstructs the same
     // annotations from their vector /InkList so nothing is actually lost.
-    const dataCopy = bytesMayContainInkAnnotations(data)
-      ? await stripNativeInkAnnotationsFromBytes(data.slice(0))
-      : data.slice(0);
+    let dataCopy = await stripNativeInkAnnotationsFromBytes(data.slice(0));
+    const renderDocument = await PDFDocument.load(dataCopy, { updateMetadata: false });
+    if (stripImportedNativeAnnotations(renderDocument)) {
+      dataCopy = new Uint8Array(await renderDocument.save());
+    }
 
     const localBase = (() => {
       try { return extensionApi.runtime.getURL(''); } catch (_) { return './'; }
@@ -302,6 +306,11 @@ export class PDFEngine {
    * open, never on every reload, so re-opening a session never duplicates
    * strokes that were already imported.
    */
+  public async extractNativeAnnotations(bytes: Uint8Array) {
+    const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false });
+    return [...await this.extractNativeInkStrokes(bytes), ...importNativeAnnotations(pdfDoc)];
+  }
+
   public async extractNativeInkStrokes(bytes: Uint8Array): Promise<Array<{ pageIndex: number; annotation: PenAnnotation }>> {
     const results: Array<{ pageIndex: number; annotation: PenAnnotation }> = [];
     let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
@@ -539,7 +548,7 @@ export class PDFEngine {
       canvasContext: offCtx,
       viewport: viewport,
       intent: 'display',
-      annotationMode: (pdfjsLib as any).AnnotationMode?.DISABLE ?? 0
+      annotationMode: pdfjsLib.AnnotationMode.ENABLE
     };
 
     const task = page.render(renderContext);
@@ -669,7 +678,7 @@ export class PDFEngine {
         canvasContext: ctx,
         viewport,
         intent: 'display',
-        annotationMode: (pdfjsLib as any).AnnotationMode?.DISABLE ?? 0
+        annotationMode: pdfjsLib.AnnotationMode.ENABLE
       }).promise;
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {
@@ -712,7 +721,7 @@ export class PDFEngine {
         canvasContext: ctx,
         viewport,
         intent: 'display',
-        annotationMode: (pdfjsLib as any).AnnotationMode?.DISABLE ?? 0
+        annotationMode: pdfjsLib.AnnotationMode.ENABLE
       }).promise;
       return true;
     } catch (err: any) {

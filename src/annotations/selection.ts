@@ -4,7 +4,7 @@
  */
 
 import { Point, BoundingBox, Annotation } from '../core/types';
-import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect } from '../utils/geometry';
+import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect, computePointsBoundingBox } from '../utils/geometry';
 
 /**
  * Rotates point `p` around `center` by `angle` radians (counter-clockwise in
@@ -77,10 +77,56 @@ export function moveAnnotationsInZOrder<T extends Annotation>(
 
 /**
  * Returns the selection box for an annotation: its bounding box, which enables
- * universal 8-handle resizing and rotation.
+ * universal 8-handle resizing and rotation. Geometry-bearing annotations use
+ * the AABB of their actual points (padded by half the stroke so handles sit
+ * on the visible ink edge); the stored box may lag behind live drags, and a
+ * stale-tight box made the selection frame clip the object.
  */
 export function getAnnotationSelectionBox(ann: Annotation): BoundingBox {
+  const value = ann as any;
+  const points: Point[] | undefined = Array.isArray(value.points) && value.points.length > 0 && !Array.isArray(value.points[0])
+    ? value.points
+    : undefined;
+  if (points && (ann.type === 'polygon' || ann.type === 'freeform-shape' || ann.type === 'line' || ann.type === 'arrow' ||
+    ann.type === 'pen' || ann.type === 'highlighter' || ann.type.startsWith('measure-'))) {
+    const pad = typeof value.strokeWidth === 'number' ? Math.max(0, value.strokeWidth) / 2 : 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    if (Number.isFinite(minX) && Number.isFinite(minY)) {
+      return {
+        x: minX - pad,
+        y: minY - pad,
+        width: Math.max(1, maxX - minX + pad * 2),
+        height: Math.max(1, maxY - minY + pad * 2)
+      };
+    }
+  }
+  if (ann.type === 'pen' || ann.type === 'highlighter' || ann.type.startsWith('measure-') || ann.type === 'signature') {
+    return mergeStrokeBox(ann);
+  }
   return ann.box;
+}
+
+function mergeStrokeBox(ann: Annotation): BoundingBox {
+  const paths: Point[][] = [];
+  const value = ann as any;
+  if (Array.isArray(value.points)) {
+    if (Array.isArray(value.points[0])) paths.push(...value.points);
+    else paths.push(value.points);
+  }
+  if (ann.type === 'signature') {
+    if (typeof value.pngDataUrl === 'string' && value.pngDataUrl.length > 0) return ann.box;
+    if (Array.isArray(value.points) && value.points.length > 0 && Array.isArray(value.points[0])) {
+      paths.push(...value.points);
+    }
+  }
+  if (paths.length === 0) return ann.box;
+  return mergeBoundingBoxes(paths.map(computePointsBoundingBox));
 }
 
 export interface BoxTransform {

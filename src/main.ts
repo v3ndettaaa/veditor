@@ -539,7 +539,7 @@ class VeditorApp {
         ? { ...existingSession.annotations }
         : {};
 
-      for (const { pageIndex, annotation } of await pdfEngine.extractNativeInkStrokes(masterBytes)) {
+      for (const { pageIndex, annotation } of await pdfEngine.extractNativeAnnotations(masterBytes)) {
         const list = (importedAnnotations[pageIndex] ??= []);
         if (!list.some(a => a.id === annotation.id)) {
           list.push(annotation);

@@ -8,6 +8,14 @@ import { store } from '../core/store';
 import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
 import { syncNativeInkAnnotations, stripNativeInkAnnotations } from '../core/native-ink';
+import { syncNativeAnnotations, stripImportedNativeAnnotations } from '../core/native-annotations';
+import unicodeFontUrl from '@fontsource/vazirmatn/files/vazirmatn-arabic-400-normal.woff?url';
+
+async function loadUnicodeFont(): Promise<Uint8Array> {
+  const response = await fetch(unicodeFontUrl);
+  if (!response.ok) throw new Error('Could not load the bundled Unicode font');
+  return new Uint8Array(await response.arrayBuffer());
+}
 
 export interface PDFExportOptions {
   flatten: boolean;
@@ -37,7 +45,13 @@ export class PDFExporter {
     // Load original PDF using pdf-lib to preserve structure and metadata
     const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
     // Bidirectionally sync Veditor pen/highlighter vector ink into native PDF /Ink dicts
-    syncNativeInkAnnotations(pdfDoc, doc.annotations);
+    if (!options.flatten) {
+      await syncNativeAnnotations(pdfDoc, doc.annotations, loadUnicodeFont);
+      syncNativeInkAnnotations(pdfDoc, doc.annotations);
+    } else {
+      stripImportedNativeAnnotations(pdfDoc);
+      stripNativeInkAnnotations(pdfDoc);
+    }
     const pages = pdfDoc.getPages();
 
     const selectedIndices = options.pageIndices?.length
@@ -74,7 +88,7 @@ export class PDFExporter {
             darkCtx.drawImage(rawCanvas, 0, 0);
             darkCtx.filter = 'none';
 
-            annotationEngine.renderAnnotationsToCanvas(darkCtx, i, dpiScale);
+            if (options.flatten) annotationEngine.renderAnnotationsToCanvas(darkCtx, i, dpiScale);
 
             const jpgBytes = await this.canvasToBytes(darkCanvas, 'image/jpeg', 0.92);
             const embeddedImg = await pdfDoc.embedJpg(jpgBytes);

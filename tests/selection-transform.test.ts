@@ -6,7 +6,8 @@ import {
   rotatePoint,
   boxCenter,
   moveAnnotationsInZOrder,
-  offsetAnnotation
+  offsetAnnotation,
+  getAnnotationSelectionBox
 } from '../src/annotations/selection';
 import { store } from '../src/core/store';
 import { PenAnnotation, ShapeAnnotation } from '../src/core/types';
