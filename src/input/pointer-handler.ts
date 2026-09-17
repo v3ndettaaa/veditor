@@ -7,7 +7,7 @@ import { Point, StrokePoint, ToolType, ToolOptionKey, Annotation, BoundingBox, S
 import { store } from '../core/store';
 import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand } from '../core/history';
 import { mergeBoundingBoxes, computePointsBoundingBox, findNearestVertex } from '../utils/geometry';
-import { resolveRenderDpr, clampRenderMultiplier } from '../utils/dpi';
+import { resolveAnnotationDpr, clampRenderMultiplier } from '../utils/dpi';
 import { fitStroke, type FittedShape } from '../utils/shape-fit';
 import { renderLiveStroke } from '../annotations/spline';
 import { tween, easeOutCubic, type TweenHandle } from '../utils/tween';
@@ -31,7 +31,8 @@ import {
   boxCenter,
   BoxTransform,
   HandleType,
-  getAnnotationSelectionBox
+  getAnnotationSelectionBox,
+  moveAnnotationEndpoint
 } from '../annotations/selection';
 import { floatingPropsBar } from '../ui/components/floating-props';
 
@@ -128,7 +129,7 @@ export class PointerHandler {
    */
   private renderDpr(): number {
     const c = this._pageScratchCanvas;
-    const target = resolveRenderDpr(store.appSettings.targetDPI);
+    const target = resolveAnnotationDpr(store.appSettings.targetDPI);
     if (!c) return target;
     const cssW = parseFloat(c.style.width) || c.width;
     const cssH = parseFloat(c.style.height) || c.height;
@@ -663,14 +664,14 @@ export class PointerHandler {
     const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
     // Lone rotated annotations hit-test in their rotated frame.
     const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
-    const hit = selectionManager.hitTestHandles(
-      pt, merged, store.zoom * (this.renderDpr()), singleRot
+    const hit = selectionManager.hitTestSelection(
+      pt, selected, store.zoom * this.renderDpr()
     );
     if (!hit) return false;
 
     const originals = new Map(selected.map(a => [a.id, cloneAnnotation(a)] as [string, Annotation]));
     // Resizing a rotated annotation works in its unrotated frame.
-    const startPt = singleRot && hit !== 'body' && hit !== 'rot'
+    const startPt = singleRot && hit !== 'body' && hit !== 'rot' && hit !== 'start' && hit !== 'end'
       ? rotatePoint(pt, boxCenter(merged), -singleRot)
       : { x: pt.x, y: pt.y };
     this._selectDrag = {
@@ -746,7 +747,16 @@ export class PointerHandler {
           const drag = this._selectDrag;
           const doc = store.activeDocument;
           if (doc?.annotations[pageIndex]) {
-            if (drag.mode === 'rotate') {
+            if (drag.handle === 'start' || drag.handle === 'end') {
+              const handle = drag.handle;
+              doc.annotations[pageIndex] = doc.annotations[pageIndex].map(a => {
+                const orig = drag.originals.get(a.id);
+                return orig && (orig.type === 'line' || orig.type === 'arrow')
+                  ? moveAnnotationEndpoint(orig, handle, lastPt)
+                  : a;
+              });
+              doc.lastModifiedAt = Date.now();
+            } else if (drag.mode === 'rotate') {
               this.applyRotationDrag(drag, lastPt, shiftKey, doc.annotations[pageIndex]);
               doc.lastModifiedAt = Date.now();
             } else {
@@ -1333,7 +1343,7 @@ export class PointerHandler {
   }
 
   public handleHover(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): void {
-    if (store.selectedAnnotationIds.size === 0 || !floatingPropsBar) return;
+    if (store.selectedAnnotationIds.size === 0) return;
 
     const doc = store.activeDocument;
     if (!doc) return;
@@ -1343,9 +1353,8 @@ export class PointerHandler {
 
     const pt = this.getPointInPage(e, canvas);
     const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
-    const singleRot = selected.length === 1 ? selected[0].rotation || 0 : 0;
-    const hit = selectionManager.hitTestHandles(
-      pt, merged, store.zoom * (this.renderDpr()), singleRot
+    const hit = selectionManager.hitTestSelection(
+      pt, selected, store.zoom * this.renderDpr()
     );
     const cursorByHandle: Record<Exclude<HandleType, null>, string> = {
       nw: 'nwse-resize',
@@ -1357,6 +1366,8 @@ export class PointerHandler {
       e: 'ew-resize',
       w: 'ew-resize',
       rot: 'crosshair',
+      start: 'crosshair',
+      end: 'crosshair',
       body: 'move'
     };
     if (hit) canvas.style.cursor = cursorByHandle[hit];
@@ -1368,7 +1379,7 @@ export class PointerHandler {
       pt.y <= merged.y + merged.height + 10
     );
 
-    floatingPropsBar.setHoverState(isNearOrOver);
+    floatingPropsBar?.setHoverState(isNearOrOver);
   }
 
   /**
@@ -1383,10 +1394,8 @@ export class PointerHandler {
       .filter(annotation => store.selectedAnnotationIds.has(annotation.id));
     if (selected.length === 0) return false;
     const point = this.getPointInPage(e, canvas);
-    const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
-    const rotation = selected.length === 1 ? selected[0].rotation || 0 : 0;
-    return selectionManager.hitTestHandles(
-      point, merged, store.zoom * this.renderDpr(), rotation
+    return selectionManager.hitTestSelection(
+      point, selected, store.zoom * this.renderDpr()
     ) !== null;
   }
 

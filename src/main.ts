@@ -25,7 +25,7 @@ import { openDocumentSession, getDocumentSession, createDocumentId, saveDocument
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
 import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
-import { resolveRenderDpr, clampRenderMultiplier } from './utils/dpi';
+import { resolveAnnotationDpr, clampRenderMultiplier } from './utils/dpi';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
@@ -87,22 +87,10 @@ class VeditorApp {
   /** Generation token: concurrent tab switches invalidate stale async work. */
   private _docSwitchSeq: number = 0;
 
-  /**
-   * Lag-free zoom preview: while pinching (touch or trackpad) the pages
-   * wrapper is scaled with a compositor-only CSS transform around the focal
-   * point — zero store updates, zero re-layouts, zero PDF re-renders, zero
-   * annotation repaints. The real zoom commits once when the gesture ends.
-   */
-  private _zoomPreviewScale: number = 1;
-  private _zoomPreviewActive: boolean = false;
   private _zoomCommitTimer: number | null = null;
-  /** rAF coalescing for wheel/pinch preview ticks (one layout read per frame). */
   private _previewRafId: number | null = null;
   private _previewPendingFactor: number = 1;
   private _previewPendingCenter: { x: number; y: number } | null = null;
-  /** Unscaled wrapper size captured when the preview activates (for truthful scrollHeight). */
-  private _previewBaseHeight: number | null = null;
-  private _previewBaseWidth: number | null = null;
 
   /**
    * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
@@ -125,6 +113,8 @@ class VeditorApp {
   constructor() {
     this._scrollContainer = document.getElementById('document-scroll-container') as HTMLElement;
     this._pagesWrapper = document.getElementById('document-pages-wrapper') as HTMLElement;
+    this._scrollContainer.style.overflowAnchor = 'none';
+    this._scrollContainer.style.scrollBehavior = 'auto';
     this._emptyStateView = document.getElementById('empty-state-view') as HTMLElement;
 
     // Create hidden file input for opening PDFs
@@ -195,7 +185,7 @@ class VeditorApp {
     // user's scroll offset across the correction.
     pdfEngine.onDimensionsUpdated((docId) => {
       if (store.activeDocument?.id !== docId) return;
-      if (store.isDocSwitching || this._zoomPreviewActive) return;
+      if (store.isDocSwitching) return;
       const top = this._scrollContainer.scrollTop;
       const left = this._scrollContainer.scrollLeft;
       viewportManager.updateLayout(true);
@@ -820,20 +810,10 @@ class VeditorApp {
     }
   }
 
-  /**
-   * Applies an incremental zoom factor as a pure visual preview: scales the
-   * whole pages wrapper with a CSS transform around the focal point and keeps
-   * the focal point stable via scroll compensation. Deliberately touches
-   * nothing else — no store update (so no header/toolbar/sidebar re-render),
-   * no viewport re-layout, no PDF re-render, no annotation repaint.
-   */
   private previewZoomBy(factor: number, centerClient: { x: number; y: number }): void {
     if (!store.activeDocument) return;
     if (!Number.isFinite(factor) || factor <= 0) return;
 
-    // Coalesce rapid wheel/pinch ticks into one rAF: accumulate the factor and
-    // latest focal point so we pay one getBoundingClientRect + one transform
-    // write per frame instead of one per tick.
     this._previewPendingFactor *= factor;
     this._previewPendingCenter = { x: centerClient.x, y: centerClient.y };
     if (this._previewRafId === null) {
@@ -847,45 +827,10 @@ class VeditorApp {
     const factor = this._previewPendingFactor;
     const center = this._previewPendingCenter;
     this._previewPendingFactor = 1;
-    if (!store.activeDocument) return;
-    if (!center || !Number.isFinite(factor) || factor <= 0) return;
-
-    const unclamped = this._zoomPreviewScale * factor;
-    // Clamp the TOTAL zoom (committed x preview) to the store's MIN/MAX range.
-    const clampedTotal = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * unclamped)) / store.zoom;
-    const inc = clampedTotal / this._zoomPreviewScale;
-    if (Math.abs(inc - 1) < 0.0005) {
-      return;
-    }
-
+    this._previewPendingCenter = null;
+    if (!store.activeDocument || !center || pointerHandler.isPointerDown || this._handPan) return;
     const rect = this._scrollContainer.getBoundingClientRect();
-    const fx = center.x - rect.left;
-    const fy = center.y - rect.top;
-    // With transform-origin 0 0, wrapper point p renders at s*p; keeping the
-    // focal viewport point stable gives scroll' = (scroll + f) * inc - f.
-    this._scrollContainer.scrollLeft = (this._scrollContainer.scrollLeft + fx) * inc - fx;
-    this._scrollContainer.scrollTop = (this._scrollContainer.scrollTop + fy) * inc - fy;
-
-    this._zoomPreviewScale = clampedTotal;
-    this._zoomPreviewActive = true;
-    this._pagesWrapper.style.transformOrigin = '0 0';
-    this._pagesWrapper.style.transform = `scale(${this._zoomPreviewScale})`;
-    // CSS transforms don't change scrollHeight, so without this the scroller
-    // clamps at the old max-scroll mid-gesture (can't reach content zooming
-    // in) and leaves dead space zooming out. Scale the box truthfully; the
-    // commit's updateLayout recomputes the real size right after.
-    if (this._previewBaseHeight === null) {
-      this._previewBaseHeight = parseFloat(this._pagesWrapper.style.height) || this._pagesWrapper.scrollHeight;
-      this._previewBaseWidth = parseFloat(this._pagesWrapper.style.width) || this._pagesWrapper.scrollWidth;
-    }
-    if (this._previewBaseHeight) {
-      this._pagesWrapper.style.height = `${Math.max(1, Math.floor(this._previewBaseHeight * this._zoomPreviewScale))}px`;
-    }
-    if (this._previewBaseWidth) {
-      this._pagesWrapper.style.width = `${Math.max(1, Math.floor(this._previewBaseWidth * this._zoomPreviewScale))}px`;
-    }
-    // Keep visible-page tracking in layout space while the wrapper is scaled.
-    viewportManager.setPreviewScale(this._zoomPreviewScale);
+    viewportManager.zoomByFactor(factor, { x: center.x - rect.left, y: center.y - rect.top });
   }
 
   private scheduleZoomCommit(): void {
@@ -907,10 +852,6 @@ class VeditorApp {
     }
     this._previewPendingFactor = 1;
     this._previewPendingCenter = null;
-    this._previewBaseHeight = null;
-    this._previewBaseWidth = null;
-    this._zoomPreviewScale = 1;
-    this._zoomPreviewActive = false;
     if (this._pagesWrapper) {
       this._pagesWrapper.style.transform = '';
       this._pagesWrapper.style.transformOrigin = '';
@@ -919,65 +860,12 @@ class VeditorApp {
   }
 
   private commitZoomPreview(): void {
+    if (this._zoomCommitTimer !== null) window.clearTimeout(this._zoomCommitTimer);
     this._zoomCommitTimer = null;
-    // Apply any ticks that arrived after the last rAF before committing.
     if (this._previewRafId !== null) {
       window.cancelAnimationFrame(this._previewRafId);
       this._previewRafId = null;
       this.flushPreviewZoom();
-    }
-    if (!this._zoomPreviewActive) return;
-    const finalZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * this._zoomPreviewScale));
-    this._zoomPreviewScale = 1;
-    this._zoomPreviewActive = false;
-    this._pagesWrapper.style.transform = '';
-    this._pagesWrapper.style.transformOrigin = '';
-    // Back to 1:1 mapping BEFORE the layout pass so every consumer (visible
-    // tracking, mounts, repaints) works in real coordinates again.
-    viewportManager.setPreviewScale(1);
-    if (Math.abs(finalZoom - store.zoom) > 0.0005) {
-      // Single commit: setZoom's notify path does the one layout + render pass
-      this._previewBaseHeight = null;
-      this._previewBaseWidth = null;
-
-      // Robust focal page anchoring to prevent page jumps:
-      const anchorPageIndex = store.activePageIndex;
-      const viewH = this._scrollContainer.clientHeight;
-      const viewW = this._scrollContainer.clientWidth;
-      const centerScrollerY = this._scrollContainer.scrollTop + viewH / 2;
-      const centerScrollerX = this._scrollContainer.scrollLeft + viewW / 2;
-      const oldLayout = viewportManager.getLayout(anchorPageIndex);
-      let relY = 0.5;
-      let relX = 0.5;
-      if (oldLayout && oldLayout.height > 0 && oldLayout.width > 0) {
-        relY = Math.max(0, Math.min(1, (centerScrollerY - oldLayout.top) / oldLayout.height));
-        relX = Math.max(0, Math.min(1, (centerScrollerX - oldLayout.left) / oldLayout.width));
-      }
-
-      store.beginZoomAdjust();
-      try {
-        store.setZoom(finalZoom);
-        const newLayout = viewportManager.getLayout(anchorPageIndex);
-        if (newLayout) {
-          this._scrollContainer.scrollTop = Math.max(0, newLayout.top + relY * newLayout.height - viewH / 2);
-          this._scrollContainer.scrollLeft = Math.max(0, newLayout.left + relX * newLayout.width - viewW / 2);
-        }
-      } finally {
-        store.endZoomAdjust();
-      }
-      viewportManager.handleScroll(true);
-    } else {
-      // Net-zero gesture: restore the unscaled box, then one clean pass so
-      // preview-era mounts settle (no eviction happened mid-preview by design).
-      if (this._previewBaseHeight) {
-        this._pagesWrapper.style.height = `${Math.max(1, Math.floor(this._previewBaseHeight))}px`;
-      }
-      if (this._previewBaseWidth) {
-        this._pagesWrapper.style.width = `${Math.max(1, Math.floor(this._previewBaseWidth))}px`;
-      }
-      this._previewBaseHeight = null;
-      this._previewBaseWidth = null;
-      viewportManager.handleScroll(true);
     }
   }
 
@@ -999,27 +887,10 @@ class VeditorApp {
   private zoomAtPoint(factor: number, client: { x: number; y: number }): void {
     if (!store.activeDocument) return;
     if (!Number.isFinite(factor) || factor <= 0) return;
-    if (this._zoomPreviewActive) this.commitZoomPreview();
-    const oldZoom = store.zoom;
-    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldZoom * factor));
-    if (Math.abs(newZoom - oldZoom) < 0.0005) return;
+    this.commitZoomPreview();
+    if (pointerHandler.isPointerDown || this._handPan) return;
     const rect = this._scrollContainer.getBoundingClientRect();
-    const fx = client.x - rect.left;
-    const fy = client.y - rect.top;
-    const ratio = newZoom / oldZoom;
-    // Precompute the anchored scroll BEFORE setZoom: the layout pass inside
-    // setZoom is suppressed, so only one mount pass happens after correction.
-    const targetLeft = (this._scrollContainer.scrollLeft + fx) * ratio - fx;
-    const targetTop = (this._scrollContainer.scrollTop + fy) * ratio - fy;
-    store.beginZoomAdjust();
-    try {
-      store.setZoom(newZoom);
-      this._scrollContainer.scrollLeft = targetLeft;
-      this._scrollContainer.scrollTop = targetTop;
-    } finally {
-      store.endZoomAdjust();
-    }
-    viewportManager.handleScroll(true);
+    viewportManager.zoomByFactor(factor, { x: client.x - rect.left, y: client.y - rect.top });
   }
 
   private setupZoomAndNavigation() {
@@ -1088,7 +959,8 @@ class VeditorApp {
         if (d < minDistance) minDistance = d;
       }
 
-      if (!this._zoomPreviewActive && minDistance > maxKeepDistance) {
+      if (minDistance > maxKeepDistance && p.scratchCanvas !== this._handPan?.canvas &&
+          !(pointerHandler.isPointerDown && pageIndex === store.activePageIndex)) {
         pdfEngine.cancelPageRender(pageIndex);
         // Explicitly collapse backing stores to 1x1 to release VRAM buffers immediately
         p.pdfCanvas.width = 1; p.pdfCanvas.height = 1;
@@ -1230,7 +1102,7 @@ class VeditorApp {
     const dpr = clampRenderMultiplier(
       layout.width,
       layout.height,
-      resolveRenderDpr(store.appSettings.targetDPI)
+      resolveAnnotationDpr(store.appSettings.targetDPI)
     );
     const rot = store.pageRotations[pageIndex] || 0;
     const geomKey = `${store.zoom.toFixed(4)}|${dpr.toFixed(4)}|${rot}`;
@@ -1292,7 +1164,7 @@ class VeditorApp {
   ) {
     const cssW = parseFloat(p.patternCanvas.style.width) || p.patternCanvas.width;
     const cssH = parseFloat(p.patternCanvas.style.height) || p.patternCanvas.height;
-    const dpr = clampRenderMultiplier(cssW, cssH, resolveRenderDpr(store.appSettings.targetDPI));
+    const dpr = clampRenderMultiplier(cssW, cssH, resolveAnnotationDpr(store.appSettings.targetDPI));
     const scale = store.zoom * dpr;
 
     // 1. Background paper pattern
@@ -1358,7 +1230,7 @@ class VeditorApp {
       // A pending zoom preview leaves the wrapper CSS-scaled, so page
       // coordinates derived from bounding rects would be wrong — flush the
       // real zoom first so draw / pan / marquee all start 1:1.
-      if (this._zoomPreviewActive) this.commitZoomPreview();
+      this.commitZoomPreview();
       // Two-finger touch takes over as pinch-zoom/pan: abort any in-progress
       // single-finger stroke so the gesture zooms the PDF and draws nothing.
       if (e.pointerType === 'touch') {
@@ -1393,14 +1265,6 @@ class VeditorApp {
         return;
       }
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      // Transform handles and the selected body take precedence over the hand
-      // tool. (The lasso tool handles this itself in PointerHandler.)
-      if (
-        store.activeTool === 'hand' &&
-        pointerHandler.isSelectionControlAt(e, pageIndex, canvas)
-      ) {
-        store.setActiveTool('select');
-      }
       // Hand tool: drag pans the page like a trackpad — never draws.
       if (store.activeTool === 'hand') {
         // Double-press quick-select. Detected manually on pointerdown because
@@ -1537,7 +1401,7 @@ class VeditorApp {
       e.preventDefault();
       const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
       if (finished) return;
-      if (store.activeTool === 'polygon') return;
+      if (store.activeTool !== 'hand' && store.activeTool !== 'zoom-lens') return;
       // The hand tool remains an efficient navigation mode, but double-click
       // is an intentional editing gesture. Pick the topmost unlocked item
       // directly rather than forwarding a synthetic pointer event (which
@@ -1566,7 +1430,7 @@ class VeditorApp {
       if (!store.activeDocument || pointerHandler.isPointerDown) return;
       // A pending zoom preview must settle first so hit-testing uses layout
       // coordinates rather than CSS-transformed visual coordinates.
-      if (this._zoomPreviewActive) this.commitZoomPreview();
+      this.commitZoomPreview();
       const handled = this._annotationMenu.handleCanvasContextMenu(e, {
         pageIndex,
         point: pointerHandler.pagePointForEvent(e, canvas),

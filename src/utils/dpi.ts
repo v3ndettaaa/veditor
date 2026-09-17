@@ -40,6 +40,10 @@ export function resolveRenderDpr(targetDPI?: number): number {
   return dpi / BASE_PDF_DPI;
 }
 
+export function resolveAnnotationDpr(targetDPI?: number): number {
+  return Math.max(2, getDevicePixelRatio(), resolveRenderDpr(targetDPI));
+}
+
 /**
  * Clamp a backing-store multiplier so neither canvas dimension exceeds
  * `MAX_RENDER_DIMENSION`. CSS size is unaffected; the browser upscales.

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   selectionManager,
   normalizeDragBox,
@@ -7,10 +7,17 @@ import {
   boxCenter,
   moveAnnotationsInZOrder,
   offsetAnnotation,
-  getAnnotationSelectionBox
+  getAnnotationSelectionBox,
+  getAnnotationEndpoints,
+  moveAnnotationEndpoint
 } from '../src/annotations/selection';
 import { store } from '../src/core/store';
-import { PenAnnotation, ShapeAnnotation } from '../src/core/types';
+import { PenAnnotation, ShapeAnnotation, Point } from '../src/core/types';
+import { history } from '../src/core/history';
+import { PointerHandler } from '../src/input/pointer-handler';
+import { computePointsBoundingBox } from '../src/utils/geometry';
+
+vi.mock('../src/ui/components/floating-props', () => ({ floatingPropsBar: null }));
 
 const pen = (id: string, x: number, y: number, w = 100, h = 40): PenAnnotation => ({
   id,
@@ -211,5 +218,65 @@ describe('Annotation clipboard and z-order helpers', () => {
     const annotations = [pen('a', 0, 0), pen('b', 10, 10), pen('c', 20, 20)];
     expect(moveAnnotationsInZOrder(annotations, ['a', 'c'], 'front').map(a => a.id)).toEqual(['b', 'a', 'c']);
     expect(moveAnnotationsInZOrder(annotations, ['b', 'c'], 'back').map(a => a.id)).toEqual(['b', 'c', 'a']);
+  });
+});
+
+describe('Line and arrow endpoint dragging', () => {
+  const line = (rotation = 0): ShapeAnnotation => ({
+    id: 'line',
+    pageIndex: 0,
+    layerId: 'default',
+    type: 'line',
+    points: [
+      { x: 10, y: 10 },
+      { x: 110, y: 60 }
+    ],
+    box: computePointsBoundingBox([
+      { x: 10, y: 10 },
+      { x: 110, y: 60 }
+    ], 2),
+    strokeColor: '#000',
+    strokeWidth: 2,
+    strokeStyle: 'solid',
+    outline: true,
+    opacity: 1,
+    rotation,
+    createdAt: 0,
+    updatedAt: 0
+  });
+
+  it('reports endpoints and hit-tests them before box handles', () => {
+    const ann = line();
+    expect(getAnnotationEndpoints(ann)).toEqual([{ x: 10, y: 10 }, { x: 110, y: 60 }]);
+    expect(getAnnotationEndpoints({ ...pen('p', 0, 0) } as any)).toBeNull();
+    expect(selectionManager.hitTestSelection({ x: 11, y: 11 }, [ann], 1)).toBe('start');
+    expect(selectionManager.hitTestSelection({ x: 109, y: 59 }, [ann], 1)).toBe('end');
+    expect(selectionManager.hitTestSelection({ x: 60, y: 35 }, [ann], 1)).toBe('body');
+    expect(selectionManager.hitTestSelection({ x: 11, y: 11 }, [{ ...ann, locked: true }], 1)).toBeNull();
+  });
+
+  it('moves only the dragged endpoint and recomputes the box', () => {
+    const next = moveAnnotationEndpoint(line(), 'end', { x: 200, y: 20 });
+    expect(next.points![0]).toEqual({ x: 10, y: 10 });
+    expect(next.points![1]).toEqual({ x: 200, y: 20 });
+    expect(next.box).toEqual(computePointsBoundingBox(next.points!, 2));
+    expect(next.updatedAt).toBeGreaterThan(0);
+  });
+
+  it('bakes rotation into page points when an endpoint moves', () => {
+    const rotated = line(Math.PI / 2);
+    const center = boxCenter(rotated.box);
+    const next = moveAnnotationEndpoint(rotated, 'start', { x: 5, y: 5 });
+    expect(next.rotation).toBe(0);
+    const expectedAnchor = rotatePoint(rotated.points![1], center, Math.PI / 2);
+    expect(next.points![0]).toEqual({ x: 5, y: 5 });
+    expect(next.points![1].x).toBeCloseTo(expectedAnchor.x, 8);
+    expect(next.points![1].y).toBeCloseTo(expectedAnchor.y, 8);
+  });
+
+  it('returns the annotation untouched when the target equals the endpoint', () => {
+    const ann = line();
+    const next = moveAnnotationEndpoint(ann, 'start', { x: 10, y: 10 });
+    expect(next).toBe(ann);
   });
 });

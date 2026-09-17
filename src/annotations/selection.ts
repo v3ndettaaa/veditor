@@ -3,7 +3,7 @@
  * Provides 8-handle transform box, rotation handle, marquee selection, and alignment utilities.
  */
 
-import { Point, BoundingBox, Annotation } from '../core/types';
+import { Point, BoundingBox, Annotation, ShapeAnnotation } from '../core/types';
 import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect, computePointsBoundingBox } from '../utils/geometry';
 
 /**
@@ -75,58 +75,37 @@ export function moveAnnotationsInZOrder<T extends Annotation>(
   return position === 'front' ? [...rest, ...selected] : [...selected, ...rest];
 }
 
-/**
- * Returns the selection box for an annotation: its bounding box, which enables
- * universal 8-handle resizing and rotation. Geometry-bearing annotations use
- * the AABB of their actual points (padded by half the stroke so handles sit
- * on the visible ink edge); the stored box may lag behind live drags, and a
- * stale-tight box made the selection frame clip the object.
- */
 export function getAnnotationSelectionBox(ann: Annotation): BoundingBox {
-  const value = ann as any;
-  const points: Point[] | undefined = Array.isArray(value.points) && value.points.length > 0 && !Array.isArray(value.points[0])
-    ? value.points
-    : undefined;
-  if (points && (ann.type === 'polygon' || ann.type === 'freeform-shape' || ann.type === 'line' || ann.type === 'arrow' ||
-    ann.type === 'pen' || ann.type === 'highlighter' || ann.type.startsWith('measure-'))) {
-    const pad = typeof value.strokeWidth === 'number' ? Math.max(0, value.strokeWidth) / 2 : 0;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of points) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-    if (Number.isFinite(minX) && Number.isFinite(minY)) {
-      return {
-        x: minX - pad,
-        y: minY - pad,
-        width: Math.max(1, maxX - minX + pad * 2),
-        height: Math.max(1, maxY - minY + pad * 2)
-      };
-    }
-  }
-  if (ann.type === 'pen' || ann.type === 'highlighter' || ann.type.startsWith('measure-') || ann.type === 'signature') {
-    return mergeStrokeBox(ann);
-  }
   return ann.box;
 }
 
-function mergeStrokeBox(ann: Annotation): BoundingBox {
-  const paths: Point[][] = [];
-  const value = ann as any;
-  if (Array.isArray(value.points)) {
-    if (Array.isArray(value.points[0])) paths.push(...value.points);
-    else paths.push(value.points);
-  }
-  if (ann.type === 'signature') {
-    if (typeof value.pngDataUrl === 'string' && value.pngDataUrl.length > 0) return ann.box;
-    if (Array.isArray(value.points) && value.points.length > 0 && Array.isArray(value.points[0])) {
-      paths.push(...value.points);
-    }
-  }
-  if (paths.length === 0) return ann.box;
-  return mergeBoundingBoxes(paths.map(computePointsBoundingBox));
+export function getAnnotationEndpoints(ann: Annotation): [Point, Point] | null {
+  if ((ann.type !== 'line' && ann.type !== 'arrow') || !ann.points || ann.points.length < 2) return null;
+  const center = boxCenter(ann.box);
+  return [ann.points[0], ann.points[ann.points.length - 1]].map(
+    point => rotatePoint(point, center, ann.rotation || 0)
+  ) as [Point, Point];
+}
+
+export function moveAnnotationEndpoint(ann: ShapeAnnotation, handle: 'start' | 'end', target: Point): ShapeAnnotation {
+  const endpoints = getAnnotationEndpoints(ann);
+  if (!endpoints || !ann.points) return ann;
+  const index = handle === 'start' ? 0 : ann.points.length - 1;
+  const endpoint = endpoints[handle === 'start' ? 0 : 1];
+  if (distance(endpoint, target) < 1e-9) return ann;
+  const center = boxCenter(ann.box);
+  const rotation = ann.rotation || 0;
+  const points = ann.points.map((point, i) => ({
+    ...point,
+    ...(i === index ? { x: target.x, y: target.y } : rotatePoint(point, center, rotation))
+  }));
+  return {
+    ...ann,
+    points,
+    box: computePointsBoundingBox(points, ann.strokeWidth),
+    rotation: 0,
+    updatedAt: Date.now()
+  };
 }
 
 export interface BoxTransform {
@@ -184,11 +163,29 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   return next as T;
 }
 
-export type HandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rot' | 'body' | null;
+export type HandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rot' | 'body' | 'start' | 'end' | null;
 
 export class SelectionManager {
   private _handleSize = 8;
   private _rotHandleDistance = 24;
+
+  public hitTestSelection(point: Point, annotations: Annotation[], scale: number = 1.0): HandleType {
+    if (annotations.length === 0 || annotations.some(ann => ann.locked)) return null;
+    const endpoints = annotations.length === 1 ? getAnnotationEndpoints(annotations[0]) : null;
+    if (endpoints) {
+      const startDistance = distance(point, endpoints[0]);
+      const endDistance = distance(point, endpoints[1]);
+      if (Math.min(startDistance, endDistance) <= 10 / scale) {
+        return startDistance <= endDistance ? 'start' : 'end';
+      }
+    }
+    return this.hitTestHandles(
+      point,
+      mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox)),
+      scale,
+      annotations.length === 1 ? annotations[0].rotation || 0 : 0
+    );
+  }
 
   /**
    * Hit tests a point against the active selection's bounding box and handles.
@@ -414,6 +411,24 @@ export class SelectionManager {
       scale,
       rotation
     );
+    const endpoints = annotations.length === 1 && !annotations[0].locked
+      ? getAnnotationEndpoints(annotations[0])
+      : null;
+    if (endpoints) {
+      ctx.save();
+      ctx.scale(scale, scale);
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.8 / scale;
+      for (const point of endpoints) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5 / scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   /**

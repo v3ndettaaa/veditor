@@ -122,8 +122,8 @@ export class ViewportManager {
         const page = doc.pages[i];
         const { width: baseW, height: baseH } = rotatedPageSize(page, store.pageRotations[i] || 0);
 
-        const scaledW = Math.floor(baseW * zoom);
-        const scaledH = Math.floor(baseH * zoom);
+        const scaledW = baseW * zoom;
+        const scaledH = baseH * zoom;
         if (scaledW + 40 > maxContentWidth) {
           maxContentWidth = scaledW + 40;
         }
@@ -149,8 +149,8 @@ export class ViewportManager {
       const page = doc.pages[activeIdx];
       const { width: baseW, height: baseH } = rotatedPageSize(page, store.pageRotations[activeIdx] || 0);
 
-      const scaledW = Math.floor(baseW * zoom);
-      const scaledH = Math.floor(baseH * zoom);
+      const scaledW = baseW * zoom;
+      const scaledH = baseH * zoom;
       maxContentWidth = Math.max(containerWidth, scaledW + 40);
       const left = Math.max(20, Math.floor((containerWidth - scaledW) / 2));
 
@@ -173,12 +173,12 @@ export class ViewportManager {
         const page2 = i + 1 < doc.pages.length ? doc.pages[i + 1] : null;
 
         const s1 = rotatedPageSize(page1, store.pageRotations[i] || 0);
-        const w1 = Math.floor(s1.width * zoom);
-        const h1 = Math.floor(s1.height * zoom);
+        const w1 = s1.width * zoom;
+        const h1 = s1.height * zoom;
 
         const s2 = page2 ? rotatedPageSize(page2, store.pageRotations[i + 1] || 0) : null;
-        const w2 = s2 ? Math.floor(s2.width * zoom) : 0;
-        const h2 = s2 ? Math.floor(s2.height * zoom) : 0;
+        const w2 = s2 ? s2.width * zoom : 0;
+        const h2 = s2 ? s2.height * zoom : 0;
 
         const rowW = w1 + (page2 ? w2 + 16 : 0);
         const rowH = Math.max(h1, h2);
@@ -336,29 +336,47 @@ export class ViewportManager {
   }
 
   /**
-   * Zooms by `factor` anchored to the viewport's own center, so the content
-   * the user is actually looking at stays put instead of drifting toward
-   * whatever happens to be at the scroll container's top-left — the bug
-   * behind zoom +/− (toolbar buttons and Ctrl+/Ctrl−) appearing to "jump" to
-   * an unrelated page. Mirrors the scroll-compensation `zoomAtPoint` already
-   * does for click/wheel zoom, just anchored at the center instead of a
-   * pointer position.
+   * Zooms by `factor` anchored to an optional focal point in scroller-space
+   * (defaults to the viewport center), so the content the user is actually
+   * looking at stays put instead of drifting toward the scroll container's
+   * top-left. Mirrors the scroll-compensation `zoomAtPoint` in main.ts, just
+   * with a center default.
    */
-  public zoomByFactor(factor: number): void {
-    if (!this._scrollContainer || !Number.isFinite(factor) || factor <= 0) return;
+  public zoomByFactor(factor: number, focal?: { x: number; y: number }): void {
+    if (!this._scrollContainer || !store.activeDocument || !Number.isFinite(factor) || factor <= 0) return;
     const oldZoom = store.zoom;
     const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldZoom * factor));
-    if (Math.abs(newZoom - oldZoom) < 0.0005) return;
-    const ratio = newZoom / oldZoom;
-    const cx = this._scrollContainer.clientWidth / 2;
-    const cy = this._scrollContainer.clientHeight / 2;
-    const targetLeft = (this._scrollContainer.scrollLeft + cx) * ratio - cx;
-    const targetTop = (this._scrollContainer.scrollTop + cy) * ratio - cy;
+    if (newZoom === oldZoom) return;
+    const cx = focal ? focal.x : this._scrollContainer.clientWidth / 2;
+    const cy = focal ? focal.y : this._scrollContainer.clientHeight / 2;
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
+    const contentX = this._scrollContainer.scrollLeft + cx;
+    const contentY = this._scrollContainer.scrollTop + cy;
+    let anchor: ViewportPageRect | undefined;
+    let nearestDistance = Infinity;
+    for (const layout of this._pageLayouts) {
+      if (layout.width <= 0 || layout.height <= 0) continue;
+      const dx = Math.max(layout.left - contentX, 0, contentX - layout.left - layout.width);
+      const dy = Math.max(layout.top - contentY, 0, contentY - layout.top - layout.height);
+      const distance = dx * dx + dy * dy;
+      if (distance < nearestDistance) {
+        anchor = layout;
+        nearestDistance = distance;
+      }
+    }
+    if (!anchor) return;
+    const offsetX = (contentX - anchor.left) / anchor.width;
+    const offsetY = (contentY - anchor.top) / anchor.height;
+    const oldLayouts = this._pageLayouts;
     store.beginZoomAdjust();
     try {
       store.setZoom(newZoom);
-      this._scrollContainer.scrollLeft = targetLeft;
-      this._scrollContainer.scrollTop = targetTop;
+      if (this._pageLayouts === oldLayouts) this.updateLayout();
+      const layout = this.getLayout(anchor.pageIndex);
+      if (layout) {
+        this._scrollContainer.scrollLeft = layout.left + offsetX * layout.width - cx;
+        this._scrollContainer.scrollTop = layout.top + offsetY * layout.height - cy;
+      }
     } finally {
       store.endZoomAdjust();
     }
