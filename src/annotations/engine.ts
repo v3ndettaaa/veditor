@@ -15,9 +15,9 @@ export function shapeHasOutline(ann: Pick<ShapeAnnotation, 'type' | 'outline'>):
   return ann.outline !== false;
 }
 import { store } from '../core/store';
-import { traceRoundedPolygon } from '../utils/geometry';
+import { traceRoundedPolygon, fillLineRibbon } from '../utils/geometry';
 
-/** Default fillet radius (page pt) for shape corners; ~“a little radius”. */
+/** Default fillet radius (page pt) for shape corners; ~”a little radius”. */
 export const SHAPE_CORNER_RADIUS = 0.75;
 import { renderSmoothStroke } from './spline';
 import { textTool } from './tools/text';
@@ -257,6 +257,7 @@ export class AnnotationEngine {
   private renderShapeAnnotation(ctx: CanvasRenderingContext2D, ann: any, scale: number) {
     ctx.save();
     ctx.scale(scale, scale);
+    ctx.imageSmoothingEnabled = true;
 
     ctx.strokeStyle = ann.strokeColor;
     ctx.fillStyle = ann.fillColor || 'transparent';
@@ -322,16 +323,21 @@ export class AnnotationEngine {
       // Supports connected multi-point polylines (see "Connect Lines"), not
       // just two-point segments.
       const pts = ann.points;
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.stroke();
+      const w = ann.strokeWidth;
+      // Render the shaft as a filled ribbon instead of stroking. A filled
+      // outline gets proper coverage anti-aliasing from the rasteriser, unlike
+      // a thin stroked polyline which aliases badly on diagonal segments.
+      for (let i = 0; i < pts.length - 1; i++) {
+        fillLineRibbon(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+      }
 
       if (ann.type === 'arrow') {
         const prev = pts[pts.length - 2];
         const tip = pts[pts.length - 1];
-        const headLen = Math.max(12, ann.strokeWidth * 4);
+        const headLen = Math.max(12, w * 4);
         const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
+        // Fill the arrowhead as a closed polygon matching the ribbon cap so
+        // the head blends seamlessly with the anti-aliased shaft.
         ctx.beginPath();
         ctx.moveTo(tip.x, tip.y);
         ctx.lineTo(

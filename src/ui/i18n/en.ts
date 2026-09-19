@@ -12,7 +12,6 @@ export const en = {
     select: 'Select & Transform (V)',
     lasso: 'Lasso Select (Q)',
     hand: 'Hand — drag to pan (hold Space)',
-    zoomLens: 'Zoom to selection (drag a region)',
     pen: 'Freehand Pen (P)',
     highlighter: 'Highlighter (H)',
     eraser: 'Eraser (E)',

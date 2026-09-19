@@ -43,14 +43,6 @@ class StateStore {
 
   // Navigation & Viewport State
   private _zoom: number = 1.0;
-  /**
-   * Zoom-lens state: while non-null, the user is inside a marquee zoom that
-   * started at `baseZoom`. Creation widths are divided by
-   * (zoom / baseZoom) so tools feel identical on screen; exiting restores
-   * `baseZoom`, which shrinks lens-drawn content proportionally.
-   * Session-only, never persisted.
-   */
-  private _zoomLensBase: number | null = null;
   private _viewMode: ViewMode = 'continuous';
   private _activePageIndex: number = 0;
   /** Per-document user rotations: docId -> (pageIndex -> degrees). */
@@ -260,13 +252,6 @@ class StateStore {
   get documentTabs() { return this._documentTabs; }
   get openDocuments() { return this._openDocuments; }
   get zoom() { return this._zoom; }
-  get zoomLensActive() { return this._zoomLensBase !== null; }
-  get zoomLensBase() { return this._zoomLensBase; }
-  /** Width compensation factor while the lens is active (1 when off). */
-  get zoomLensFactor() {
-    if (this._zoomLensBase === null || this._zoomLensBase <= 0) return 1;
-    return this._zoom / this._zoomLensBase;
-  }
   get viewMode() { return this._viewMode; }
   get activePageIndex() { return this._activePageIndex; }
   /** Rotations for the currently active document (empty when none). */
@@ -409,22 +394,6 @@ class StateStore {
       this._zoom = clamped;
       this.notify();
     }
-  }
-
-  /**
-   * Records the pre-lens zoom. Silent on purpose: the caller commits the real
-   * zoom right after, which notifies once for the whole gesture.
-   */
-  public enterZoomLens(baseZoom: number) {
-    this._zoomLensBase = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, baseZoom));
-  }
-
-  /** Leaves the lens, restoring the pre-lens zoom in a single update. */
-  public exitZoomLens() {
-    if (this._zoomLensBase === null) return;
-    const base = this._zoomLensBase;
-    this._zoomLensBase = null;
-    this.setZoom(base);
   }
 
   public setViewMode(mode: ViewMode) {

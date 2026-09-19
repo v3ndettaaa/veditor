@@ -7,7 +7,6 @@
 |---|---|---|
 | `V` | **Select Tool** | Select, move, resize, rotate, or align annotations |
 | `Space` (hold) | **Hand Tool** | Drag to pan the page like a trackpad; release to return to the previous tool |
-| *(toolbar)* | **Zoom to Selection** | Drag a region to zoom into it; widths stay visually constant while zoomed; `Esc` exits and restores zoom |
 | `P` | **Freehand Pen** | Pressure-sensitive ink pen with Catmull-Rom spline smoothing |
 | `H` | **Highlighter** | Translucent marker with Multiply blend mode |
 | `E` | **Eraser** | Smart eraser (Stroke, Object, and Pixel modes) |

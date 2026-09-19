@@ -13,8 +13,6 @@ export class ViewControlsComponent {
   private _container: HTMLElement;
   private _invertDocument: boolean = false;
   private _isInitialized: boolean = false;
-  /** Lens state the current DOM was built for (chip visibility). */
-  private _lensActiveRendered: boolean = false;
   /** Collapsed state the current DOM was built for. */
   private _collapsedRendered: boolean = false;
   /** Document the bound listeners / clamped totals belong to. */
@@ -84,7 +82,6 @@ export class ViewControlsComponent {
       });
       this._isInitialized = true;
       this._collapsedRendered = true;
-      this._lensActiveRendered = store.zoomLensActive;
       this._boundDocId = doc.id;
       return;
     }
@@ -92,8 +89,7 @@ export class ViewControlsComponent {
 
     // If already initialized in DOM, update selectively to avoid interrupting active user typing
     if (this._isInitialized && this._collapsedRendered === false &&
-        this._container.querySelector('#view-page-input') &&
-        this._lensActiveRendered === store.zoomLensActive) {
+        this._container.querySelector('#view-page-input')) {
       this.updateState(currentPage, totalPages, zoomPct, currentRot);
       return;
     }
@@ -159,12 +155,6 @@ export class ViewControlsComponent {
         ${getIconSvg('zoomIn', 15)}
       </button>
 
-      ${store.zoomLensActive ? `
-        <button id="view-exit-lens" class="view-btn active" title="Exit zoom and restore ${Math.round((store.zoomLensBase ?? store.zoom) * 100)}% (Esc)">
-          ${getIconSvg('zoomOut', 15)}
-        </button>
-      ` : ''}
-
       <div class="toolbar-separator" style="height:16px;"></div>
 
       <button id="view-fit-width" class="view-btn" title="${t('view.fitWidth')} (0)">
@@ -205,7 +195,6 @@ export class ViewControlsComponent {
     this.bindEvents();
     this._isInitialized = true;
     this._boundDocId = doc.id;
-    this._lensActiveRendered = store.zoomLensActive;
   }
 
   private updateState(currentPage: number, totalPages: number, zoomPct: number, currentRot: number): void {
@@ -380,10 +369,6 @@ export class ViewControlsComponent {
 
     this._container.querySelector('#view-zoom-out')?.addEventListener('click', () => {
       viewportManager.zoomByFactor(1 / 1.15);
-    });
-
-    this._container.querySelector('#view-exit-lens')?.addEventListener('click', () => {
-      store.exitZoomLens();
     });
 
     this._container.querySelector('#view-fit-width')?.addEventListener('click', () => {

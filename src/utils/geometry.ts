@@ -100,6 +100,32 @@ export function computePointsBoundingBox(points: Point[], padding = 0): Bounding
   };
 }
 
+/** Fills a filled-outline ribbon for a line segment with round caps. */
+export function fillLineRibbon(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, width: number): void {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.001) return;
+  const nx = -dy / len * width / 2;
+  const ny = dx / len * width / 2;
+
+  ctx.beginPath();
+  ctx.moveTo(x1 + nx, y1 + ny);
+  ctx.lineTo(x2 + nx, y2 + ny);
+  ctx.lineTo(x2 - nx, y2 - ny);
+  ctx.lineTo(x1 - nx, y1 - ny);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(x1, y1, width / 2, Math.atan2(ny, nx), Math.atan2(-ny, -nx));
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(x2, y2, width / 2, Math.atan2(-ny, -nx), Math.atan2(ny, nx));
+  ctx.fill();
+}
+
 export function isPointInBox(p: Point, box: BoundingBox): boolean {
   if (box.rotation) {
     // Rotate point back by -rotation around box center

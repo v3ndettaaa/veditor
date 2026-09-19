@@ -112,8 +112,6 @@ class VeditorApp {
   } | null = null;
   /** Tool to restore when a held Space (temporary hand) is released. */
   private _spacePrevTool: ToolType | null = null;
-  /** Tool to restore when the zoom tool is toggled off. */
-  private _prevToolBeforeZoom: ToolType = 'select';
   /** Last hand-tool press, for manual double-press quick-select detection. */
   private _lastHandTap: { time: number; x: number; y: number } | null = null;
   private _annotationMenu = new AnnotationContextMenu();
@@ -155,8 +153,7 @@ class VeditorApp {
       () => this.openAddTabLanding()
     );
     new ToolbarComponent(
-      document.getElementById('app-floating-toolbar') as HTMLElement,
-      () => this.toggleZoomTool()
+      document.getElementById('app-floating-toolbar') as HTMLElement
     );
     new SidePanelsComponent(document.getElementById('app-sidebar') as HTMLElement);
     new PropertiesPanelComponent(document.getElementById('app-properties-panel') as HTMLElement);
@@ -902,45 +899,6 @@ class VeditorApp {
     viewportManager.zoomByFactor(factor, { x: client.x - rect.left, y: client.y - rect.top });
   }
 
-  /**
-   * Toggles the zoom tool: hitting it zooms in; hitting it again zooms out to
-   * fit-width (anchored to viewport center) and deselects back to the prior tool.
-   */
-  public toggleZoomTool(): { step: string; tool: ToolType; zoom: number } {
-    if (!store.activeDocument) return { step: 'no-doc', tool: store.activeTool, zoom: store.zoom };
-    this.commitZoomPreview();
-    if (pointerHandler.isPointerDown || this._handPan) {
-      return { step: 'pointer-down-or-hand-pan', tool: store.activeTool, zoom: store.zoom };
-    }
-
-    if (store.activeTool === 'zoom-lens') {
-      // Re-hit: zoom out to fit-width anchored to center, then restore prior tool
-      viewportManager.fitToWidth();
-      const returnTool = this._prevToolBeforeZoom && this._prevToolBeforeZoom !== 'zoom-lens'
-        ? this._prevToolBeforeZoom
-        : 'select';
-      store.setActiveTool(returnTool);
-      if (store.zoomLensActive) {
-        store.exitZoomLens();
-      }
-      return { step: 'zoom-out', tool: store.activeTool, zoom: store.zoom };
-    } else {
-      // First hit: latch prior tool, activate zoom-lens, and zoom in centered
-      this._prevToolBeforeZoom = store.activeTool;
-      store.setActiveTool('zoom-lens');
-      const doc = store.activeDocument;
-      const activePage = doc.pages[store.activePageIndex || 0] || doc.pages[0];
-      const { width: baseW } = rotatedPageSize(activePage, store.pageRotations[store.activePageIndex || 0] || 0);
-      const containerW = this._scrollContainer.clientWidth - 64;
-      const fitWidthZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, containerW / baseW));
-      const targetZoom = store.zoom <= fitWidthZoom + 0.05
-        ? Math.max(2.0, fitWidthZoom * 1.5)
-        : store.zoom * 1.5;
-      viewportManager.zoomByFactor(targetZoom / store.zoom);
-      return { step: 'zoom-in', tool: store.activeTool, zoom: store.zoom };
-    }
-  }
-
   private setupZoomAndNavigation() {
     // Wheel zoom: Ctrl + Wheel (or trackpad pinch to zoom). Feeds the lag-free
     // preview; the real zoom commits once the gesture pauses.
@@ -1414,7 +1372,7 @@ class VeditorApp {
       try {
         canvas.releasePointerCapture(e.pointerId);
       } catch (_) {}
-      pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint, (pi, r) => this.zoomToRect(pi, r));
+      pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint);
       // A notebook grows once the stroke is committed, so there is always
       // blank paper below what you just wrote.
       void notebookController.autoExtend(pageIndex);
@@ -1449,7 +1407,7 @@ class VeditorApp {
       e.preventDefault();
       const finished = pointerHandler.finishPolygon(pageIndex, 'layer-default', onRepaint);
       if (finished) return;
-      if (store.activeTool !== 'hand' && store.activeTool !== 'zoom-lens') return;
+      if (store.activeTool !== 'hand') return;
       // The hand tool remains an efficient navigation mode, but double-click
       // is an intentional editing gesture. Pick the topmost unlocked item
       // directly rather than forwarding a synthetic pointer event (which
@@ -1508,9 +1466,7 @@ class VeditorApp {
   }
 
   /**
-   * Zooms the view to fit a marquee-selected region and enters the zoom lens:
-   * the pre-lens zoom is remembered so creation widths can be compensated
-   * (tools feel identical on screen) and exiting restores it.
+   * Zooms the view to fit a marquee-selected region.
    */
   public zoomToRect(pageIndex: number, rect: { x: number; y: number; width: number; height: number }): void {
     const doc = store.activeDocument;
@@ -1522,7 +1478,6 @@ class VeditorApp {
     const rectH = Math.max(8, rect.height * store.zoom);
     const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, store.zoom * Math.min(availW / rectW, availH / rectH)));
 
-    if (!store.zoomLensActive) store.enterZoomLens(store.zoom);
     // Suppress the intermediate pass: layout rebuilds under the guard, then
     // one anchored mount pass runs after the correction below.
     store.beginZoomAdjust();
@@ -1681,13 +1636,8 @@ class VeditorApp {
           return;
         }
       } else if (e.key === 'Escape') {
-        // Mid-drag marquee/lasso first, then an active lens, then polygons/selection.
-        if (pointerHandler.cancelZoomMarquee()) return;
+        // Mid-drag marquee/lasso first, then polygons/selection.
         if (pointerHandler.cancelLasso()) { this.repaintAllRenderedAnnotations(); return; }
-        if (store.zoomLensActive) {
-          store.exitZoomLens();
-          return;
-        }
         pointerHandler.cancelPolygon();
         store.clearSelection();
         this.repaintAllRenderedAnnotations();

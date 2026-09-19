@@ -30,7 +30,7 @@ export class ShortcutsModalComponent {
           { key: 'Q', desc: 'Lasso select' },
           { key: 'Alt + drag', desc: 'Lasso select from any tool' },
           { key: 'Space (hold)', desc: 'Hand — drag to pan' },
-          { key: 'Esc', desc: 'Exit zoom lens / cancel marquee' },
+          { key: 'Esc', desc: 'Cancel marquee / close dialog' },
           { key: 'P', desc: 'Freehand pen' },
           { key: 'H', desc: 'Highlighter' },
           { key: 'E', desc: 'Eraser' },

@@ -58,10 +58,7 @@ export class PointerHandler {
    * feedback; pointer-up commits ONE undo step for the whole drag.
    */
   private _eraserSession: { pageIndex: number; original: Annotation[] } | null = null;
-  /** Zoom-lens marquee drag corners, in page coordinates. */
-  private _zoomMarqueeStart: Point | null = null;
-  private _zoomMarqueeCurrent: Point | null = null;
-  /**
+    /**
    * Selection drag: moving the selection body or resizing via a transform
    * handle. Mutates live (like the eraser) and commits ONE undo step.
    */
@@ -97,14 +94,9 @@ export class PointerHandler {
   private static readonly HOLD_RADIUS = 8;
   private static readonly HOLD_MIN_SIZE = 12;
 
-  /**
-   * Lens width compensation: while a zoom-lens is active, creation widths are
-   * divided by (zoom / baseZoom) so tools feel identical on screen. Stored
-   * data stays in PDF points, so exiting the lens shrinks the content.
-   */
+  /** Returns the base width unchanged (zoom-lens compensation removed). */
   private lensWidth(base: number): number {
-    const f = store.zoomLensFactor;
-    return f !== 1 ? base / f : base;
+    return base;
   }
 
   /**
@@ -434,17 +426,12 @@ export class PointerHandler {
     const defaultLayerId = 'layer-default';
 
     switch (tool) {
-      case 'zoom-lens':
-        this._zoomMarqueeStart = { x: pt.x, y: pt.y };
-        this._zoomMarqueeCurrent = { x: pt.x, y: pt.y };
-        break;
-
       case 'pen': {
         penTool.start(
           pt,
           pageIndex,
           tSettings.penColor,
-          this.lensWidth(tSettings.penWidth),
+          tSettings.penWidth,
           tSettings.pressureCurve,
           tSettings.pressureSensitivityEnabled !== false,
           tSettings.pressureStrength || 'balanced',
@@ -459,7 +446,7 @@ export class PointerHandler {
           pt,
           pageIndex,
           tSettings.highlighterColor,
-          this.lensWidth(tSettings.highlighterWidth),
+          tSettings.highlighterWidth,
           tSettings.highlighterBlendMode,
           tSettings.highlighterStraightLine,
           tSettings.highlighterTipShape,
@@ -469,7 +456,7 @@ export class PointerHandler {
       }
 
       case 'eraser': {
-        eraserTool.start(pt, this.lensWidth(tSettings.eraserWidth) / 2, tSettings.eraserMode);
+        eraserTool.start(pt, tSettings.eraserWidth / 2, tSettings.eraserMode);
         this.beginEraserSession(pageIndex);
         this.applyEraserDirect([pt], pageIndex);
         onNeedRepaint();
@@ -557,18 +544,6 @@ export class PointerHandler {
 
       case 'stamp':
         const stampBase = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
-        // Fixed-size stamps must shrink in page units while lens-zoomed so
-        // they land at the same on-screen size.
-        if (store.zoomLensFactor !== 1) {
-          const f = store.zoomLensFactor;
-          stampBase.box = {
-            ...stampBase.box,
-            x: pt.x - stampBase.box.width / 2 / f,
-            y: pt.y - stampBase.box.height / 2 / f,
-            width: stampBase.box.width / f,
-            height: stampBase.box.height / f
-          };
-        }
         history.execute(new AddAnnotationCommand(pageIndex, stampBase));
         store.setActiveTool('select');
         this.selectCreatedAnnotation(stampBase.id);
@@ -785,11 +760,6 @@ export class PointerHandler {
         break;
       }
 
-      case 'zoom-lens':
-        this._zoomMarqueeCurrent = { ...lastPt };
-        this.renderZoomMarquee(ctx, renderScale);
-        break;
-
       case 'pen':
         for (const pt of pts) penTool.move(pt);
         // Draw-and-hold: moving past the hold radius restarts (or cancels a
@@ -865,42 +835,13 @@ export class PointerHandler {
     _e: PointerEvent,
     pageIndex: number,
     scratchCanvas: HTMLCanvasElement,
-    onNeedRepaint: () => void,
-    onZoomLens?: (pageIndex: number, rect: { x: number; y: number; width: number; height: number }) => void
+    onNeedRepaint: () => void
   ): void {
     if (!this._isPointerDown || this._activePageIndex !== pageIndex) return;
 
     this._isPointerDown = false;
     const tool = this._strokeTool ?? store.activeTool;
     const defaultLayerId = 'layer-default';
-
-    if (tool === 'zoom-lens') {
-      const s = this._zoomMarqueeStart;
-      const c = this._zoomMarqueeCurrent;
-      this._zoomMarqueeStart = null;
-      this._zoomMarqueeCurrent = null;
-      this._strokeTool = null;
-      if (s && c) {
-        const w = Math.abs(c.x - s.x);
-        const h = Math.abs(c.y - s.y);
-        // Tiny drags are clicks, not zooms.
-        if (w >= 8 && h >= 8) {
-          onZoomLens?.(pageIndex, {
-            x: Math.min(s.x, c.x),
-            y: Math.min(s.y, c.y),
-            width: w,
-            height: h
-          });
-        }
-      }
-      if (this._pageScratchCtx && this._pageScratchCanvas) {
-        this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
-      }
-      this._activePageIndex = -1;
-      this._pageScratchCanvas = null;
-      this._pageScratchCtx = null;
-      return;
-    }
 
     if (tool === 'polygon') {
       this._isPointerDown = false;
@@ -1078,22 +1019,6 @@ export class PointerHandler {
   public cancelLasso(): boolean {
     if (!this._lasso) return false;
     this._lasso = null;
-    if (this._pageScratchCtx && this._pageScratchCanvas) {
-      this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
-    }
-    this._isPointerDown = false;
-    this._strokeTool = null;
-    this._activePageIndex = -1;
-    this._pageScratchCanvas = null;
-    this._pageScratchCtx = null;
-    return true;
-  }
-
-  /** Aborts an in-progress zoom marquee without zooming. Returns true if one was active. */
-  public cancelZoomMarquee(): boolean {
-    if (!this._zoomMarqueeStart) return false;
-    this._zoomMarqueeStart = null;
-    this._zoomMarqueeCurrent = null;
     if (this._pageScratchCtx && this._pageScratchCanvas) {
       this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
     }
@@ -1300,27 +1225,6 @@ export class PointerHandler {
   /** Per-tool drawing option (Snap-15° / Connect-lines), defaulted off. */
   private toolOpt(tool: ToolType, key: ToolOptionKey): boolean {
     return store.toolOption(tool, key);
-  }
-
-  /** Renders the dashed marquee rect for the zoom-lens drag. */
-  private renderZoomMarquee(ctx: CanvasRenderingContext2D, scale: number): void {
-    const s = this._zoomMarqueeStart;
-    const c = this._zoomMarqueeCurrent;
-    if (!s || !c) return;
-    ctx.save();
-    ctx.scale(scale, scale);
-    const x = Math.min(s.x, c.x);
-    const y = Math.min(s.y, c.y);
-    const w = Math.abs(c.x - s.x);
-    const h = Math.abs(c.y - s.y);
-    ctx.fillStyle = 'rgba(99, 102, 241, 0.10)';
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#6366f1';
-    // Constant on-screen dash width regardless of zoom.
-    ctx.lineWidth = 1.5 / scale;
-    ctx.setLineDash([6 / scale, 4 / scale]);
-    ctx.strokeRect(x, y, w, h);
-    ctx.restore();
   }
 
   public cancelPolygon(): void {

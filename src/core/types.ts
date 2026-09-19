@@ -6,7 +6,6 @@ export type ToolType =
   | 'select'
   | 'lasso'
   | 'hand'
-  | 'zoom-lens'
   | 'pen'
   | 'highlighter'
   | 'eraser'
@@ -222,7 +221,7 @@ export const MAX_ZOOM = 8;
 
 /** Default toolbar button order (undo/redo stay pinned separately). */
 export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
-  'select', 'lasso', 'hand', 'zoom-lens',
+  'select', 'lasso', 'hand',
   'pen', 'highlighter', 'eraser',
   'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
   'text', 'stamp', 'measure-distance', 'signature', 'redaction', 'scratchpad'
@@ -230,7 +229,7 @@ export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
 
 /** Visual family per toolbar tool; separators render between families. */
 export function toolbarFamily(id: ToolType): string {
-  if (id === 'select' || id === 'lasso' || id === 'hand' || id === 'zoom-lens') return 'nav';
+  if (id === 'select' || id === 'lasso' || id === 'hand') return 'nav';
   if (id === 'pen' || id === 'highlighter' || id === 'eraser') return 'ink';
   if (id === 'rectangle' || id === 'ellipse' || id === 'line' || id === 'arrow' || id === 'polygon') return 'shapes';
   return 'annotate';

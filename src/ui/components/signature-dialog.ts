@@ -125,15 +125,6 @@ export class SignatureDialogComponent {
         this._strokes,
         '#0f172a'
       );
-      // Lens-zoomed signatures must shrink in page units to keep on-screen size.
-      if (store.zoomLensFactor !== 1) {
-        const f = store.zoomLensFactor;
-        sigAnn.box = {
-          ...sigAnn.box,
-          width: sigAnn.box.width / f,
-          height: sigAnn.box.height / f
-        };
-      }
 
       history.execute(new AddAnnotationCommand(pageIndex, sigAnn));
       store.selectAnnotation(sigAnn.id);

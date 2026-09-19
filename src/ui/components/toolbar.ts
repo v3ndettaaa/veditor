@@ -15,7 +15,6 @@ import { ToolType, EraserMode, toolbarFamily, ToolbarDock, classifyToolbarDock, 
 export const TOOL_SHORT_LABELS: Record<string, string> = {
   select: 'Select',
   hand: 'Hand',
-  'zoom-lens': 'Zoom lens',
   pen: 'Pen',
   highlighter: 'Highlighter',
   eraser: 'Eraser',
@@ -93,7 +92,6 @@ function parseHexColor(raw: string): string | null {
 
 export class ToolbarComponent {
   private _container: HTMLElement;
-  private _onToggleZoomLens?: () => void;
   private _lastActiveTool: ToolType | null = null;
   private _lastCanUndo: boolean = false;
   private _lastCanRedo: boolean = false;
@@ -103,9 +101,8 @@ export class ToolbarComponent {
   private _lastDock: ToolbarDock | null = null;
   private _pinnedTool: string | null = null;
 
-  constructor(container: HTMLElement, onToggleZoomLens?: () => void) {
+  constructor(container: HTMLElement) {
     this._container = container;
-    this._onToggleZoomLens = onToggleZoomLens;
     store.subscribe(() => this.onStoreUpdate());
     this.render();
 
@@ -217,11 +214,6 @@ export class ToolbarComponent {
         <!-- Lasso Select Tool -->
         <button class="tool-btn ${activeTool === 'lasso' ? 'active' : ''}" data-tool="lasso" title="${t('tools.lasso')} (Q)">
           ${getIconSvg('lasso')}
-        </button>
-
-        <!-- Zoom-to-Selection Lens Tool -->
-        <button class="tool-btn ${activeTool === 'zoom-lens' ? 'active' : ''}" data-tool="zoom-lens" title="${t('tools.zoomLens')}" style="cursor:zoom-in;">
-          ${getIconSvg('zoomIn')}
         </button>
 
         <div class="toolbar-separator"></div>
@@ -946,17 +938,6 @@ export class ToolbarComponent {
       btn.addEventListener('click', (e) => {
         const tool = btn.getAttribute('data-tool') as ToolType;
         if (!tool) return;
-
-        if (tool === 'zoom-lens') {
-          if (this._onToggleZoomLens) {
-            this._onToggleZoomLens();
-            return;
-          }
-          if (store.activeTool === 'zoom-lens' && store.zoomLensActive) {
-            store.exitZoomLens();
-            return;
-          }
-        }
 
         store.setActiveTool(tool);
 

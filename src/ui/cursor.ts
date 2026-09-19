@@ -149,17 +149,11 @@ export function drawingCursorValue(
   if (tool === 'select') return 'default';
   // Hand pans the page instead of drawing.
   if (tool === 'hand') return 'grab';
-  // Zoom lens selects a region to magnify.
-  if (tool === 'zoom-lens') return 'zoom-in';
 
   const width = brushWidth(tool);
   if (width === null) return 'crosshair';
 
-  // While the zoom lens is active, creation widths are divided by
-  // zoom/baseZoom so tools feel identical on screen — the cursor must show
-  // the on-screen size (width * baseZoom), not width * zoom.
-  const effectiveZoom = store.zoomLensActive ? (store.zoomLensBase ?? zoom) : zoom;
-  const onScreen = width * effectiveZoom;
+  const onScreen = width * zoom;
 
   if (tool === 'highlighter') {
     const s = store.toolSettings;

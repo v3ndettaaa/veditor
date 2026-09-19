@@ -26,7 +26,6 @@ const TOOLBAR_ICONS: Record<string, string> = {
   select: 'select',
   lasso: 'lasso',
   hand: 'hand',
-  'zoom-lens': 'zoomIn',
   pen: 'pen',
   highlighter: 'highlighter',
   eraser: 'eraser',
