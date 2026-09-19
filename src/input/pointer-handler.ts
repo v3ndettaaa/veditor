@@ -94,11 +94,6 @@ export class PointerHandler {
   private static readonly HOLD_RADIUS = 8;
   private static readonly HOLD_MIN_SIZE = 12;
 
-  /** Returns the base width unchanged (zoom-lens compensation removed). */
-  private lensWidth(base: number): number {
-    return base;
-  }
-
   /**
    * Selects a newly created annotation while keeping transient panels closed.
    * Transform handles still appear; inspector/sidebar state is untouched.
@@ -280,7 +275,7 @@ export class PointerHandler {
     const renderScale = store.zoom * this.renderDpr();
     const rawPts: StrokePoint[] = penTool.getActivePoints().map(p => ({ ...p }));
     const rawColor = store.toolSettings.penColor;
-    const rawWidth = this.lensWidth(store.toolSettings.penWidth);
+    const rawWidth = store.toolSettings.penWidth;
     // The fading ink has to reproduce the live stroke exactly — same pressure
     // model — or the ribbon visibly changes width the instant the hold fires.
     const rawCurve = store.toolSettings.pressureCurve;
@@ -351,7 +346,7 @@ export class PointerHandler {
    */
   private buildHoldShapeAnnotation(fit: FittedShape, pageIndex: number, layerId: string): ShapeAnnotation | null {
     const s = store.toolSettings;
-    const strokeWidth = this.lensWidth(s.penWidth);
+    const strokeWidth = s.penWidth;
     const base = {
       id: Math.random().toString(36).substring(2, 9),
       pageIndex,
@@ -496,7 +491,7 @@ export class PointerHandler {
           'polygon',
           tSettings.shapeColor,
           tSettings.shapeFillColor,
-          this.lensWidth(tSettings.shapeWidth),
+          tSettings.shapeWidth,
           tSettings.shapeStyle,
           tSettings.shapeOutline !== false
         );
@@ -516,7 +511,7 @@ export class PointerHandler {
           tool,
           tSettings.shapeColor,
           tSettings.shapeFillColor,
-          this.lensWidth(tSettings.shapeWidth),
+          tSettings.shapeWidth,
           tSettings.shapeStyle,
           tSettings.shapeOutline !== false
         );
@@ -529,7 +524,7 @@ export class PointerHandler {
           pageIndex,
           defaultLayerId,
           'Double click to edit text',
-          this.lensWidth(tSettings.fontSize),
+          tSettings.fontSize,
           tSettings.fontFamily,
           tSettings.textColor,
           tSettings.textBgColor,
@@ -1325,8 +1320,6 @@ export class PointerHandler {
       eraserTool.finish();
       this.commitEraserSession(this._eraserSession.pageIndex);
     } else {
-      this._zoomMarqueeStart = null;
-      this._zoomMarqueeCurrent = null;
       // A gesture takeover commits (never silently drops) a selection drag;
       // an uncommitted marquee/lasso is just a rubber band.
       this.commitSelectDrag();

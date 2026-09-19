@@ -174,6 +174,56 @@ describe('Page-relative zoom', () => {
     expect(store.zoom).toBeCloseTo((900 - 64) / 595, 8);
     expectAnchor(3, 0.5, 0.41, focal);
   });
+
+  it('keeps the wrapper under the CSS scroll limit at MAX_ZOOM', () => {
+    store.setZoom(MAX_ZOOM);
+    viewport.updateLayout();
+    const layoutHeight = 20 + 6 * (842 * MAX_ZOOM + 24) + 60;
+    expect(layoutHeight).toBeGreaterThan(32767);
+    // The scrollable height must stay within the browser's limit.
+    expect(parseFloat(wrapper.style.height)).toBeLessThanOrEqual(32767);
+    // And the visual height must still match the layout.
+    expect(parseFloat(wrapper.style.height) / (viewport as any)._committedScale).toBeCloseTo(layoutHeight, 1);
+  });
+
+  it('maps visible pages correctly when the committed scale is active', () => {
+    store.setZoom(MAX_ZOOM);
+    viewport.updateLayout();
+    const committed = (viewport as any)._committedScale as number;
+    expect(committed).toBeGreaterThan(0);
+    expect(committed).toBeLessThan(1);
+
+    const lastLayout = viewport.getLayout(5)!;
+    // Scroll lives in the transformed space.
+    scroll.scrollTop = lastLayout.top * committed;
+    viewport.handleScroll(true);
+    expect(lastVisible).toContain(5);
+  });
+
+  it('anchors zoomByFactor correctly when the committed scale is active', () => {
+    store.setZoom(MAX_ZOOM);
+    viewport.updateLayout();
+    const committed = (viewport as any)._committedScale as number;
+    const layout = viewport.getLayout(2)!;
+
+    // Place the focal point at the center of page 2, in transformed scroll
+    // space (what the browser actually reports).
+    const focalLayout = { x: layout.left + layout.width * 0.5, y: layout.top + layout.height * 0.5 };
+    const focal = { x: 200, y: 150 };
+    scroll.scrollLeft = focalLayout.x * committed - focal.x;
+    scroll.scrollTop = focalLayout.y * committed - focal.y;
+
+    viewport.zoomByFactor(1 / MAX_ZOOM, focal); // zoom back out
+
+    // The committed scale resets to 1 after zooming out, and the viewport
+    // center must still sit at the same fractional position within page 2 —
+    // the anchor algorithm preserves the focal point's relative position
+    // within its page, not its absolute layout coordinate.
+    expect((viewport as any)._committedScale).toBe(1);
+    const newLayout = viewport.getLayout(2)!;
+    const afterY = (scroll.scrollTop + focal.y - newLayout.top) / newLayout.height;
+    expect(afterY).toBeCloseTo(0.5, 2);
+  });
 });
 
 it('clears PDF geometry on home and preserves vertical home scrolling during resize', () => {

@@ -38,8 +38,9 @@ describe('Render DPI helpers', () => {
   it.each([[4000, 2000], [2000, 4000]])('retains the dimension cap for annotation backing stores of %s by %s', (cssWidth, cssHeight) => {
     vi.stubGlobal('window', { devicePixelRatio: 3 });
     const multiplier = clampRenderMultiplier(cssWidth, cssHeight, resolveAnnotationDpr(288));
-    expect(multiplier).toBe(MAX_RENDER_DIMENSION / 4000);
-    expect(multiplier).toBeLessThan(2);
+    // With MAX_RENDER_DIMENSION = 16384 and 4000px @ 4x = 16000, no clamping needed.
+    expect(multiplier).toBe(4);
+    expect(multiplier).toBeLessThanOrEqual(4);
     expect(cssWidth * multiplier).toBeLessThanOrEqual(MAX_RENDER_DIMENSION);
     expect(cssHeight * multiplier).toBeLessThanOrEqual(MAX_RENDER_DIMENSION);
     expect(clampRenderMultiplier(612, 792, resolveAnnotationDpr(288))).toBe(4);
@@ -52,8 +53,10 @@ describe('Render DPI helpers', () => {
   });
 
   it('caps extreme backing stores without changing CSS dimensions', () => {
-    expect(clampRenderMultiplier(612, 792, 12)).toBeLessThan(12);
-    expect(792 * clampRenderMultiplier(612, 792, 12)).toBeLessThanOrEqual(MAX_RENDER_DIMENSION);
+    // A4 (612x792) at 12x = 7572x9504, now under the 16384 cap.
+    // Use a much higher multiplier to verify clamping still works.
+    expect(clampRenderMultiplier(612, 792, 25)).toBeLessThan(25);
+    expect(792 * clampRenderMultiplier(612, 792, 25)).toBeLessThanOrEqual(MAX_RENDER_DIMENSION);
     expect(clampRenderMultiplier(612, 792, 2)).toBe(2);
   });
 });

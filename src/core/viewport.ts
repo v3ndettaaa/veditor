@@ -31,6 +31,11 @@ export function rotatedPageSize(
 }
 
 export class ViewportManager {
+  /** Conservative upper bound for a scrollable element's dimension (CSS px). */
+  private static readonly CSS_SCROLL_LIMIT = 32767;
+  /** Trigger the committed scale before hitting the scroll limit, leaving headroom. */
+  private static readonly SCALE_THRESHOLD = 30000;
+
   private _scrollContainer: HTMLElement | null = null;
   private _pagesWrapper: HTMLElement | null = null;
   private _visiblePages: Set<number> = new Set();
@@ -43,6 +48,17 @@ export class ViewportManager {
    * otherwise the wrong pages mount (blank cracks) and eviction churns.
    */
   private _previewScale: number = 1;
+  /**
+   * Committed zoom scale applied as a CSS `transform: scale()` to the pages
+   * wrapper (1 when idle). The continuous layout sums every page's height into
+   * one wrapper height; above a safe threshold that would exceed the browser's
+   * scroll-dimension limit (~32,767 CSS px), so the visual zoom is carried by
+   * the transform instead and the scrollable height stays in layout units.
+   * Scroll offsets live in transformed space, so they must be divided back
+   * down before mapping onto the (unscaled) page layouts — just like
+   * `_previewScale`.
+   */
+  private _committedScale: number = 1;
   /**
    * rAF coalescing for the scroll listener: a fast fling, a scrollbar drag
    * across hundreds of pages, or the scroll correction after a zoom can fire
@@ -57,6 +73,11 @@ export class ViewportManager {
 
   public setPreviewScale(scale: number): void {
     this._previewScale = scale > 0 && Number.isFinite(scale) ? scale : 1;
+  }
+
+  /** Committed zoom scale applied as a CSS transform to the pages wrapper. */
+  public get committedScale(): number {
+    return this._committedScale;
   }
 
   public init(
@@ -83,6 +104,9 @@ export class ViewportManager {
   /** Drops visible-set tracking (tab switch / mode change needs a clean pass). */
   public clearVisible(): void {
     this._visiblePages.clear();
+    // A stale committed scale would keep the wrapper transformed while the
+    // next layout pass rebuilds from scratch — reset it here too.
+    this._committedScale = 1;
   }
 
   /**
@@ -99,6 +123,7 @@ export class ViewportManager {
       this._pageLayouts = [];
       this._visiblePages.clear();
       this._previewScale = 1;
+      this._committedScale = 1;
       this._pagesWrapper.style.width = '';
       this._pagesWrapper.style.height = '';
       this._pagesWrapper.style.minWidth = '';
@@ -140,10 +165,6 @@ export class ViewportManager {
 
         currentTop += scaledH + pageSpacing;
       }
-
-      this._pagesWrapper.style.height = `${currentTop + 60}px`;
-      this._pagesWrapper.style.width = `${maxContentWidth}px`;
-      this._pagesWrapper.style.minWidth = '100%';
     } else if (viewMode === 'single') {
       const activeIdx = Math.min(doc.pages.length - 1, Math.max(0, store.activePageIndex));
       const page = doc.pages[activeIdx];
@@ -162,9 +183,7 @@ export class ViewportManager {
         height: scaledH
       });
 
-      this._pagesWrapper.style.height = `${scaledH + 60}px`;
-      this._pagesWrapper.style.width = `${maxContentWidth}px`;
-      this._pagesWrapper.style.minWidth = '100%';
+      currentTop = scaledH + 20;
     } else if (viewMode === 'two-page') {
       // Facing spreads: 2 pages side-by-side (rotation-aware so rotated
       // pages keep their own box instead of overflowing their neighbour).
@@ -207,13 +226,35 @@ export class ViewportManager {
 
         currentTop += rowH + pageSpacing;
       }
-
-      this._pagesWrapper.style.height = `${currentTop + 60}px`;
-      this._pagesWrapper.style.width = `${maxContentWidth}px`;
-      this._pagesWrapper.style.minWidth = '100%';
     }
 
+    // Continuous layout sums every page height into one wrapper height. Above
+    // a safe threshold that would exceed the browser's scroll-dimension limit
+    // (~32,767 CSS px), so the wrapper's CSS size is shrunk by a committed
+    // scale and the visual zoom is carried by a CSS transform instead. Page
+    // layouts stay in zoom-scaled units; scroll offsets live in the
+    // transformed space and are mapped back down in handleScroll.
+    const layoutHeight = currentTop + 60;
+    const layoutWidth = maxContentWidth;
+    const committedScale = this.computeCommittedScale(layoutWidth, layoutHeight);
+    this._committedScale = committedScale;
+    this._pagesWrapper.style.minWidth = committedScale === 1 ? '100%' : '';
+    this._pagesWrapper.style.width = `${layoutWidth * committedScale}px`;
+    this._pagesWrapper.style.height = `${layoutHeight * committedScale}px`;
+    this._pagesWrapper.style.transformOrigin = '0 0';
+    this._pagesWrapper.style.transform = committedScale === 1 ? '' : `scale(${committedScale})`;
+
     this.handleScroll(force);
+  }
+
+  /**
+   * Shrinks the wrapper when its layout dimension would exceed the browser's
+   * scroll-dimension limit. Returns 1 when no shrinking is needed. Pure.
+   */
+  private computeCommittedScale(layoutWidth: number, layoutHeight: number): number {
+    const maxDim = Math.max(layoutWidth, layoutHeight);
+    if (maxDim <= ViewportManager.SCALE_THRESHOLD) return 1;
+    return ViewportManager.SCALE_THRESHOLD / maxDim;
   }
 
   /**
@@ -222,10 +263,13 @@ export class ViewportManager {
   public handleScroll(force = false) {
     if (!this._scrollContainer || this._pageLayouts.length === 0) return;
 
-    // Map scroller space back into layout space when a zoom preview is active.
+    // Map scroller space back into layout space when a zoom preview or committed
+    // scale is active. Scroll offsets live in the transformed space, so they
+    // must be divided back down before mapping onto the (unscaled) page layouts.
     const rawTop = this._scrollContainer.scrollTop;
-    const scrollTop = rawTop / this._previewScale;
-    const viewH = this._scrollContainer.clientHeight / this._previewScale;
+    const totalScale = this._previewScale * this._committedScale;
+    const scrollTop = rawTop / totalScale;
+    const viewH = this._scrollContainer.clientHeight / totalScale;
     const buffer = viewH * 2.0; // 200% buffer ahead and behind so zoom-out exposes mounted pages, not gaps
 
     const newVisible = new Set<number>();
@@ -302,7 +346,7 @@ export class ViewportManager {
       const behavior = opts?.behavior
         ?? (store.appSettings.smoothScroll !== false ? 'smooth' : 'auto');
       this._scrollContainer.scrollTo({
-        top: Math.max(0, layout.top - 20),
+        top: Math.max(0, (layout.top - 20) * this._committedScale),
         behavior
       });
       store.setActivePageIndex(pageIndex);
@@ -354,8 +398,11 @@ export class ViewportManager {
     const cx = focal ? focal.x : this._scrollContainer.clientWidth / 2;
     const cy = focal ? focal.y : this._scrollContainer.clientHeight / 2;
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
-    const contentX = this._scrollContainer.scrollLeft + cx;
-    const contentY = this._scrollContainer.scrollTop + cy;
+    // Scroll offsets live in the transformed space, so map the focal point
+    // back into layout space before searching for the nearest page rect.
+    const s0 = this._previewScale * this._committedScale;
+    const contentX = (this._scrollContainer.scrollLeft + cx) / s0;
+    const contentY = (this._scrollContainer.scrollTop + cy) / s0;
     let anchor: ViewportPageRect | undefined;
     let nearestDistance = Infinity;
     for (const layout of this._pageLayouts) {
@@ -381,8 +428,11 @@ export class ViewportManager {
       if (this._pageLayouts === oldLayouts) this.updateLayout();
       const layout = this.getLayout(anchor.pageIndex);
       if (layout) {
-        this._scrollContainer.scrollLeft = layout.left + offsetX * layout.width - cx;
-        this._scrollContainer.scrollTop = layout.top + offsetY * layout.height - cy;
+        // Scroll lives in the transformed space, so the anchor position must
+        // be scaled by the committed transform before subtracting the focal.
+        const s = this._committedScale;
+        this._scrollContainer.scrollLeft = (layout.left + offsetX * layout.width) * s - cx;
+        this._scrollContainer.scrollTop = (layout.top + offsetY * layout.height) * s - cy;
       }
     } finally {
       store.endZoomAdjust();

@@ -1491,11 +1491,14 @@ class VeditorApp {
     if (layout) {
       const cx = layout.left + (rect.x + rect.width / 2) * targetZoom;
       const cy = layout.top + (rect.y + rect.height / 2) * targetZoom;
+      // Scroll offsets live in the transformed space, so the anchor target
+      // must be scaled by the committed transform before scrolling.
+      const s = viewportManager.committedScale;
       // Instant anchor: smooth would animate through intermediates and walk
       // activePageIndex across pages via handleScroll (lag + wrong page).
       this._scrollContainer.scrollTo({
-        left: Math.max(0, cx - this._scrollContainer.clientWidth / 2),
-        top: Math.max(0, cy - this._scrollContainer.clientHeight / 2),
+        left: Math.max(0, cx * s - this._scrollContainer.clientWidth / 2),
+        top: Math.max(0, cy * s - this._scrollContainer.clientHeight / 2),
         behavior: 'auto'
       });
       store.setActivePageIndex(pageIndex);
@@ -1764,10 +1767,6 @@ class VeditorApp {
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();
-      else if (key === 'z') {
-        e.preventDefault();
-        this.toggleZoomTool();
-      }
     }, { capture: true });
   }
 
