@@ -5,6 +5,7 @@
 
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
+import { getPageRenderer } from './core/page-renderer';
 import { viewportManager, rotatedPageSize } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
@@ -1077,7 +1078,7 @@ class VeditorApp {
         if (p.needsRaster) {
           p.needsRaster = false;
           const rot = store.pageRotations[pageIndex] || 0;
-          void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+          void getPageRenderer().renderPage(pageIndex, p.pdfCanvas, store.zoom, rot);
         }
         // An on-screen page always repaints, so a pending flag for it is
         // redundant — clearing it here keeps the offscreen pages' single
@@ -1131,13 +1132,21 @@ class VeditorApp {
     const h = Math.round(layout.height * dpr);
 
     // Avoid clearing canvas buffers if dimensions haven't changed!
+    // NOTE (Day-2 fix): CSS style sizes sync UNCONDITIONALLY. Backing stores
+    // saturate at MAX_RENDER_DIMENSION, so at high zoom the backing can stay
+    // identical across zoom steps while the CSS layout keeps growing — gating
+    // styles on backing changes left annot/pattern/scratch canvases stuck at
+    // the old (narrower) size: annotations clipped on the right + dead tools
+    // in that strip. Setting style.* never clears buffers, so this is safe.
+    [p.patternCanvas, p.annotCanvas, p.scratchCanvas].forEach(c => {
+      c.style.width = `${layout.width}px`;
+      c.style.height = `${layout.height}px`;
+    });
     let resized = false;
     [p.patternCanvas, p.annotCanvas, p.scratchCanvas].forEach(c => {
       if (c.width !== w || c.height !== h) {
         c.width = w;
         c.height = h;
-        c.style.width = `${layout.width}px`;
-        c.style.height = `${layout.height}px`;
         resized = true;
       }
     });

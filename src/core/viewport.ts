@@ -313,6 +313,28 @@ export class ViewportManager {
     return this._pageLayouts.find(p => p.pageIndex === pageIndex);
   }
 
+  /**
+   * Viewport∩page rect in page-relative CSS px (for visible-first tile
+   * ordering). Returns null when the container/layout is missing or the page
+   * is fully off-screen. Additive Day-2 helper; no existing behavior changed.
+   */
+  public getVisibleRectForPage(pageIndex: number): { x: number; y: number; width: number; height: number } | null {
+    if (!this._scrollContainer) return null;
+    const layout = this.getLayout(pageIndex);
+    if (!layout) return null;
+    const s = this._previewScale > 0 ? this._previewScale : 1;
+    const vx0 = this._scrollContainer.scrollLeft / s;
+    const vy0 = this._scrollContainer.scrollTop / s;
+    const vx1 = vx0 + this._scrollContainer.clientWidth / s;
+    const vy1 = vy0 + this._scrollContainer.clientHeight / s;
+    const x0 = Math.max(layout.left, vx0);
+    const y0 = Math.max(layout.top, vy0);
+    const x1 = Math.min(layout.left + layout.width, vx1);
+    const y1 = Math.min(layout.top + layout.height, vy1);
+    if (x1 <= x0 || y1 <= y0) return null;
+    return { x: x0 - layout.left, y: y0 - layout.top, width: x1 - x0, height: y1 - y0 };
+  }
+
   public fitToWidth(focal?: { x: number; y: number }): void {
     const doc = store.activeDocument;
     if (!doc || !this._scrollContainer) return;

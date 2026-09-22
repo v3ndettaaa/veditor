@@ -1,5 +1,7 @@
 use tauri::{Emitter, Manager};
 
+mod engine_cmds;
+
 /// First `.pdf` (or any existing file) path passed on the command line that
 /// launched this process, e.g. via a double-clicked file association.
 /// Read once by the frontend on startup through [`take_startup_file`].
@@ -31,9 +33,19 @@ pub fn run() {
         .manage(StartupFile(std::sync::Mutex::new(first_file_arg(
             std::env::args(),
         ))))
+        .manage(engine_cmds::EngineState::new())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![take_startup_file, engine_status]);
+        .invoke_handler(tauri::generate_handler![
+            take_startup_file,
+            engine_status,
+            engine_cmds::engine_open_document,
+            engine_cmds::engine_close_document,
+            engine_cmds::engine_page_count,
+            engine_cmds::engine_page_size,
+            engine_cmds::engine_render_tile,
+            engine_cmds::engine_metrics
+        ]);
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {

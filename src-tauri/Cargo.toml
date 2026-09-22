@@ -26,6 +26,9 @@ edition = "2021"
 name = "veditor_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+mupdf = ["veditor-engine/mupdf"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

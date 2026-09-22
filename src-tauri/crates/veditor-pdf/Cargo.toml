@@ -9,10 +9,13 @@ description = "VEditor PDF backend integration (MuPDF target)"
 veditor-core = { path = "../veditor-core" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-# Day-1: real MuPDF integration lands Day-2. Keep the toolchain out of the
-# Day-1 build; the target backend is MuPDF (see MupdfBackendStub).
-# mupdf = { version = "0.4", optional = true }
+# Real MuPDF backend, optional so default builds need no native toolchain.
+# Enable with `--features mupdf` once libclang is available (see lib.rs docs).
+mupdf = { version = "0.8", optional = true }
 
 [features]
-default = []
-# mupdf = ["dep:mupdf"]
+mupdf = ["dep:mupdf"]
+
+[dev-dependencies]
+# PNG decode for the headless pixel-proof test only (pure Rust, no native deps).
+image = "0.25"

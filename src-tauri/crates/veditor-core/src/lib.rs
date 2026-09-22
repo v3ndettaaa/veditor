@@ -166,12 +166,102 @@ pub fn tile_scale_for_dpi(target_dpi: f64, fallback_dpi: f64) -> f64 {
     dpi / BASE_PDF_DPI
 }
 
+/// Fixed tile dimension in device pixels (Day-2 choice; not yet tuned).
+pub const TILE_PX: u32 = 512;
+
+/// Opaque open-document handle within a backend (never crosses to TS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DocHandle(pub u64);
+
+/// Fully identifies one raster tile: document + page + render scale +
+/// rotation + tile grid position.
+/// Fully identifies one raster tile.
+///
+/// Scale contract (load-bearing, see Day-2 fix): `dpr` MUST be the final
+/// geometry backing-store multiplier (device px per CSS px, target-DPI factor
+/// already included), so device px per PDF point is exactly `zoom * dpr`.
+/// Backends must NOT apply any additional DPI term.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TileId {
+    pub doc: DocumentId,
+    pub page: u32,
+    pub zoom_milli: u32,
+    pub dpr_milli: u32,
+    /// Normalized user rotation in degrees (0/90/180/270).
+    pub rotation_deg: i32,
+    pub tx: u32,
+    pub ty: u32,
+}
+
+impl TileId {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        doc: DocumentId,
+        page: u32,
+        zoom: f64,
+        dpr: f64,
+        rotation_deg: i32,
+        tx: u32,
+        ty: u32,
+    ) -> Self {
+        Self {
+            doc,
+            page,
+            zoom_milli: (zoom * 1000.0).round().clamp(0.0, u32::MAX as f64) as u32,
+            dpr_milli: (dpr * 1000.0).round().clamp(0.0, u32::MAX as f64) as u32,
+            rotation_deg: ((rotation_deg % 360) + 360) % 360,
+            tx,
+            ty,
+        }
+    }
+
+    /// Device px per PDF point this tile is rendered at (exactly zoom * dpr
+    /// per the scale contract above).
+    pub fn device_scale(&self) -> f64 {
+        (self.zoom_milli as f64 / 1000.0) * (self.dpr_milli as f64 / 1000.0)
+    }
+}
+
+/// Render request for one tile (mirrors `TileId`; separate type so future
+/// fields like priority/generation don't leak into cache keys).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TileSpec {
+    pub tile: TileId,
+    pub tile_px: u32,
+}
+
+impl TileSpec {
+    pub fn new(tile: TileId) -> Self {
+        Self { tile, tile_px: TILE_PX }
+    }
+}
+
+/// Rendered tile payload: PNG bytes plus decoded dimensions. PNG is the
+/// transfer encoding (browser decodes); `cost_bytes` accounts memory as
+/// decoded RGBA (`w*h*4`) for budget purposes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderedTile {
+    pub width: u32,
+    pub height: u32,
+    pub png: Vec<u8>,
+}
+
+impl RenderedTile {
+    pub fn cost_bytes(&self) -> usize {
+        self.width as usize * self.height as usize * 4
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error("no document open")]
     NotOpen,
+    #[error("unknown document: {0}")]
+    UnknownDocument(String),
     #[error("invalid page index {0}")]
     InvalidPage(u32),
+    #[error("tile out of page bounds")]
+    TileOutOfBounds,
     #[error("backend error: {0}")]
     Backend(String),
 }

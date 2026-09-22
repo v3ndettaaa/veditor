@@ -13,3 +13,6 @@ veditor-annotations = { path = "../veditor-annotations" }
 veditor-ink = { path = "../veditor-ink" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+
+[features]
+mupdf = ["veditor-pdf/mupdf"]
