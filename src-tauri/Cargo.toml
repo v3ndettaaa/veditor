@@ -1,3 +1,20 @@
+[workspace]
+members = [
+    ".",
+    "crates/veditor-core",
+    "crates/veditor-pdf",
+    "crates/veditor-render",
+    "crates/veditor-annotations",
+    "crates/veditor-ink",
+    "crates/veditor-engine",
+]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
 [package]
 name = "veditor"
 version = "2.0.0"
@@ -18,6 +35,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+veditor-engine = { path = "crates/veditor-engine" }
 
 # Forwards a double-clicked file's path from a second launch into the
 # already-running instance instead of opening a second window.

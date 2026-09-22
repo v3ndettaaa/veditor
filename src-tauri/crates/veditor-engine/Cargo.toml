@@ -1,0 +1,15 @@
+[package]
+name = "veditor-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VEditor high-level engine API coordinating PDF/render/annotations/ink"
+
+[dependencies]
+veditor-core = { path = "../veditor-core" }
+veditor-pdf = { path = "../veditor-pdf" }
+veditor-render = { path = "../veditor-render" }
+veditor-annotations = { path = "../veditor-annotations" }
+veditor-ink = { path = "../veditor-ink" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

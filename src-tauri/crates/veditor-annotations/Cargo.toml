@@ -1,0 +1,11 @@
+[package]
+name = "veditor-annotations"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VEditor annotation models, spatial index, hit testing, dirty regions"
+
+[dependencies]
+veditor-core = { path = "../veditor-core" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

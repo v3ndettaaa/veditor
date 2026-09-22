@@ -4157,6 +4157,64 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-single-instance",
+ "veditor-engine",
+]
+
+[[package]]
+name = "veditor-annotations"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "veditor-core",
+]
+
+[[package]]
+name = "veditor-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "veditor-engine"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "veditor-annotations",
+ "veditor-core",
+ "veditor-ink",
+ "veditor-pdf",
+ "veditor-render",
+]
+
+[[package]]
+name = "veditor-ink"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "veditor-core",
+]
+
+[[package]]
+name = "veditor-pdf"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "veditor-core",
+]
+
+[[package]]
+name = "veditor-render"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "veditor-core",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+[package]
+name = "veditor-ink"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VEditor stylus/ink pipeline types"
+
+[dependencies]
+veditor-core = { path = "../veditor-core" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

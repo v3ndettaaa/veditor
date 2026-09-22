@@ -1,0 +1,18 @@
+[package]
+name = "veditor-pdf"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VEditor PDF backend integration (MuPDF target)"
+
+[dependencies]
+veditor-core = { path = "../veditor-core" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+# Day-1: real MuPDF integration lands Day-2. Keep the toolchain out of the
+# Day-1 build; the target backend is MuPDF (see MupdfBackendStub).
+# mupdf = { version = "0.4", optional = true }
+
+[features]
+default = []
+# mupdf = ["dep:mupdf"]

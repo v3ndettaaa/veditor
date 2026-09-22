@@ -1,0 +1,10 @@
+[package]
+name = "veditor-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VEditor core domain types and primitives (frontend-independent)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

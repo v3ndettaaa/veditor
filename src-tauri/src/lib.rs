@@ -17,6 +17,14 @@ fn take_startup_file(state: tauri::State<StartupFile>) -> Option<String> {
     state.0.lock().unwrap().take()
 }
 
+/// Day-1 engine smoke signal. Proves the `veditor-engine` facade is wired
+/// behind the Tauri boundary (the only layer the TS frontend may call).
+/// No TS call sites Day-1; real document/tile commands arrive Day-2+.
+#[tauri::command]
+fn engine_status() -> String {
+    veditor_engine::Engine::new_stub().status()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -25,7 +33,7 @@ pub fn run() {
         ))))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![take_startup_file]);
+        .invoke_handler(tauri::generate_handler![take_startup_file, engine_status]);
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
