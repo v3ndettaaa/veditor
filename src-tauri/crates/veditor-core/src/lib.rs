@@ -238,12 +238,15 @@ impl TileSpec {
 
 /// Rendered tile payload: PNG bytes plus decoded dimensions. PNG is the
 /// transfer encoding (browser decodes); `cost_bytes` accounts memory as
-/// decoded RGBA (`w*h*4`) for budget purposes.
+/// decoded RGBA (`w*h*4`) for budget purposes. `render_ms`/`encode_ms` are
+/// measured pipeline segments (MuPDF raster vs PNG encode), 0 when unknown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderedTile {
     pub width: u32,
     pub height: u32,
     pub png: Vec<u8>,
+    pub render_ms: u64,
+    pub encode_ms: u64,
 }
 
 impl RenderedTile {
@@ -262,6 +265,8 @@ pub enum EngineError {
     InvalidPage(u32),
     #[error("tile out of page bounds")]
     TileOutOfBounds,
+    #[error("stale tile request (superseded by navigation)")]
+    Stale,
     #[error("backend error: {0}")]
     Backend(String),
 }

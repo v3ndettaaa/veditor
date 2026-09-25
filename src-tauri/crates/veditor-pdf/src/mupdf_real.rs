@@ -162,13 +162,17 @@ fn render_on_owner(
     .map_err(err)?;
     // Opaque white background, matching the pdf.js `alpha:false` canvas.
     pixmap.clear_with(255).map_err(err)?;
+    let t_run = std::time::Instant::now();
     {
         let device = Device::from_pixmap(&pixmap).map_err(err)?;
         page.run(&device, &ctm).map_err(err)?;
     }
+    let render_ms = t_run.elapsed().as_millis() as u64;
+    let t_enc = std::time::Instant::now();
     let mut png = Vec::new();
     pixmap.write_to(&mut png, ImageFormat::PNG).map_err(err)?;
-    Ok(RenderedTile { width: layout.tile_w, height: layout.tile_h, png })
+    let encode_ms = t_enc.elapsed().as_millis() as u64;
+    Ok(RenderedTile { width: layout.tile_w, height: layout.tile_h, png, render_ms, encode_ms })
 }
 
 /// Real MuPDF backend. All `mupdf::` contact happens on per-document owner

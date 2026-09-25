@@ -78,7 +78,7 @@ impl PdfBackend for StubBackend {
         spec: &TileSpec,
     ) -> Result<RenderedTile, EngineError> {
         self.check_page(spec.tile.page)?;
-        Ok(RenderedTile { width: 2, height: 2, png: STUB_PNG.to_vec() })
+        Ok(RenderedTile { width: 2, height: 2, png: STUB_PNG.to_vec(), render_ms: 0, encode_ms: 0 })
     }
 }
 

@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use veditor_core::{DocumentId, PageId, Rect, RenderedTile, TileId};
+use veditor_core::{DocumentId, PageId, Rect, RenderedTile, TileId, TileSpec};
 
 /// Cache key: page + quantized zoom/dpr + rotation (mirrors `bitmapKey`).
 /// Superseded by `TileId` (which adds document + tile indices); kept so
@@ -157,14 +157,21 @@ impl Priority {
     pub const NEARBY: Self = Self(4);
 }
 
-/// One queued render job. `generation` is bumped on zoom/scroll commit; jobs
-/// from older generations are dropped before rendering (cheap cancellation —
-/// MuPDF renders themselves are not abortable, but stale jobs never start).
+/// One queued render job. `generation` is bumped on navigation (page jump,
+/// zoom/rotation change); jobs from older generations are dropped before
+/// rendering (cheap cancellation — MuPDF renders themselves are not
+/// abortable, but stale jobs never start).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Job {
-    pub tile: TileId,
+    pub spec: TileSpec,
     pub priority: Priority,
     pub generation: u64,
+}
+
+impl Job {
+    pub fn tile(&self) -> &TileId {
+        &self.spec.tile
+    }
 }
 
 /// Bounded priority queue. Overflow drops the lowest-priority (highest number)
@@ -188,9 +195,10 @@ impl RenderQueue {
         self.jobs.is_empty()
     }
 
-    /// Insert unless an identical tile is already queued (dedup).
+    /// Insert unless the same tile is already queued (dedup by tile identity;
+    /// a re-requested tile reuses the queued job instead of duplicating it).
     pub fn push(&mut self, job: Job) {
-        if self.jobs.iter().any(|j| j.tile == job.tile) {
+        if self.jobs.iter().any(|j| j.tile() == job.tile()) {
             return;
         }
         // Stable insertion by priority (lower first).
@@ -202,15 +210,14 @@ impl RenderQueue {
         }
     }
 
-    /// Pop the next job for `generation`, discarding stale ones first.
+    /// Pop the highest-priority job for `generation`, discarding ALL stale
+    /// jobs anywhere in the queue first (insertion order is by priority, not
+    /// generation, so stale jobs can sit behind current ones).
     pub fn pop_for(&mut self, generation: u64) -> Option<Job> {
-        while let Some(front) = self.jobs.front() {
-            if front.generation != generation {
-                self.jobs.pop_front();
-                self.cancelled += 1;
-            } else {
-                break;
-            }
+        let stale = self.jobs.iter().filter(|j| j.generation != generation).count();
+        if (stale as u64) > 0 {
+            self.jobs.retain(|j| j.generation == generation);
+            self.cancelled += stale as u64;
         }
         self.jobs.pop_front()
     }
@@ -337,12 +344,16 @@ pub struct CacheMetrics {
     pub hit_rate: f64,
 }
 
-/// Full engine metrics snapshot (queue + cache).
+/// Full engine metrics snapshot (queue + cache + last render segments).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EngineMetrics {
     pub queue_depth: usize,
     pub queue_cancelled: u64,
     pub cache: CacheMetrics,
+    pub renders_total: u64,
+    pub last_tile_backend_ms: u64,
+    pub last_tile_render_ms: u64,
+    pub last_tile_encode_ms: u64,
 }
 
 #[cfg(test)]
@@ -392,19 +403,28 @@ mod tests {
     fn queue_orders_by_priority_and_drops_stale_generations() {
         let mut q = RenderQueue::new(64);
         let doc = DocumentId::new("d");
-        let tile = |tx| TileId::new(doc.clone(), 0, 1.0, 1.0, 0, tx, 0);
-        q.push(Job { tile: tile(1), priority: Priority::NEARBY, generation: 1 });
-        q.push(Job { tile: tile(0), priority: Priority::VISIBLE, generation: 1 });
+        let job = |tx, priority: Priority, generation| Job {
+            spec: TileSpec::new(TileId::new(doc.clone(), 0, 1.0, 1.0, 0, tx, 0)),
+            priority,
+            generation,
+        };
+        q.push(job(1, Priority::NEARBY, 1));
+        q.push(job(0, Priority::VISIBLE, 1));
         // Dedup: same tile twice.
-        q.push(Job { tile: tile(0), priority: Priority::VISIBLE, generation: 1 });
+        q.push(job(0, Priority::VISIBLE, 1));
         assert_eq!(q.len(), 2);
         // Current generation serves highest priority first.
         let first = q.pop_for(1).unwrap();
-        assert_eq!(first.tile, tile(0));
+        assert_eq!(first.spec.tile.tx, 0);
         assert_eq!(q.cancelled, 0);
+        // Stale jobs behind current ones are dropped anywhere in the queue.
+        q.push(job(2, Priority::VISIBLE, 0));
+        q.push(job(3, Priority::VISIBLE, 1));
+        assert!(q.pop_for(1).unwrap().spec.tile.tx == 3);
+        assert_eq!(q.cancelled, 1);
         // New generation drops the stale remainder without rendering it.
         assert!(q.pop_for(2).is_none());
-        assert_eq!(q.cancelled, 1);
+        assert_eq!(q.cancelled, 2);
     }
 
     #[test]
@@ -413,7 +433,7 @@ mod tests {
         let doc = DocumentId::new("d");
         let key = |tx| TileId::new(doc.clone(), 0, 1.0, 1.0, 0, tx, 0);
         // 4x4 RGBA-equivalent = 64 bytes each; two exceed the 100 budget.
-        let tile = |v| RenderedTile { width: 4, height: 4, png: vec![v; 10] };
+        let tile = |v| RenderedTile { width: 4, height: 4, png: vec![v; 10], render_ms: 0, encode_ms: 0 };
         c.insert(key(0), tile(0));
         c.insert(key(1), tile(1)); // evicts key(0): 64+64 > 100
         assert!(c.get(&key(0)).is_none());

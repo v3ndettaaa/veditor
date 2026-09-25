@@ -40,10 +40,13 @@ pub fn run() {
             take_startup_file,
             engine_status,
             engine_cmds::engine_open_document,
+            engine_cmds::engine_open_bytes,
+            engine_cmds::engine_open_finalize,
             engine_cmds::engine_close_document,
             engine_cmds::engine_page_count,
             engine_cmds::engine_page_size,
             engine_cmds::engine_render_tile,
+            engine_cmds::engine_begin_navigation,
             engine_cmds::engine_metrics
         ]);
 

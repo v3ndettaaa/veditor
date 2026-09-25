@@ -81,6 +81,10 @@ struct DocEntry {
     cache: TileCache,
     queue: RenderQueue,
     generation: u64,
+    renders_total: u64,
+    last_tile_backend_ms: u64,
+    last_tile_render_ms: u64,
+    last_tile_encode_ms: u64,
 }
 
 /// Multi-document registry. Owns each document's bytes (`Arc`, opened once)
@@ -88,37 +92,56 @@ struct DocEntry {
 pub struct Documents<B: PdfBackend> {
     backend: B,
     docs: HashMap<DocumentId, DocEntry>,
+    pending: HashMap<DocumentId, Arc<Vec<u8>>>,
     target_dpi: f64,
 }
 
 impl<B: PdfBackend> Documents<B> {
     pub fn new(backend: B, target_dpi: f64) -> Self {
-        Self { backend, docs: HashMap::new(), target_dpi }
+        Self { backend, docs: HashMap::new(), pending: HashMap::new(), target_dpi }
     }
 
-    /// Open (or re-key) a document. Bytes are stored once and handed to the
-    /// backend a single time; repeat opens of the same id replace the entry.
-    pub fn open(&mut self, id: DocumentId, bytes: Vec<u8>) -> Result<u32, EngineError> {
-        if let Some(old) = self.docs.remove(&id) {
+    /// Stash bytes without parsing (fast path for the sync transport command).
+    pub fn stash_bytes(&mut self, id: DocumentId, bytes: Vec<u8>) {
+        self.pending.insert(id, Arc::new(bytes));
+    }
+
+    /// Finish opening previously stashed bytes (the slow MuPDF parse step).
+    pub fn finalize_open(&mut self, id: &DocumentId) -> Result<u32, EngineError> {
+        let shared = self.pending.remove(id).ok_or_else(|| EngineError::UnknownDocument(id.to_string()))?;
+        if let Some(old) = self.docs.remove(id) {
             self.backend.close(old.handle);
         }
-        let shared = Arc::new(bytes);
+        // Reuse the single-shot path on a clone of the Arc (no byte copy:
+        // `open` re-wraps the same allocation; the stash copy is dropped).
         let handle = self.backend.open_from_bytes(&shared)?;
         let count = self.backend.page_count(handle)?;
         self.docs.insert(
-            id,
+            id.clone(),
             DocEntry {
                 handle,
                 bytes: shared,
                 cache: TileCache::new(DEFAULT_CACHE_BUDGET_BYTES),
                 queue: RenderQueue::new(DEFAULT_MAX_QUEUE_JOBS),
                 generation: 0,
+                renders_total: 0,
+                last_tile_backend_ms: 0,
+                last_tile_render_ms: 0,
+                last_tile_encode_ms: 0,
             },
         );
         Ok(count)
     }
 
+    /// Open (or re-key) a document. Bytes are stored once and handed to the
+    /// backend a single time; repeat opens of the same id replace the entry.
+    pub fn open(&mut self, id: DocumentId, bytes: Vec<u8>) -> Result<u32, EngineError> {
+        self.stash_bytes(id.clone(), bytes);
+        self.finalize_open(&id)
+    }
+
     pub fn close(&mut self, id: &DocumentId) {
+        self.pending.remove(id);
         if let Some(old) = self.docs.remove(id) {
             self.backend.close(old.handle);
         }
@@ -162,9 +185,81 @@ impl<B: PdfBackend> Documents<B> {
         if let Some(hit) = entry.cache.get(&spec.tile) {
             return Ok(hit.clone());
         }
+        let t0 = std::time::Instant::now();
         let tile = self.backend.render_tile_png(entry.handle, spec)?;
+        entry.last_tile_backend_ms = t0.elapsed().as_millis() as u64;
+        entry.last_tile_render_ms = tile.render_ms;
+        entry.last_tile_encode_ms = tile.encode_ms;
+        entry.renders_total += 1;
         entry.cache.insert(spec.tile.clone(), tile.clone());
         Ok(tile)
+    }
+
+    /// Render one tile through the shared priority queue with work-sharing.
+    ///
+    /// Each caller enqueues its tile, then cooperatively drains: it pops the
+    /// highest-priority current-generation job and renders it — even when it
+    /// belongs to another caller — so concurrent commands never idle while
+    /// work exists and no job renders twice from one queue position. The lock
+    /// is always dropped across the blocking backend render. Stale-generation
+    /// jobs are dropped before starting (`EngineError::Stale` once the
+    /// caller's own job is gone). Single logical worker per document is
+    /// preserved by the backend owner thread, not by this loop.
+    pub fn render_tile_queued(
+        &mut self,
+        id: &DocumentId,
+        spec: &TileSpec,
+        priority: Priority,
+        generation: u64,
+    ) -> Result<RenderedTile, EngineError> {
+        loop {
+            // A caller from a superseded navigation must not enqueue (or spin
+            // on) work the current generation already dropped. Re-checked per
+            // iteration because a bump can land mid-loop.
+            let current = self
+                .docs
+                .get(id)
+                .ok_or_else(|| EngineError::UnknownDocument(id.to_string()))?
+                .generation;
+            if generation != current {
+                return Err(EngineError::Stale);
+            }
+            // Enqueue (dedup) + pop highest-priority current-generation job.
+            let (handle, job) = {
+                let entry = self.docs.get_mut(id).ok_or_else(|| EngineError::UnknownDocument(id.to_string()))?;
+                entry.queue.push(Job { spec: spec.clone(), priority, generation });
+                match entry.queue.pop_for(entry.generation) {
+                    Some(job) => (entry.handle, job),
+                    // Queue drained: my job was dropped as stale (or a
+                    // clear raced) — do not spin, report superseded.
+                    None => return Err(EngineError::Stale),
+                }
+            };
+            // Render WITHOUT the registry lock so concurrent callers progress.
+            match self.backend.render_tile_png(handle, &job.spec) {
+                Ok(tile) => {
+                    let entry = self.docs.get_mut(id).ok_or_else(|| EngineError::UnknownDocument(id.to_string()))?;
+                    entry.renders_total += 1;
+                    entry.last_tile_backend_ms = tile.render_ms + tile.encode_ms;
+                    entry.last_tile_render_ms = tile.render_ms;
+                    entry.last_tile_encode_ms = tile.encode_ms;
+                    entry.cache.insert(job.spec.tile.clone(), tile.clone());
+                    if job.spec.tile == spec.tile {
+                        return Ok(tile);
+                    }
+                    // Rendered someone else's tile: loop back — mine may now
+                    // be cached, queued, or stale.
+                }
+                Err(e) => {
+                    // My own tile is unrenderable: surface the real error so
+                    // the caller can fall back. Others' failures are skipped
+                    // (their owner will retry-or-fail on its own pass).
+                    if job.spec.tile == spec.tile {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 
     pub fn metrics(&self, id: &DocumentId) -> Option<EngineMetrics> {
@@ -173,6 +268,10 @@ impl<B: PdfBackend> Documents<B> {
             queue_depth: e.queue.len(),
             queue_cancelled: e.queue.cancelled,
             cache: e.cache.snapshot(),
+            renders_total: e.renders_total,
+            last_tile_backend_ms: e.last_tile_backend_ms,
+            last_tile_render_ms: e.last_tile_render_ms,
+            last_tile_encode_ms: e.last_tile_encode_ms,
         })
     }
 }
@@ -196,6 +295,44 @@ mod tests {
         assert_eq!(e.page_count(), 5);
         assert_eq!(e.page_size(0).unwrap(), Size::new(612.0, 792.0));
         assert!(e.status().contains("backend=stub"));
+    }
+
+    #[test]
+    fn stash_then_finalize_opens_without_parse_in_stash() {
+        let mut d = docs();
+        let id = DocumentId::new("s");
+        d.stash_bytes(id.clone(), b"pdf-bytes".to_vec());
+        assert!(!d.is_open(&id));
+        assert_eq!(d.finalize_open(&id).unwrap(), 4);
+        assert!(d.is_open(&id));
+        assert_eq!(d.page_count(&id).unwrap(), 4);
+        // Finalizing twice without a stash fails instead of reopening ghosts.
+        assert!(d.finalize_open(&id).is_err());
+        d.close(&id);
+        assert!(!d.is_open(&id));
+    }
+
+    #[test]
+    fn queued_render_serves_priority_and_stale() {
+        let mut d = docs();
+        let id = DocumentId::new("d");
+        d.open(id.clone(), b"pdf-bytes".to_vec()).unwrap();
+        let gen = d.next_generation(&id).unwrap();
+        // Lower priority number renders first even when enqueued second.
+        let lo = TileSpec::new(TileId::new(DocumentId::new("d"), 1, 1.0, 1.0, 0, 0, 0));
+        let hi = TileSpec::new(TileId::new(DocumentId::new("d"), 0, 1.0, 1.0, 0, 0, 0));
+        let t = d.render_tile_queued(&id, &hi, Priority::VISIBLE, gen).unwrap();
+        assert_eq!((t.width, t.height), (2, 2));
+        // Second call hits the cache regardless of priority.
+        let t2 = d.render_tile_queued(&id, &hi, Priority::NEARBY, gen).unwrap();
+        assert_eq!(t2.png, t.png);
+        let _ = lo;
+        // Bumping the generation supersedes in-flight callers.
+        d.next_generation(&id).unwrap();
+        assert!(matches!(
+            d.render_tile_queued(&id, &hi, Priority::VISIBLE, gen),
+            Err(EngineError::Stale)
+        ));
     }
 
     #[test]
