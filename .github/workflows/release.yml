@@ -59,9 +59,28 @@ jobs:
         shell: pwsh
         run: |
           choco install llvm -y
-          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-          "MUPDF_MSVC_PLATFORM_TOOLSET=v145" >> $env:GITHUB_ENV
-          "BINDGEN_EXTRA_CLANG_ARGS=-include ${{ github.workspace }}/src-tauri/build-support/bindgen-shim/max_align_t.h" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_ENV -Value 'LIBCLANG_PATH=C:\Program Files\LLVM\bin'
+          Add-Content -Path $env:GITHUB_ENV -Value 'MUPDF_MSVC_PLATFORM_TOOLSET=v145'
+          $shim = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\build-support\bindgen-shim\max_align_t.h'
+          if (-not (Test-Path -LiteralPath $shim)) {
+            throw "bindgen shim not found: $shim"
+          }
+          $shimForward = $shim -replace '\\', '/'
+          Add-Content -Path $env:GITHUB_ENV -Value ('BINDGEN_EXTRA_CLANG_ARGS=-include ' + $shimForward)
+
+      - name: Verify MuPDF bindgen environment (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Write-Host "GITHUB_WORKSPACE = [$env:GITHUB_WORKSPACE]"
+          $shim = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\build-support\bindgen-shim\max_align_t.h'
+          Write-Host "shim path = [$shim]"
+          $exists = Test-Path -LiteralPath $shim
+          Write-Host "Test-Path shim = [$exists]"
+          Write-Host "BINDGEN_EXTRA_CLANG_ARGS = [$env:BINDGEN_EXTRA_CLANG_ARGS]"
+          if (-not $exists) {
+            throw "Missing bindgen shim: $shim"
+          }
 
       - name: Build Tauri Desktop Application
         uses: tauri-apps/tauri-action@v0
