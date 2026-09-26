@@ -53,6 +53,7 @@ export function isEngineStaleError(e: unknown): boolean {
 export interface EngineMetricsSnapshot {
   queue_depth: number;
   queue_cancelled: number;
+  queue_dedup_hits: number;
   cache: {
     hits: number;
     misses: number;
@@ -66,6 +67,11 @@ export interface EngineMetricsSnapshot {
   last_tile_backend_ms: number;
   last_tile_render_ms: number;
   last_tile_encode_ms: number;
+  tile_ms_p50: number;
+  tile_ms_p95: number;
+  inflight_tiles: number;
+  /** Process RSS in bytes (on-demand sample, 0 = not sampled). */
+  rss_bytes: number;
 }
 
 /** TEMPORARY Day-3 probe: server queue/cache/render counters (benchmarks). */

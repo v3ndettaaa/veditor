@@ -74,6 +74,9 @@ impl Engine {
     }
 }
 
+/// Backend-ms samples kept per document for p50/p95 (bounded ring).
+const LATENCY_RING_CAP: usize = 256;
+
 struct DocEntry {
     handle: DocHandle,
     #[allow(dead_code)]
@@ -85,6 +88,52 @@ struct DocEntry {
     last_tile_backend_ms: u64,
     last_tile_render_ms: u64,
     last_tile_encode_ms: u64,
+    /// Tiles currently inside a backend render (incremented around the
+    /// lock-free render section; decremented after).
+    inflight: usize,
+    latencies_ms: std::collections::VecDeque<u64>,
+}
+
+impl DocEntry {
+    fn record_render(&mut self, backend_ms: u64, tile: &RenderedTile) {
+        self.renders_total += 1;
+        self.last_tile_backend_ms = backend_ms;
+        self.last_tile_render_ms = tile.render_ms;
+        self.last_tile_encode_ms = tile.encode_ms;
+        if self.latencies_ms.len() >= LATENCY_RING_CAP {
+            self.latencies_ms.pop_front();
+        }
+        self.latencies_ms.push_back(backend_ms);
+    }
+
+    fn latency_p50_p95(&self) -> (u64, u64) {
+        if self.latencies_ms.is_empty() {
+            return (0, 0);
+        }
+        let mut sorted: Vec<u64> = self.latencies_ms.iter().copied().collect();
+        sorted.sort_unstable();
+        let at = |q: f64| sorted[((sorted.len() as f64 * q) as usize).min(sorted.len() - 1)];
+        (at(0.5), at(0.95))
+    }
+
+    fn blank(
+        handle: DocHandle,
+        bytes: Arc<Vec<u8>>,
+    ) -> DocEntry {
+        DocEntry {
+            handle,
+            bytes,
+            cache: TileCache::new(DEFAULT_CACHE_BUDGET_BYTES),
+            queue: RenderQueue::new(DEFAULT_MAX_QUEUE_JOBS),
+            generation: 0,
+            renders_total: 0,
+            last_tile_backend_ms: 0,
+            last_tile_render_ms: 0,
+            last_tile_encode_ms: 0,
+            inflight: 0,
+            latencies_ms: std::collections::VecDeque::new(),
+        }
+    }
 }
 
 /// Multi-document registry. Owns each document's bytes (`Arc`, opened once)
@@ -116,20 +165,7 @@ impl<B: PdfBackend> Documents<B> {
         // `open` re-wraps the same allocation; the stash copy is dropped).
         let handle = self.backend.open_from_bytes(&shared)?;
         let count = self.backend.page_count(handle)?;
-        self.docs.insert(
-            id.clone(),
-            DocEntry {
-                handle,
-                bytes: shared,
-                cache: TileCache::new(DEFAULT_CACHE_BUDGET_BYTES),
-                queue: RenderQueue::new(DEFAULT_MAX_QUEUE_JOBS),
-                generation: 0,
-                renders_total: 0,
-                last_tile_backend_ms: 0,
-                last_tile_render_ms: 0,
-                last_tile_encode_ms: 0,
-            },
-        );
+        self.docs.insert(id.clone(), DocEntry::blank(handle, shared));
         Ok(count)
     }
 
@@ -187,10 +223,8 @@ impl<B: PdfBackend> Documents<B> {
         }
         let t0 = std::time::Instant::now();
         let tile = self.backend.render_tile_png(entry.handle, spec)?;
-        entry.last_tile_backend_ms = t0.elapsed().as_millis() as u64;
-        entry.last_tile_render_ms = tile.render_ms;
-        entry.last_tile_encode_ms = tile.encode_ms;
-        entry.renders_total += 1;
+        let backend_ms = t0.elapsed().as_millis() as u64;
+        entry.record_render(backend_ms, &tile);
         entry.cache.insert(spec.tile.clone(), tile.clone());
         Ok(tile)
     }
@@ -236,13 +270,19 @@ impl<B: PdfBackend> Documents<B> {
                 }
             };
             // Render WITHOUT the registry lock so concurrent callers progress.
-            match self.backend.render_tile_png(handle, &job.spec) {
+            // In-flight accounting brackets the lock-free section only.
+            {
+                let entry = self.docs.get_mut(id).ok_or_else(|| EngineError::UnknownDocument(id.to_string()))?;
+                entry.inflight += 1;
+            }
+            let t0 = std::time::Instant::now();
+            let rendered = self.backend.render_tile_png(handle, &job.spec);
+            let backend_ms = t0.elapsed().as_millis() as u64;
+            match rendered {
                 Ok(tile) => {
                     let entry = self.docs.get_mut(id).ok_or_else(|| EngineError::UnknownDocument(id.to_string()))?;
-                    entry.renders_total += 1;
-                    entry.last_tile_backend_ms = tile.render_ms + tile.encode_ms;
-                    entry.last_tile_render_ms = tile.render_ms;
-                    entry.last_tile_encode_ms = tile.encode_ms;
+                    entry.inflight = entry.inflight.saturating_sub(1);
+                    entry.record_render(backend_ms, &tile);
                     entry.cache.insert(job.spec.tile.clone(), tile.clone());
                     if job.spec.tile == spec.tile {
                         return Ok(tile);
@@ -251,6 +291,9 @@ impl<B: PdfBackend> Documents<B> {
                     // be cached, queued, or stale.
                 }
                 Err(e) => {
+                    if let Some(entry) = self.docs.get_mut(id) {
+                        entry.inflight = entry.inflight.saturating_sub(1);
+                    }
                     // My own tile is unrenderable: surface the real error so
                     // the caller can fall back. Others' failures are skipped
                     // (their owner will retry-or-fail on its own pass).
@@ -264,14 +307,21 @@ impl<B: PdfBackend> Documents<B> {
 
     pub fn metrics(&self, id: &DocumentId) -> Option<EngineMetrics> {
         let e = self.docs.get(id)?;
+        let (p50, p95) = e.latency_p50_p95();
         Some(EngineMetrics {
             queue_depth: e.queue.len(),
             queue_cancelled: e.queue.cancelled,
+            queue_dedup_hits: e.queue.dedup_hits,
             cache: e.cache.snapshot(),
             renders_total: e.renders_total,
             last_tile_backend_ms: e.last_tile_backend_ms,
             last_tile_render_ms: e.last_tile_render_ms,
             last_tile_encode_ms: e.last_tile_encode_ms,
+            tile_ms_p50: p50,
+            tile_ms_p95: p95,
+            inflight_tiles: e.inflight,
+            // RSS is sampled by the IPC layer (on-demand); 0 = not sampled.
+            rss_bytes: 0,
         })
     }
 }

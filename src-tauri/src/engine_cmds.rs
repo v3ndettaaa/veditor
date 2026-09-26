@@ -168,11 +168,28 @@ pub async fn engine_render_tile(
     Ok(Response::new(tile.png))
 }
 
+/// Sample this process's RSS (bytes) on demand. Called only from
+/// `engine_metrics` — no background polling. Total process observation, NOT a
+/// breakdown of cache/queue/document/MuPDF components (tracked separately).
+fn sample_rss_bytes() -> u64 {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    let pid = Pid::from_u32(std::process::id());
+    // Refresh ONLY this process (no full-system scan): O(1) sampling.
+    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    sys.process(pid).map(|p| p.memory()).unwrap_or(0)
+}
+
 #[tauri::command]
 pub fn engine_metrics(
     state: State<EngineState>,
     doc_id: String,
 ) -> Result<Option<EngineMetrics>, String> {
     let docs = state.0.lock().map_err(|_| "engine: state lock poisoned".to_string())?;
-    Ok(docs.metrics(&DocumentId::new(doc_id)))
+    let mut metrics = docs.metrics(&DocumentId::new(doc_id));
+    let rss = sample_rss_bytes();
+    if let Some(m) = metrics.as_mut() {
+        m.rss_bytes = rss;
+    }
+    Ok(metrics)
 }

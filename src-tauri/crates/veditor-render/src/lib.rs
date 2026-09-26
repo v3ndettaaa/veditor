@@ -180,11 +180,12 @@ pub struct RenderQueue {
     max_jobs: usize,
     jobs: VecDeque<Job>,
     pub cancelled: u64,
+    pub dedup_hits: u64,
 }
 
 impl RenderQueue {
     pub fn new(max_jobs: usize) -> Self {
-        Self { max_jobs: max_jobs.max(1), jobs: VecDeque::new(), cancelled: 0 }
+        Self { max_jobs: max_jobs.max(1), jobs: VecDeque::new(), cancelled: 0, dedup_hits: 0 }
     }
 
     pub fn len(&self) -> usize {
@@ -199,6 +200,7 @@ impl RenderQueue {
     /// a re-requested tile reuses the queued job instead of duplicating it).
     pub fn push(&mut self, job: Job) {
         if self.jobs.iter().any(|j| j.tile() == job.tile()) {
+            self.dedup_hits += 1;
             return;
         }
         // Stable insertion by priority (lower first).
@@ -344,16 +346,23 @@ pub struct CacheMetrics {
     pub hit_rate: f64,
 }
 
-/// Full engine metrics snapshot (queue + cache + last render segments).
+/// Full engine metrics snapshot (queue + cache + render segments + memory).
+/// Units: milliseconds for latencies, BYTES for memory. `rss_bytes` is filled
+/// by the IPC layer (on-demand sampling); 0 means "not sampled".
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EngineMetrics {
     pub queue_depth: usize,
     pub queue_cancelled: u64,
+    pub queue_dedup_hits: u64,
     pub cache: CacheMetrics,
     pub renders_total: u64,
     pub last_tile_backend_ms: u64,
     pub last_tile_render_ms: u64,
     pub last_tile_encode_ms: u64,
+    pub tile_ms_p50: u64,
+    pub tile_ms_p95: u64,
+    pub inflight_tiles: usize,
+    pub rss_bytes: u64,
 }
 
 #[cfg(test)]

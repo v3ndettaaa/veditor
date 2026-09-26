@@ -80,6 +80,13 @@ class VeditorApp {
     needsRepaint?: boolean;
   }> = new Map();
 
+  /**
+   * Transient render retries per page (renderer reported "not ready yet",
+   * e.g. canvas without layout on fresh mount). Bounded at 3 per pass chain
+   * so a detached canvas cannot spin forever; cleared on success.
+   */
+  private _rasterRetries = new Map<number, number>();
+
   private _lastZoom: number = 1.0;
   private _lastDocId: string | null = null;
   private _lastViewMode: string = 'continuous';
@@ -618,6 +625,7 @@ class VeditorApp {
       }
     }
     this._renderedPages.clear();
+    this._rasterRetries.clear();
   }
 
   /**
@@ -1040,6 +1048,10 @@ class VeditorApp {
 
         pageElements = { container, pdfCanvas, patternCanvas, annotCanvas, scratchCanvas };
         this._renderedPages.set(pageIndex, pageElements);
+        // Day-4: a fresh canvas gets a fresh retry budget — the counter is
+        // keyed by page, so evict/remount churn must not burn the budget of
+        // the new canvas (measured persistent blanks after flings).
+        this._rasterRetries.delete(pageIndex);
 
         // Bind Pointer Events to scratchpad canvas
         this.bindPointerEvents(scratchCanvas, pageIndex);
@@ -1078,7 +1090,39 @@ class VeditorApp {
         if (p.needsRaster) {
           p.needsRaster = false;
           const rot = store.pageRotations[pageIndex] || 0;
-          void getPageRenderer().renderPage(pageIndex, p.pdfCanvas, store.zoom, rot);
+          const canvas = p.pdfCanvas;
+          // A `false` result means transient "not ready yet" (e.g. no layout
+          // on fresh mount): re-arm exactly one more pass, bounded per page,
+          // instead of consuming the raster flag and blanking forever.
+          void (async () => {
+            const attemptedZoom = store.zoom;
+            const painted = await getPageRenderer().renderPage(pageIndex, canvas, attemptedZoom, rot);
+            if (painted) {
+              this._rasterRetries.delete(pageIndex);
+              return;
+            }
+            const retries = (this._rasterRetries.get(pageIndex) ?? 0) + 1;
+            if (retries > 3) {
+              // Day-4: give up retrying, but do NOT consume the raster flag —
+              // leave needsRaster set so a future pass heals the page instead
+              // of leaving it blank forever.
+              this._rasterRetries.delete(pageIndex);
+              const stale = this._renderedPages.get(pageIndex);
+              if (stale && stale.pdfCanvas === canvas) {
+                stale.needsRaster = true;
+              }
+              return;
+            }
+            this._rasterRetries.set(pageIndex, retries);
+            const current = this._renderedPages.get(pageIndex);
+            // Day-4 zoom smoothness: only re-arm when the attempted zoom is
+            // still current — a newer commit's pass owns the page now, and a
+            // forced pass here would only queue more doomed work mid-cascade.
+            if (store.zoom === attemptedZoom && current && current.pdfCanvas === canvas) {
+              current.needsRaster = true;
+              viewportManager.handleScroll(true);
+            }
+          })();
         }
         // An on-screen page always repaints, so a pending flag for it is
         // redundant — clearing it here keeps the offscreen pages' single

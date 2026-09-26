@@ -16,32 +16,48 @@ import {
   beginEngineNavigation,
   closeEngineDocument,
   engineTileSpec,
-  fetchEngineMetrics,
   isEngineStaleError,
   openEngineDocument,
   renderEngineTile,
+  type EngineTile,
 } from '../io/engine-tiles';
+
+/**
+ * Day-4 zoom smoothness, TUNABLE: longest side (px) of a last-good snapshot.
+ * Placeholders are drawn scaled to the live backing size, so a capped copy
+ * stays visually useful while bounding memory (an uncapped zoom-8 snapshot is
+ * ~4665x6144 ≈ 115 MB). Raise if placeholders look soft at 100–1600% zoom.
+ */
+const LASTGOOD_MAX_DIM = 1600;
 
 export interface PageRenderer {
   readonly kind: RendererKind;
+  /**
+   * Render one page. Returns true when the call is terminal for this pass
+   * (painted, fell back, or superseded). Returns false ONLY for a transient
+   * "not ready yet" state (e.g. canvas without layout on fresh mount) — the
+   * caller should re-arm `needsRaster` and schedule one more pass instead of
+   * leaving the page blank.
+   */
   renderPage(
     pageIndex: number,
     canvas: HTMLCanvasElement,
     zoom: number,
     rotation: number
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 class PdfJsPageRenderer implements PageRenderer {
   readonly kind = 'pdfjs' as const;
 
-  renderPage(
+  async renderPage(
     pageIndex: number,
     canvas: HTMLCanvasElement,
     zoom: number,
     rotation: number
-  ): Promise<void> {
-    return pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
+  ): Promise<boolean> {
+    await pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
+    return true;
   }
 }
 
@@ -73,22 +89,168 @@ class MupdfTileRenderer implements PageRenderer {
   private navGen = new Map<string, number>();
   private navKey = new Map<string, string>();
   private recentPages = new Map<string, number[]>();
+  // Deferred rest-tile timers per page (gesture-aware deferral): a new pass
+  // for the page cancels its pending timer — the new pass owns the remainder.
+  private deferredTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  /** Render deferred rest tiles after a quiet period; drops silently unless
+   * the snapshot (doc/zoom/rotation/canvas size) still matches, in which case
+   * the settled pass (not this one) owns coverage. */
+  private async renderDeferredRest(
+    snap: {
+      docId: string;
+      pageIndex: number;
+      zoom: number;
+      rotation: number;
+      dpr: number;
+      devW: number;
+      devH: number;
+      gen: number;
+      rest: Array<{ tx: number; ty: number; prio: number }>;
+      canvas: HTMLCanvasElement;
+      ctx: CanvasRenderingContext2D;
+      t0: number;
+    }
+  ): Promise<void> {
+    const { docId, pageIndex, zoom, rotation, dpr, devW, devH, gen, rest, canvas, ctx } = snap;
+    // Day-4: detached (evicted) canvases must not draw or poison lastGood.
+    if (
+      !canvas.isConnected ||
+      store.activeDocument?.id !== docId ||
+      store.zoom !== zoom ||
+      canvas.width !== devW ||
+      canvas.height !== devH
+    ) {
+      return;
+    }
+    let drawn = 0;
+    for (let i = 0; i < rest.length; i += 6) {
+      if (
+        !canvas.isConnected ||
+        store.activeDocument?.id !== docId ||
+        store.zoom !== zoom ||
+        canvas.width !== devW ||
+        canvas.height !== devH
+      ) {
+        return;
+      }
+      const wave = rest.slice(i, i + 6);
+      let results: Array<{ tx: number; ty: number; tile: EngineTile }>;
+      try {
+        results = await Promise.all(
+          wave.map(async ({ tx, ty, prio }) => {
+            const spec = engineTileSpec(docId, pageIndex, zoom, dpr, rotation, tx, ty);
+            const tile = await renderEngineTile(spec, prio, gen);
+            return { tx, ty, tile };
+          })
+        );
+      } catch (e) {
+        // Day-4: a newer navigation invalidates this deferred batch mid-flight
+        // (the standard case mid-cascade). Quiet abort — the newer pass
+        // re-requested vis and deferred its own rest, so coverage converges.
+        // Never throw: this runs in a bare setTimeout, where a rejection is
+        // both an unhandled error and silently lost rest tiles.
+        if (isEngineStaleError(e)) {
+          return;
+        }
+        console.warn(`[mupdf] deferred rest failed for page ${pageIndex}:`, e);
+        return;
+      }
+      if (
+        !canvas.isConnected ||
+        store.activeDocument?.id !== docId ||
+        store.zoom !== zoom ||
+        canvas.width !== devW ||
+        canvas.height !== devH
+      ) {
+        results.forEach(r => r.tile.bitmap.close());
+        return;
+      }
+      for (const { tx, ty, tile } of results) {
+        ctx.drawImage(tile.bitmap, tx * ENGINE_TILE_PX, ty * ENGINE_TILE_PX);
+        tile.bitmap.close();
+        drawn++;
+      }
+    }
+    this.snapshotLastGood(pageIndex, docId, canvas, devW, devH);
+  }
+
+  /** Shareable last-good snapshot (complete coherent renders only). */
+  private snapshotLastGood(
+    pageIndex: number,
+    docId: string,
+    canvas: HTMLCanvasElement,
+    devW: number,
+    devH: number
+  ): void {
+    // Capped copy: placeholders draw scaled, so half-res+ is fine and memory
+    // stays bounded regardless of zoom (see LASTGOOD_MAX_DIM).
+    const snapScale = Math.min(1, LASTGOOD_MAX_DIM / Math.max(1, Math.max(devW, devH)));
+    const sw = Math.max(1, Math.round(devW * snapScale));
+    const sh = Math.max(1, Math.round(devH * snapScale));
+    let s = this.lastGood.get(pageIndex);
+    if (!s || s.canvas.width !== sw || s.canvas.height !== sh || s.docId !== docId) {
+      const c = document.createElement('canvas');
+      c.width = sw;
+      c.height = sh;
+      this.lastGood.set(pageIndex, { canvas: c, docId });
+      s = { canvas: c, docId };
+    }
+    const sctx = s.canvas.getContext('2d');
+    if (sctx) sctx.drawImage(canvas, 0, 0, sw, sh);
+    while (this.lastGood.size > 8) {
+      const oldest = this.lastGood.keys().next();
+      if (oldest.done) break;
+      this.lastGood.delete(oldest.value);
+    }
+  }
+
+  // Day-4 zoom smoothness: identical concurrent renders (same doc/page/zoom/
+  // rotation/canvas) share one flight — rapid commit passes otherwise render
+  // the same page 2-4x concurrently (measured dedup=144 tile storms). Keyed
+  // by canvas identity so a remounted canvas still renders; cleared in
+  // `finally` so failures and stale-abort retries re-enter normally.
+  private inflightRenders = new Map<string, HTMLCanvasElement>();
 
   async renderPage(
     pageIndex: number,
     canvas: HTMLCanvasElement,
     zoom: number,
     rotation: number
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const docId = store.activeDocument?.id;
+    const flightKey = `${docId}|${pageIndex}|${zoom.toFixed(4)}|${rotation}`;
+    if (docId && this.inflightRenders.get(flightKey) === canvas) return true;
+    if (docId) this.inflightRenders.set(flightKey, canvas);
     try {
-      await this.renderPageViaEngine(pageIndex, canvas, zoom, rotation);
+      const ready = await this.renderPageViaEngine(pageIndex, canvas, zoom, rotation);
+      // Transient "canvas not laid out yet": ask the caller for another pass
+      // instead of consuming this one (a throw here would leave the page
+      // blank with no retry — the measured fresh-open/random-jump blanks).
+      if (!ready) return false;
     } catch (e) {
-      // Stale-generation rejections mean a newer navigation owns the canvas:
-      // silent abort, no fallback (fallback would paint obsolete content).
-      if (isEngineStaleError(e)) return;
+      // Stale-generation rejections mean a newer navigation began mid-render:
+      // re-arm (false) instead of reporting success, so the bounded retry in
+      // the caller re-renders the page. Returning true here consumed
+      // `needsRaster` and left partially-drawn pages blank/partial forever on
+      // the same zoom. The retry's same-canvas check dedups against a newer
+      // pass that already owns the canvas.
+      if (isEngineStaleError(e)) return false;
       console.warn(`[mupdf] tile render failed for page ${pageIndex}, pdf.js fallback:`, e);
-      await pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
+      try {
+        await pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
+      } catch (e2) {
+        // Both paths failed (e.g. transient mount + broken JPX fallback):
+        // terminal for this pass — a later scroll/zoom pass retries naturally.
+        console.warn(`[mupdf] pdf.js fallback also failed for page ${pageIndex}:`, e2);
+      }
+      return true;
+    } finally {
+      if (docId && this.inflightRenders.get(flightKey) === canvas) {
+        this.inflightRenders.delete(flightKey);
+      }
     }
+    return true;
   }
 
   private async renderPageViaEngine(
@@ -96,7 +258,7 @@ class MupdfTileRenderer implements PageRenderer {
     canvas: HTMLCanvasElement,
     zoom: number,
     rotation: number
-  ): Promise<void> {
+  ): Promise<boolean> {
     const doc = store.activeDocument;
     if (!doc) throw new Error('no active document');
     if (!this.openedDocs.has(doc.id)) {
@@ -127,22 +289,23 @@ class MupdfTileRenderer implements PageRenderer {
     }
     // Bounded layout wait: on fresh mount (document open, random-page jump)
     // the render pass can fire before geometry sizes the canvas. Poll for a
-    // valid laid-out size (~10 rAF frames, ~500 ms max) instead of failing
-    // immediately — a throw here consumes `needsRaster` and the page stays
-    // blank with no retry. Past the bound, throw to the existing fallback.
+    // valid laid-out size (~10 rAF frames, ~500 ms max) and report transient
+    // (false) so the caller schedules another pass — a throw here would
+    // consume `needsRaster` and leave the page blank with no retry.
     let cssW = canvas.clientWidth;
     let devW = canvas.width;
     let devH = canvas.height;
     for (let frame = 0; !(cssW > 0 && devW > 0 && devH > 0) && frame < 10; frame++) {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      // Abort the wait if a newer navigation already owns this canvas.
-      if (store.activeDocument?.id !== doc.id || store.zoom !== zoom) return;
+      // A newer navigation owns this canvas now: terminal, do NOT retry old
+      // zoom (the newer pass paints).
+      if (store.activeDocument?.id !== doc.id || store.zoom !== zoom) return true;
       cssW = canvas.clientWidth;
       devW = canvas.width;
       devH = canvas.height;
     }
     if (!(cssW > 0 && devW > 0 && devH > 0 && zoom > 0)) {
-      throw new Error('page canvas has no laid-out size yet');
+      return false;
     }
     // Scale contract (see TileId): devScale IS the final geometry backing
     // multiplier (target-DPI factor already included), so it is the `dpr`
@@ -166,8 +329,12 @@ class MupdfTileRenderer implements PageRenderer {
     const key = `${zoom.toFixed(4)}|${rotation}`;
     let gen = this.navGen.get(doc.id) ?? 0;
     const recent = this.recentPages.get(doc.id) ?? [];
+    // Day-4: capture whether this pass changed zoom/rotation before the jump
+    // block refreshes navKey — a change means older queued server work is
+    // obsolete and gets invalidated below.
+    const zoomCommit = this.navKey.get(doc.id) !== key;
     const jumped =
-      this.navKey.get(doc.id) !== key ||
+      zoomCommit ||
       (recent.length > 0 && recent.every(p => Math.abs(p - pageIndex) > 2));
     if (jumped) {
       try {
@@ -216,8 +383,14 @@ class MupdfTileRenderer implements PageRenderer {
       for (let tx = 0; tx < cols; tx++) {
         const x0 = tx * ENGINE_TILE_PX;
         const y0 = ty * ENGINE_TILE_PX;
+        // Day-4: a null vis means genuinely off-viewport (buffer page) — the
+        // whole grid stays background priority so prefetch never competes
+        // with on-screen tiles in the single Rust worker. The previous `!vis`
+        // fallback rendered full 35-tile grids at top priority (measured
+        // firstVis 3-8s). When the page scrolls into view a new pass
+        // re-requests with a fresh vis.
         const inView =
-          !vis ||
+          vis !== null &&
           (x0 < (vis.x + vis.width) * devScale &&
             x0 + ENGINE_TILE_PX > vis.x * devScale &&
             y0 < (vis.y + vis.height) * devScale &&
@@ -237,73 +410,83 @@ class MupdfTileRenderer implements PageRenderer {
       }
     }
     order.sort((a, b) => a.prio - b.prio);
+    // A new pass supersedes any deferred remainder for this page: cancel it
+    // (the new pass re-requests what is still needed, or re-defers).
+    const pendingTimer = this.deferredTimers.get(pageIndex);
+    if (pendingTimer !== undefined) {
+      clearTimeout(pendingTimer);
+      this.deferredTimers.delete(pageIndex);
+    }
+    // Day-4 vis-first policy: EVERY pass requests visible + adjacent tiles
+    // now and defers background rest until 300 ms of quiet. A single MuPDF
+    // worker serializes all tiles, so any rest work requested up front delays
+    // visible pixels (measured fresh-open firstVis 4570ms behind 105 queued
+    // tiles). Fully off-screen pages (no prio<=2 tile) defer their whole grid
+    // — prefetch is preserved, it just never competes with visible work. A
+    // newer pass cancels the pending timer and re-defers; the settled state
+    // always converges because quiet always comes.
+    let requestOrder = order;
+    {
+      const now = order.filter(t => t.prio <= 2);
+      const rest = order.filter(t => t.prio > 2);
+      if (rest.length > 0 && (now.length > 0 || rest.length === order.length)) {
+        const snapDefer = {
+          docId: doc.id,
+          pageIndex,
+          zoom,
+          rotation,
+          dpr,
+          devW,
+          devH,
+          gen,
+          rest,
+          canvas,
+          ctx,
+          t0: performance.now(),
+        };
+        const timer = setTimeout(() => {
+          this.deferredTimers.delete(pageIndex);
+          void this.renderDeferredRest(snapDefer);
+        }, 300);
+        this.deferredTimers.set(pageIndex, timer);
+        requestOrder = now;
+      }
+    }
     // Bounded parallelism: tiles are position-independent, so arrival order
     // is irrelevant. 6 in flight keeps the single Rust worker saturated
     // without queue pile-up (Day-3: priority queue + cancellation).
     const CONCURRENCY = 6;
-    const t0 = performance.now();
     let drawn = 0;
-    let ipcSum = 0;
-    let decodeSum = 0;
-    for (let i = 0; i < order.length; i += CONCURRENCY) {
-      if (!coherent()) return;
-      const wave = order.slice(i, i + CONCURRENCY);
+    for (let i = 0; i < requestOrder.length; i += CONCURRENCY) {
+      // Superseded mid-loop: terminal (a newer pass owns the canvas).
+      if (!coherent()) return true;
+      const wave = requestOrder.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
         wave.map(async ({ tx, ty, prio }) => {
           const spec = engineTileSpec(doc.id, pageIndex, zoom, dpr, rotation, tx, ty);
           const tile = await renderEngineTile(spec, prio, gen);
-          return { tx, ty, tile };
+          return { tx, ty, prio, tile };
         })
       );
       if (!coherent()) {
         results.forEach(r => r.tile.bitmap.close());
-        return;
+        return true;
       }
       for (const { tx, ty, tile } of results) {
         ctx.drawImage(tile.bitmap, tx * ENGINE_TILE_PX, ty * ENGINE_TILE_PX);
-        ipcSum += tile.ipcMs;
-        decodeSum += tile.decodeMs;
         tile.bitmap.close();
         drawn++;
       }
     }
-    // TEMPORARY probe: per-page resolve time + segment means (benchmark data).
-    // ipc = Rust render+encode+transport; decode = browser PNG decode.
-    const n = Math.max(1, drawn);
-    console.info(
-      `[mupdf] page=${pageIndex} gen=${gen} resolved ${drawn}/${order.length} tiles in ${(performance.now() - t0).toFixed(0)}ms ` +
-      `(ipc~${(ipcSum / n).toFixed(0)}ms decode~${(decodeSum / n).toFixed(0)}ms/tile)`
-    );
-    // TEMPORARY probe: server counters per page (queue/cache/render reality).
-    void fetchEngineMetrics(doc.id).then(m => {
-      if (!m) return;
-      console.info(
-        `[mupdf] metrics q=${m.queue_depth} cancelled=${m.queue_cancelled} ` +
-        `hit=${(m.cache.hit_rate * 100).toFixed(0)}% evict=${m.cache.evictions} ` +
-        `cache=${(m.cache.used_bytes / 1048576).toFixed(1)}MB renders=${m.renders_total} ` +
-        `lastTile(rs=${m.last_tile_render_ms} enc=${m.last_tile_encode_ms})ms`
-      );
-    });
     // Snapshot for the next render's stale placeholder (only complete,
     // coherent renders qualify — aborted passes must not poison it).
-    if (drawn === order.length && order.length > 0 && coherent()) {
-      let snap = this.lastGood.get(pageIndex);
-      if (!snap || snap.canvas.width !== devW || snap.canvas.height !== devH) {
-        const c = document.createElement('canvas');
-        c.width = devW;
-        c.height = devH;
-        this.lastGood.set(pageIndex, { canvas: c, docId: doc.id });
-        snap = { canvas: c, docId: doc.id };
-      }
-      const sctx = snap.canvas.getContext('2d');
-      if (sctx) sctx.drawImage(canvas, 0, 0);
-      // Bound memory: full-page bitmaps are MBs each; keep only recent ones.
-      while (this.lastGood.size > 8) {
-        const oldest = this.lastGood.keys().next();
-        if (oldest.done) break;
-        this.lastGood.delete(oldest.value);
-      }
+    // NOTE: a pass that deferred its rest still snapshots: the visible part
+    // is complete and coherent, and the deferred remainder overwrites the
+    // snapshot when it lands.
+    if (drawn === requestOrder.length && requestOrder.length > 0 && coherent()) {
+      this.snapshotLastGood(pageIndex, doc.id, canvas, devW, devH);
     }
+    return true;
   }
 
   /** Drop engine documents on tab close (best-effort; engine also GCs). */

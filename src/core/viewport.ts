@@ -331,7 +331,9 @@ export class ViewportManager {
     const y0 = Math.max(layout.top, vy0);
     const x1 = Math.min(layout.left + layout.width, vx1);
     const y1 = Math.min(layout.top + layout.height, vy1);
-    if (x1 <= x0 || y1 <= y0) return null;
+    if (x1 <= x0 || y1 <= y0) {
+      return null;
+    }
     return { x: x0 - layout.left, y: y0 - layout.top, width: x1 - x0, height: y1 - y0 };
   }
 
