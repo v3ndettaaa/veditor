@@ -1,8 +1,9 @@
 //! Headless real-pixel proof for the MuPDF backend.
 //!
-//! Requires `--features mupdf` (native toolchain). Uses the operator-supplied
-//! `tests/data/f.pdf` fixture: opens it, renders tiles, decodes the PNGs and
-//! asserts real content pixels — no stubs anywhere in this path.
+//! Requires `--features mupdf` (native toolchain). Uses a deterministic
+//! synthetic single-page (US Letter) fixture embedded below: opens it,
+//! renders tiles, decodes the PNGs and asserts real content pixels —
+//! no stubs anywhere in this path, and no external fixture file.
 
 #![cfg(feature = "mupdf")]
 
@@ -10,7 +11,48 @@ use image::GenericImageView;
 use veditor_core::{DocumentId, TileId, TileSpec};
 use veditor_pdf::{MupdfBackend, PdfBackend};
 
-const FIXTURE: &[u8] = include_bytes!("data/f.pdf");
+/// Deterministic synthetic fixture: minimal one-page US Letter PDF with a
+/// full-page light-gray fill plus one Helvetica text line, so tile (0,0)
+/// always carries non-white content pixels. Kept inline so the test needs
+/// no external file. Letter size is load-bearing: the edge-tile test
+/// subtracts full-tile strides in u32, so smaller pages would underflow.
+const FIXTURE: &[u8] = concat!(
+    "%PDF-1.4\n",
+    "1 0 obj\n",
+    "<< /Type /Catalog /Pages 2 0 R >>\n",
+    "endobj\n",
+    "2 0 obj\n",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n",
+    "endobj\n",
+    "3 0 obj\n",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\n",
+    "endobj\n",
+    "4 0 obj\n",
+    "<< /Length 86 >>\n",
+    "stream\n",
+    "0.9 g\n",
+    "0 0 612 792 re f\n",
+    "BT /F1 24 Tf 72 720 Td (Veditor synthetic MuPDF fixture) Tj ET\n",
+    "endstream\n",
+    "endobj\n",
+    "5 0 obj\n",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n",
+    "endobj\n",
+    "xref\n",
+    "0 6\n",
+    "0000000000 65535 f \n",
+    "0000000009 00000 n \n",
+    "0000000058 00000 n \n",
+    "0000000115 00000 n \n",
+    "0000000241 00000 n \n",
+    "0000000376 00000 n \n",
+    "trailer\n",
+    "<< /Size 6 /Root 1 0 R >>\n",
+    "startxref\n",
+    "446\n",
+    "%%EOF\n",
+)
+.as_bytes();
 
 /// Build a spec the way the viewer does: `dpr` is the final geometry
 /// backing multiplier (target-DPI factor included), so device scale is
@@ -41,7 +83,7 @@ fn mupdf_renders_real_pixels_from_fixture() {
     assert!(FIXTURE.starts_with(b"%PDF-"), "fixture must be a real PDF");
     let backend = MupdfBackend::with_target_dpi(150.0);
     assert_eq!(backend.name(), "mupdf");
-    let doc = backend.open_from_bytes(FIXTURE).expect("open f.pdf");
+    let doc = backend.open_from_bytes(FIXTURE).expect("open fixture");
     let count = backend.page_count(doc).expect("page count");
     assert!(count >= 1, "fixture must have at least one page, got {count}");
 
@@ -84,7 +126,7 @@ fn mupdf_renders_real_pixels_from_fixture() {
 #[test]
 fn mupdf_rotation_renders_valid_tiles() {
     let backend = MupdfBackend::with_target_dpi(150.0);
-    let doc = backend.open_from_bytes(FIXTURE).expect("open f.pdf");
+    let doc = backend.open_from_bytes(FIXTURE).expect("open fixture");
     // 90° rotation must produce a valid tile (dims follow the swapped extents).
     let tile = backend.render_tile_png(doc, &spec(0, 1.0, DPR_150, 90, 0, 0)).expect("rot90 tile");
     let (w, h, _) = decode(&tile);
