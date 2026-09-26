@@ -4,3 +4,8 @@ dist/
 .DS_Store
 src-tauri/target/
 src-tauri/gen/
+# Session artifacts must never be tracked.
+session_*.md
+# PDF binaries must never be tracked implicitly (the intentional
+# tests/data/f.pdf fixture stays tracked; future PDFs need `git add -f`).
+*.pdf
