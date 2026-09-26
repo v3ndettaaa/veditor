@@ -20,13 +20,13 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin --features mupdf'
           - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
+            args: '--target x86_64-apple-darwin --features mupdf'
           - platform: 'ubuntu-22.04'
-            args: ''
+            args: '--features mupdf'
           - platform: 'windows-latest'
-            args: ''
+            args: '--features mupdf'
 
     runs-on: ${{ matrix.platform }}
 
@@ -49,10 +49,19 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfontconfig1-dev libclang-dev clang
 
       - name: Install frontend dependencies
         run: npm ci || npm install
+
+      - name: Setup MuPDF build env (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install llvm -y
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          "MUPDF_MSVC_PLATFORM_TOOLSET=v145" >> $env:GITHUB_ENV
+          "BINDGEN_EXTRA_CLANG_ARGS=-include ${{ github.workspace }}/src-tauri/build-support/bindgen-shim/max_align_t.h" >> $env:GITHUB_ENV
 
       - name: Build Tauri Desktop Application
         uses: tauri-apps/tauri-action@v0
@@ -65,6 +74,25 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Verify MuPDF linked (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes('src-tauri/target/release/veditor.exe')
+          $count = ([regex]::Matches([System.Text.Encoding]::ASCII.GetString($bytes), 'MuPDF')).Count
+          Write-Output "MuPDF literal hits: $count"
+          if ($count -lt 1) { Write-Error 'MuPDF markers absent: Stub backend built instead'; exit 1 }
+
+      - name: Verify MuPDF linked (macOS/Linux)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          BIN=$(find src-tauri/target -maxdepth 3 -path '*release/veditor' -type f | head -n 1)
+          echo "binary: $BIN"
+          COUNT=$(grep -a -c 'MuPDF' "$BIN" || true)
+          echo "MuPDF literal hits: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then echo 'MuPDF markers absent: Stub backend built instead'; exit 1; fi
 
   package-extensions:
     needs: build-tauri
