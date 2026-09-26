@@ -20,6 +20,16 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: './',
+    server: {
+      // Tauri `dev` runs Vite with repo root as cwd while `cargo` links
+      // under src-tauri/target/. Watching build artifacts makes chokidar
+      // throw EBUSY on Windows (fatal to the dev server). Build output is
+      // never frontend source, so exclude it. Dev-only key: `vite build`
+      // ignores `server.watch`.
+      watch: {
+        ignored: ['**/src-tauri/target/**'],
+      },
+    },
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version)
     },
