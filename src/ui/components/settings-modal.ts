@@ -519,6 +519,15 @@ export class SettingsModalComponent {
             </select>
           </div>
 
+          <!-- PDF Renderer -->
+          <div class="prop-group">
+            <span class="prop-label">PDF Renderer</span>
+            <select id="renderer-select" class="field" ${isDesktop() ? '' : 'disabled'}>
+              <option value="pdfjs" ${app.renderer !== 'mupdf' ? 'selected' : ''}>Legacy — pdf.js</option>
+              <option value="mupdf" ${app.renderer === 'mupdf' ? 'selected' : ''}>New — MuPDF (desktop only)</option>
+            </select>
+          </div>
+
           <div class="settings-section-header">Reading Comfort & Visuals</div>
 
           <!-- Page Shadows Toggle -->
@@ -886,6 +895,15 @@ export class SettingsModalComponent {
       else if (val === '100%') { store.setZoom(1.0); }
       else if (val === '125%') { store.setZoom(1.25); }
       else if (val === '150%') { store.setZoom(1.5); }
+    });
+
+    // PDF renderer select (Settings → Viewer → Renderer). Desktop only —
+    // the select is disabled on extension builds (see template above).
+    const rendererSelect = this._container.querySelector<HTMLSelectElement>('#renderer-select');
+    rendererSelect?.addEventListener('change', () => {
+      const val = rendererSelect.value === 'mupdf' ? 'mupdf' : 'pdfjs';
+      const app = (window as unknown as { app?: { setRenderer(kind: 'pdfjs' | 'mupdf'): void } }).app;
+      app?.setRenderer(val);
     });
 
     // Page shadows toggle

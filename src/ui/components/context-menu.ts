@@ -25,6 +25,8 @@ import {
 import { mergeBoundingBoxes } from '../../utils/geometry';
 import { getIconSvg } from '../../utils/icons';
 import { viewportManager } from '../../core/viewport';
+import { pageActions } from '../../core/page-actions';
+import { t } from '../i18n';
 import { showToast } from './toast';
 
 export interface AnnotationMenuTarget {
@@ -238,6 +240,22 @@ export class AnnotationContextMenu {
     entries.push({ kind: 'separator' });
     entries.push({ kind: 'action', id: 'fit-width', label: 'Fit to width', icon: 'fitWidth', run: () => viewportManager.fitToWidth() });
     entries.push({ kind: 'action', id: 'fit-page', label: 'Fit to page', icon: 'fitPage', run: () => viewportManager.fitToPage() });
+    entries.push({ kind: 'separator' });
+    // Day-5: page rotation on canvas right-click (same action + i18n keys as
+    // the thumbnails menu). Record-only rotation; layout re-centers via the
+    // normal relayout path. Busy-guard + error toast mirror runPageAction.
+    const rotatePage = async (deltaDeg: number) => {
+      if (pageActions.isBusy) return;
+      let ok = false;
+      try {
+        ok = await pageActions.rotatePages([target.pageIndex], deltaDeg);
+      } catch (err) {
+        console.error('Page action failed:', err);
+      }
+      if (!ok) showToast(t('sidebar.pages.failed'), 'error');
+    };
+    entries.push({ kind: 'action', id: 'page-rotate-cw', label: t('sidebar.pages.rotateCw'), icon: 'rotate', run: () => { void rotatePage(90); } });
+    entries.push({ kind: 'action', id: 'page-rotate-ccw', label: t('sidebar.pages.rotateCcw'), icon: 'rotate', run: () => { void rotatePage(-90); } });
     return entries;
   }
 

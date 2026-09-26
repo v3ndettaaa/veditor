@@ -1325,8 +1325,6 @@ export class PointerHandler {
       eraserTool.finish();
       this.commitEraserSession(this._eraserSession.pageIndex);
     } else {
-      this._zoomMarqueeStart = null;
-      this._zoomMarqueeCurrent = null;
       // A gesture takeover commits (never silently drops) a selection drag;
       // an uncommitted marquee/lasso is just a rubber band.
       this.commitSelectDrag();

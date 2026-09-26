@@ -9,7 +9,9 @@
 use std::sync::Mutex;
 use tauri::ipc::{Request, Response};
 use tauri::{AppHandle, Manager, State};
-use veditor_engine::{Documents, DocumentId, EngineError, EngineMetrics, Size, TileSpec};
+use veditor_engine::{Documents, DocumentId, EngineError, TileSpec};
+#[cfg(not(feature = "mupdf"))]
+use veditor_engine::Size;
 #[cfg(feature = "mupdf")]
 use veditor_engine::MupdfBackend;
 #[cfg(not(feature = "mupdf"))]
@@ -116,22 +118,6 @@ pub fn engine_close_document(state: State<EngineState>, doc_id: String) {
     }
 }
 
-#[tauri::command]
-pub fn engine_page_count(state: State<EngineState>, doc_id: String) -> Result<u32, String> {
-    let docs = state.0.lock().map_err(|_| "engine: state lock poisoned".to_string())?;
-    docs.page_count(&DocumentId::new(doc_id)).map_err(err)
-}
-
-#[tauri::command]
-pub fn engine_page_size(
-    state: State<EngineState>,
-    doc_id: String,
-    page: u32,
-) -> Result<Size, String> {
-    let docs = state.0.lock().map_err(|_| "engine: state lock poisoned".to_string())?;
-    docs.page_size(&DocumentId::new(doc_id), page).map_err(err)
-}
-
 /// Bump the navigation generation for a document, invalidating queued work
 /// from older navigations. The viewer calls this on page jumps and
 /// zoom/rotation commits, BEFORE requesting the new generation's tiles.
@@ -166,30 +152,4 @@ pub async fn engine_render_tile(
         .render_tile_queued(&spec.tile.doc, &spec, veditor_engine::Priority(priority), generation)
         .map_err(err)?;
     Ok(Response::new(tile.png))
-}
-
-/// Sample this process's RSS (bytes) on demand. Called only from
-/// `engine_metrics` — no background polling. Total process observation, NOT a
-/// breakdown of cache/queue/document/MuPDF components (tracked separately).
-fn sample_rss_bytes() -> u64 {
-    use sysinfo::{Pid, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    let pid = Pid::from_u32(std::process::id());
-    // Refresh ONLY this process (no full-system scan): O(1) sampling.
-    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    sys.process(pid).map(|p| p.memory()).unwrap_or(0)
-}
-
-#[tauri::command]
-pub fn engine_metrics(
-    state: State<EngineState>,
-    doc_id: String,
-) -> Result<Option<EngineMetrics>, String> {
-    let docs = state.0.lock().map_err(|_| "engine: state lock poisoned".to_string())?;
-    let mut metrics = docs.metrics(&DocumentId::new(doc_id));
-    let rss = sample_rss_bytes();
-    if let Some(m) = metrics.as_mut() {
-        m.rss_bytes = rss;
-    }
-    Ok(metrics)
 }

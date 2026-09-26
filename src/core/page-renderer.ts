@@ -80,7 +80,7 @@ class MupdfTileRenderer implements PageRenderer {
   // Last fully-rendered bitmap per page for stale placeholders: backing
   // resizes wipe the canvas before the first new tile arrives, so blit the
   // previous zoom as a stand-in first (same trick as the pdf.js stale blit).
-  private lastGood = new Map<number, { canvas: HTMLCanvasElement; docId: string }>();
+  private lastGood = new Map<number, { canvas: HTMLCanvasElement; docId: string; rotation: number }>();
 
   // Navigation state for server generation invalidation: bumped on doc /
   // zoom / rotation change and on distant page jumps (>2 pages from anything
@@ -94,14 +94,15 @@ class MupdfTileRenderer implements PageRenderer {
   private deferredTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   /** Render deferred rest tiles after a quiet period; drops silently unless
-   * the snapshot (doc/zoom/rotation/canvas size) still matches, in which case
-   * the settled pass (not this one) owns coverage. */
+   * the snapshot (doc/zoom/rotation/renderer/canvas size) still matches, in
+   * which case the settled pass (not this one) owns coverage. */
   private async renderDeferredRest(
     snap: {
       docId: string;
       pageIndex: number;
       zoom: number;
       rotation: number;
+      renderer: RendererKind;
       dpr: number;
       devW: number;
       devH: number;
@@ -112,12 +113,16 @@ class MupdfTileRenderer implements PageRenderer {
       t0: number;
     }
   ): Promise<void> {
-    const { docId, pageIndex, zoom, rotation, dpr, devW, devH, gen, rest, canvas, ctx } = snap;
+    const { docId, pageIndex, zoom, rotation, renderer, dpr, devW, devH, gen, rest, canvas, ctx } = snap;
     // Day-4: detached (evicted) canvases must not draw or poison lastGood.
+    // Day-5: a renderer switch aborts deferred batches (stale paint guard);
+    // a newer rotation does too (older orientation must never paint over).
     if (
       !canvas.isConnected ||
       store.activeDocument?.id !== docId ||
       store.zoom !== zoom ||
+      (store.pageRotations[pageIndex] || 0) !== rotation ||
+      getRendererKind() !== renderer ||
       canvas.width !== devW ||
       canvas.height !== devH
     ) {
@@ -129,6 +134,8 @@ class MupdfTileRenderer implements PageRenderer {
         !canvas.isConnected ||
         store.activeDocument?.id !== docId ||
         store.zoom !== zoom ||
+        (store.pageRotations[pageIndex] || 0) !== rotation ||
+        getRendererKind() !== renderer ||
         canvas.width !== devW ||
         canvas.height !== devH
       ) {
@@ -160,6 +167,8 @@ class MupdfTileRenderer implements PageRenderer {
         !canvas.isConnected ||
         store.activeDocument?.id !== docId ||
         store.zoom !== zoom ||
+        (store.pageRotations[pageIndex] || 0) !== rotation ||
+        getRendererKind() !== renderer ||
         canvas.width !== devW ||
         canvas.height !== devH
       ) {
@@ -172,7 +181,7 @@ class MupdfTileRenderer implements PageRenderer {
         drawn++;
       }
     }
-    this.snapshotLastGood(pageIndex, docId, canvas, devW, devH);
+    this.snapshotLastGood(pageIndex, docId, canvas, devW, devH, rotation);
   }
 
   /** Shareable last-good snapshot (complete coherent renders only). */
@@ -181,7 +190,8 @@ class MupdfTileRenderer implements PageRenderer {
     docId: string,
     canvas: HTMLCanvasElement,
     devW: number,
-    devH: number
+    devH: number,
+    rotation: number
   ): void {
     // Capped copy: placeholders draw scaled, so half-res+ is fine and memory
     // stays bounded regardless of zoom (see LASTGOOD_MAX_DIM).
@@ -189,12 +199,12 @@ class MupdfTileRenderer implements PageRenderer {
     const sw = Math.max(1, Math.round(devW * snapScale));
     const sh = Math.max(1, Math.round(devH * snapScale));
     let s = this.lastGood.get(pageIndex);
-    if (!s || s.canvas.width !== sw || s.canvas.height !== sh || s.docId !== docId) {
+    if (!s || s.canvas.width !== sw || s.canvas.height !== sh || s.docId !== docId || s.rotation !== rotation) {
       const c = document.createElement('canvas');
       c.width = sw;
       c.height = sh;
-      this.lastGood.set(pageIndex, { canvas: c, docId });
-      s = { canvas: c, docId };
+      this.lastGood.set(pageIndex, { canvas: c, docId, rotation });
+      s = { canvas: c, docId, rotation };
     }
     const sctx = s.canvas.getContext('2d');
     if (sctx) sctx.drawImage(canvas, 0, 0, sw, sh);
@@ -236,6 +246,10 @@ class MupdfTileRenderer implements PageRenderer {
       // the same zoom. The retry's same-canvas check dedups against a newer
       // pass that already owns the canvas.
       if (isEngineStaleError(e)) return false;
+      // Day-5: the document may have been closed mid-render — never run the
+      // pdf.js fallback onto a canvas whose document is gone (the close path
+      // owns cleanup; painting here would only resurrect detached content).
+      if (!docId || !store.openDocuments.has(docId)) return true;
       console.warn(`[mupdf] tile render failed for page ${pageIndex}, pdf.js fallback:`, e);
       try {
         await pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
@@ -298,8 +312,11 @@ class MupdfTileRenderer implements PageRenderer {
     for (let frame = 0; !(cssW > 0 && devW > 0 && devH > 0) && frame < 10; frame++) {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       // A newer navigation owns this canvas now: terminal, do NOT retry old
-      // zoom (the newer pass paints).
-      if (store.activeDocument?.id !== doc.id || store.zoom !== zoom) return true;
+      // zoom/rotation (the newer pass paints). The rotation check closes the
+      // rapid-rotation hole where a superseded pass snapshots the already
+      // resized canvas and paints stale-orientation tiles over the new ones.
+      if (store.activeDocument?.id !== doc.id || store.zoom !== zoom ||
+          (store.pageRotations[pageIndex] || 0) !== rotation) return true;
       cssW = canvas.clientWidth;
       devW = canvas.width;
       devH = canvas.height;
@@ -356,17 +373,34 @@ class MupdfTileRenderer implements PageRenderer {
     if (!prev || prev.docId !== doc.id) {
       if (prev) this.lastGood.delete(pageIndex);
     } else {
-      ctx.drawImage(prev.canvas, 0, 0, devW, devH);
+      // Day-5 rotation polish (cosmetic only): when the snapshot predates a
+      // ±90° rotation, paint it rotated into the new geometry instead of
+      // stretching the old orientation (transient wide/soft flash). 0°/180°
+      // draw as before. Tiles overwrite the placeholder within ~a second.
+      const delta = ((rotation - (prev.rotation ?? rotation)) % 360 + 360) % 360;
+      if (delta === 90 || delta === 270) {
+        ctx.save();
+        ctx.translate(devW / 2, devH / 2);
+        ctx.rotate((delta * Math.PI) / 180);
+        ctx.drawImage(prev.canvas, -devH / 2, -devW / 2, devH, devW);
+        ctx.restore();
+      } else {
+        ctx.drawImage(prev.canvas, 0, 0, devW, devH);
+      }
     }
-    // Coherence snapshot: render passes routinely race zoom/scroll commits,
-    // which resize the canvas and bump store.zoom mid-loop. Drawing tiles
-    // from a stale (zoom, size) pair mixes scales on one canvas and trips
-    // out-of-bounds fallbacks — abort quietly instead; the newer pass owns
-    // the canvas now.
-    const snap = { docId: doc.id, zoom, rotation, devW, devH };
+    // Coherence snapshot: render passes routinely race zoom/scroll/rotation
+    // commits, which resize the canvas and bump store.zoom mid-loop. Drawing
+    // tiles from a stale (zoom, rotation, size) tuple mixes orientations on
+    // one canvas — abort quietly instead; the newer pass owns the canvas now.
+    // The rotation axis closes the rapid-rotation hole (older rotation must
+    // never paint over a newer one); canvas dims alone cannot catch it when
+    // the superseding pass resized the canvas before this pass woke up.
+    const snap = { docId: doc.id, zoom, rotation, devW, devH, renderer: getRendererKind() };
     const coherent = () =>
       store.activeDocument?.id === snap.docId &&
       store.zoom === snap.zoom &&
+      (store.pageRotations[pageIndex] || 0) === snap.rotation &&
+      getRendererKind() === snap.renderer &&
       canvas.width === snap.devW &&
       canvas.height === snap.devH;
     // Progressive replace (no clearRect): keep the previous-zoom pixels
@@ -435,6 +469,7 @@ class MupdfTileRenderer implements PageRenderer {
           pageIndex,
           zoom,
           rotation,
+          renderer: getRendererKind(),
           dpr,
           devW,
           devH,
@@ -484,16 +519,31 @@ class MupdfTileRenderer implements PageRenderer {
     // is complete and coherent, and the deferred remainder overwrites the
     // snapshot when it lands.
     if (drawn === requestOrder.length && requestOrder.length > 0 && coherent()) {
-      this.snapshotLastGood(pageIndex, doc.id, canvas, devW, devH);
+      this.snapshotLastGood(pageIndex, doc.id, canvas, devW, devH, rotation);
     }
     return true;
   }
 
-  /** Drop engine documents on tab close (best-effort; engine also GCs). */
-  voidClose(docId: string): void {
-    if (this.openedDocs.delete(docId)) {
-      void closeEngineDocument(docId);
+  /**
+   * Day-5: release ALL document-scoped engine state on tab close / document
+   * removal. Rust side (registry entry, bytes, MuPDF ownership, tile cache,
+   * render queue) via closeEngineDocument; TS side generations, nav keys,
+   * recent pages, open tracking, and this doc's last-good snapshots.
+   * Deferred timers and in-flight renders carry the doc id and abort on
+   * mismatch, so they need no purge — and purging them by page index could
+   * touch another open document's state. Safe to call for docs never opened
+   * in the engine (all deletes no-op; the command tolerates unknown ids).
+   */
+  closeDocument(docId: string): void {
+    this.openedDocs.delete(docId);
+    this.openingDocs.delete(docId);
+    this.navGen.delete(docId);
+    this.navKey.delete(docId);
+    this.recentPages.delete(docId);
+    for (const [pageIndex, snap] of this.lastGood) {
+      if (snap.docId === docId) this.lastGood.delete(pageIndex);
     }
+    void closeEngineDocument(docId);
   }
 }
 
@@ -508,4 +558,13 @@ export function getPageRenderer(): PageRenderer {
     return mupdfRenderer;
   }
   return pdfJsRenderer;
+}
+
+/**
+ * Day-5: release all engine-side and renderer-side state for a closed or
+ * removed document (Rust registry entry, bytes, cache, queue, generations,
+ * snapshots, open tracking). Safe for documents never opened in the engine.
+ */
+export function releaseEngineDocument(docId: string): void {
+  mupdfRenderer.closeDocument(docId);
 }

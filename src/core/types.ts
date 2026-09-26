@@ -410,6 +410,12 @@ export interface AppSettings {
    * system DPI (72 * devicePixelRatio) is used.
    */
   targetDPI: number;
+  /**
+   * Page raster backend. `pdfjs` is the default; `mupdf` selects the
+   * Rust/MuPDF tile renderer (desktop only — extension builds stay on pdf.js).
+   * Read centrally via getRendererKind(); never branch on this directly.
+   */
+  renderer: 'pdfjs' | 'mupdf';
   /** Which window edge the floating toolbar is docked to. */
   toolbarDock: ToolbarDock;
   /**

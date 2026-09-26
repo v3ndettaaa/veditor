@@ -520,7 +520,20 @@ export class PDFEngine {
         // shimmer when upscaling and moiré when downscaling a cached frame.
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
+        // Day-5 rotation polish (cosmetic only): when the cached frame
+        // predates a ±90° rotation, paint it rotated into the new geometry
+        // instead of stretching the old orientation (transient wide/soft
+        // flash). 0°/180° blit as before. Mirrors the MuPDF placeholder.
+        const rotDelta = ((totalRotation - cached.rotation) % 360 + 360) % 360;
+        if (rotDelta === 90 || rotDelta === 270) {
+          ctx.save();
+          ctx.translate(targetWidth / 2, targetHeight / 2);
+          ctx.rotate((rotDelta * Math.PI) / 180);
+          ctx.drawImage(cached.canvas, -targetHeight / 2, -targetWidth / 2, targetHeight, targetWidth);
+          ctx.restore();
+        } else {
+          ctx.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
+        }
       }
 
       if (cached.scale === scale && cached.rotation === totalRotation && cached.width === targetWidth && cached.height === targetHeight) {

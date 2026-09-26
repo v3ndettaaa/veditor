@@ -118,6 +118,7 @@ class StateStore {
     smoothScroll: true,
     invertDocumentOled: false,
     targetDPI: 150,
+    renderer: 'pdfjs',
     toolbarDock: 'top',
     customPalette: [],
     removedDefaultColors: []
@@ -215,6 +216,16 @@ class StateStore {
             this._toolSettings = { ...this._toolSettings, snapAngle15: snap, connectLines: connect };
             delete parsed.snapAngle15;
             delete parsed.connectLines;
+          }
+          // One-time import of the Day-2 localStorage renderer flag.
+          if (parsed.renderer === undefined) {
+            try {
+              if (typeof localStorage !== 'undefined' && localStorage.getItem('veditor_renderer') === 'mupdf') {
+                parsed.renderer = 'mupdf';
+              }
+            } catch {
+              // Private mode etc: stay on the default.
+            }
           }
           this._appSettings = { ...this._appSettings, ...parsed } as AppSettings;
         }
@@ -535,6 +546,7 @@ class StateStore {
       smoothScroll: true,
       invertDocumentOled: false,
       targetDPI: 150,
+      renderer: 'pdfjs',
       toolbarDock: 'top',
       customPalette: [],
       removedDefaultColors: []

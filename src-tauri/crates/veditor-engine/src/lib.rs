@@ -400,4 +400,29 @@ mod tests {
         d.close(&id);
         assert!(!d.is_open(&id));
     }
+
+    #[test]
+    fn close_releases_state_and_reopen_renders_fresh() {
+        let mut d = docs();
+        let id = DocumentId::new("d");
+        // Open -> render -> close.
+        assert_eq!(d.open(id.clone(), b"pdf-bytes".to_vec()).unwrap(), 4);
+        let before = d.render_tile_cached(&id, &spec(0)).unwrap();
+        assert_eq!(d.metrics(&id).unwrap().cache.misses, 1);
+        d.close(&id);
+        assert!(!d.is_open(&id));
+        // Closed docs serve nothing: render and metrics fail instead of
+        // touching retained bytes/cache/queue state.
+        assert!(d.render_tile_cached(&id, &spec(0)).is_err());
+        assert!(d.metrics(&id).is_none());
+        // Reopen under the same id renders fresh (generation/cache reset,
+        // no ghost state from the previous lifetime).
+        assert_eq!(d.open(id.clone(), b"pdf-bytes".to_vec()).unwrap(), 4);
+        assert!(d.is_open(&id));
+        let m2 = d.metrics(&id).unwrap();
+        assert_eq!((m2.cache.hits, m2.cache.misses), (0, 0));
+        let after = d.render_tile_cached(&id, &spec(0)).unwrap();
+        assert_eq!(after.png, before.png);
+        assert_eq!(d.metrics(&id).unwrap().cache.misses, 1);
+    }
 }

@@ -5,7 +5,7 @@
 
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
-import { getPageRenderer } from './core/page-renderer';
+import { getPageRenderer, releaseEngineDocument } from './core/page-renderer';
 import { viewportManager, rotatedPageSize } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
@@ -259,6 +259,10 @@ class VeditorApp {
     // 8. Clean up cached PDF documents and history when a tab is closed
     store.onTabClosed((tabId, closedDoc) => {
       pdfEngine.unloadDoc(tabId);
+      // Day-5: release the Rust document (bytes, MuPDF ownership, tile
+      // cache, queue) plus all renderer-side per-doc state. Per-document
+      // only — other open documents are untouched.
+      releaseEngineDocument(tabId);
       history.removeDocument(tabId);
       forgetFileHandle(tabId);
       if (closedDoc) void flushDocPosition(closedDoc);
@@ -651,6 +655,9 @@ class VeditorApp {
     this.resetZoomPreviewState();
     if (bytesChanged) {
       pdfEngine.unloadDoc(doc.id);
+      // Day-5: the Rust document still serves the pre-edit bytes — release it
+      // so the next MuPDF render lazily re-opens the rewritten bytes.
+      releaseEngineDocument(doc.id);
       try {
         // loadFromBytes copies internally, so passing the live bytes is safe.
         if (bytes) await pdfEngine.loadFromBytes(bytes, doc.id);
@@ -882,6 +889,24 @@ class VeditorApp {
       this._previewRafId = null;
       this.flushPreviewZoom();
     }
+  }
+
+  /**
+   * Day-5: live renderer switch (Settings → Viewer → Renderer). Settles any
+   * in-flight zoom preview, drops all mounted page state (both renderers'
+   * canvases are rebuilt with fresh geometry on the next pass), persists the
+   * choice, and re-renders through the normal scroll path. Annotation layers
+   * are rebuilt from the store on remount, so overlays survive the switch.
+   * Stale in-flight tiles cannot paint afterward: the coherence snapshot
+   * carries the renderer epoch and aborts mismatched waves.
+   */
+  public setRenderer(kind: 'pdfjs' | 'mupdf'): void {
+    if (!isDesktop() && kind !== 'pdfjs') return;
+    if (store.appSettings.renderer === kind) return;
+    this.commitZoomPreview();
+    this.clearRenderedPages();
+    store.updateAppSettings({ renderer: kind });
+    viewportManager.handleScroll(true);
   }
 
   /** Applies Settings → default zoom for brand-new documents. */
@@ -1817,10 +1842,6 @@ class VeditorApp {
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();
-      else if (key === 'z') {
-        e.preventDefault();
-        this.toggleZoomTool();
-      }
     }, { capture: true });
   }
 

@@ -118,17 +118,27 @@ export class ViewportManager {
     let maxContentWidth = containerWidth;
 
     if (viewMode === 'continuous') {
+      // Day-5 two-pass centering: a rotated page can be wider than the
+      // viewport, stretching the wrapper. Centering every page against the
+      // viewport then glues narrow pages to the left of the wide content.
+      // First pass measures all pages (no layout writes); the second pass
+      // centers each page within the content width. When no page exceeds
+      // the viewport, maxContentWidth === containerWidth and the positions
+      // are byte-identical to the old single-pass computation.
+      const measured: Array<{ baseW: number; baseH: number }> = [];
       for (let i = 0; i < doc.pages.length; i++) {
         const page = doc.pages[i];
         const { width: baseW, height: baseH } = rotatedPageSize(page, store.pageRotations[i] || 0);
-
+        measured.push({ baseW, baseH });
         const scaledW = baseW * zoom;
-        const scaledH = baseH * zoom;
         if (scaledW + 40 > maxContentWidth) {
           maxContentWidth = scaledW + 40;
         }
-
-        const left = Math.max(20, Math.floor((containerWidth - scaledW) / 2));
+      }
+      for (let i = 0; i < doc.pages.length; i++) {
+        const scaledW = measured[i].baseW * zoom;
+        const scaledH = measured[i].baseH * zoom;
+        const left = Math.max(20, Math.floor((maxContentWidth - scaledW) / 2));
 
         this._pageLayouts.push({
           pageIndex: i,
