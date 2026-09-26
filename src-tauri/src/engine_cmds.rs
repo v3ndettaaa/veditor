@@ -9,7 +9,7 @@
 use std::sync::Mutex;
 use tauri::ipc::{Request, Response};
 use tauri::{AppHandle, Manager, State};
-use veditor_engine::{Documents, DocumentId, EngineError, TileSpec};
+use veditor_engine::{Documents, DocumentId, EngineError, EngineMetrics, TileSpec};
 #[cfg(not(feature = "mupdf"))]
 use veditor_engine::Size;
 #[cfg(feature = "mupdf")]
@@ -128,6 +128,15 @@ pub fn engine_begin_navigation(state: State<EngineState>, doc_id: String) -> Res
     let id = DocumentId::new(&doc_id);
     docs.next_generation(&id)
         .ok_or_else(|| EngineError::UnknownDocument(doc_id).to_string())
+}
+
+/// Read-only diagnostics snapshot (Day-6 measurement only): queue + cache +
+/// render-segment counters for one document. No rendering, cache, or
+/// scheduling side effects; `None` for unknown documents. No polling — the
+/// frontend invokes this on demand only.
+#[tauri::command]
+pub fn engine_metrics(state: State<EngineState>, doc_id: String) -> Option<EngineMetrics> {
+    state.0.lock().ok()?.metrics(&DocumentId::new(doc_id))
 }
 
 /// Render one tile through the shared priority queue (see

@@ -33,6 +33,13 @@ const LASTGOOD_MAX_DIM = 1600;
 export interface PageRenderer {
   readonly kind: RendererKind;
   /**
+   * Day-6 stranded-rest re-arm seam (MuPDF only). Invoked exactly once when a
+   * deferred-rest batch aborts as stale — the page's rest tiles were never
+   * requested by anyone, so without a re-arm it stays white until an
+   * unrelated scroll/zoom schedules a pass. Optional; null/absent = no owner.
+   */
+  onDeferredRestStale?: ((pageIndex: number) => void) | null;
+  /**
    * Render one page. Returns true when the call is terminal for this pass
    * (painted, fell back, or superseded). Returns false ONLY for a transient
    * "not ready yet" state (e.g. canvas without layout on fresh mount) — the
@@ -72,6 +79,7 @@ class PdfJsPageRenderer implements PageRenderer {
  */
 class MupdfTileRenderer implements PageRenderer {
   readonly kind = 'mupdf' as const;
+  onDeferredRestStale: ((pageIndex: number) => void) | null = null;
   private openedDocs = new Set<string>();
   // In-flight opens, keyed by doc: concurrent page passes must await the
   // SAME open instead of each re-parsing the document (which also wipes the
@@ -158,6 +166,10 @@ class MupdfTileRenderer implements PageRenderer {
         // Never throw: this runs in a bare setTimeout, where a rejection is
         // both an unhandled error and silently lost rest tiles.
         if (isEngineStaleError(e)) {
+          // Day-6 stranded rest: no pass will ever request these tiles, so
+          // hand the page back to the normal scheduling path (no retry here,
+          // no generation refresh — the next pass re-derives everything).
+          this.onDeferredRestStale?.(pageIndex);
           return;
         }
         console.warn(`[mupdf] deferred rest failed for page ${pageIndex}:`, e);
@@ -558,6 +570,15 @@ export function getPageRenderer(): PageRenderer {
     return mupdfRenderer;
   }
   return pdfJsRenderer;
+}
+
+/**
+ * Day-6: register the stranded-rest re-arm callback on the MuPDF singleton
+ * directly. (getPageRenderer() returns whichever kind is current — at startup
+ * that is Legacy — so registering through it would miss the MuPDF instance.)
+ */
+export function onMupdfDeferredRestStale(cb: ((pageIndex: number) => void) | null): void {
+  mupdfRenderer.onDeferredRestStale = cb;
 }
 
 /**

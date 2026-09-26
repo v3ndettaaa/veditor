@@ -74,7 +74,7 @@ export interface EngineMetricsSnapshot {
   rss_bytes: number;
 }
 
-/** TEMPORARY Day-3 probe: server queue/cache/render counters (benchmarks). */
+/** Day-6 diagnostics: read-only server queue/cache/render counters. On-demand only, no polling. */
 export async function fetchEngineMetrics(docId: string): Promise<EngineMetricsSnapshot | null> {
   try {
     return await invokeEngine<EngineMetricsSnapshot | null>('engine_metrics', { docId });

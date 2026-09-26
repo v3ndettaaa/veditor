@@ -5,7 +5,7 @@
 
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
-import { getPageRenderer, releaseEngineDocument } from './core/page-renderer';
+import { getPageRenderer, releaseEngineDocument, onMupdfDeferredRestStale } from './core/page-renderer';
 import { viewportManager, rotatedPageSize } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
@@ -138,6 +138,19 @@ class VeditorApp {
     this._fileInput.style.display = 'none';
     document.body.appendChild(this._fileInput);
     window.app = this;
+
+    // Day-6 stranded-rest re-arm: a stale-aborted deferred rest leaves the
+    // page white with no pass owning its remainder. Re-arm the existing flag
+    // (idempotent — setting an already-true flag is harmless) and schedule
+    // one normal pass; same discipline as the renderVisiblePages retry path.
+    // No retry here, no generation refresh — the next pass re-derives all of
+    // that through the normal vis-first/deferred-rest scheduling.
+    onMupdfDeferredRestStale((pageIndex: number) => {
+      const entry = this._renderedPages.get(pageIndex);
+      if (!entry || entry.pdfCanvas?.isConnected !== true) return;
+      entry.needsRaster = true;
+      viewportManager.handleScroll(true);
+    });
 
     this.init();
   }

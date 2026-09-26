@@ -35,7 +35,8 @@ pub fn run() {
             engine_cmds::engine_open_finalize,
             engine_cmds::engine_close_document,
             engine_cmds::engine_render_tile,
-            engine_cmds::engine_begin_navigation
+            engine_cmds::engine_begin_navigation,
+            engine_cmds::engine_metrics
         ]);
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]

@@ -36,32 +36,36 @@ No annotation/ink migration, no default flip, no Day-4 mechanism weakened.
 
 ## 2. Measurements
 
-### A. Multi-document RSS — BLOCKED
-Operator OS-level sampling not provided. Rashomon: Rust regression test
-proves registry/bytes/cache/queue release on close and fresh state on
-reopen (`cargo test -p veditor-engine` 5/5); `closeDocument` wired into all
-tab-close paths (verified by code trace; close-all/close-others loop
-`closeDocumentTab` which fires listeners). Real-process RSS curve: NOT
-measured — do not claim flat RSS until run.
+### A. Multi-document RSS — PARTIALLY SUPERSEDED by Day-6 M4
+Real-process RSS curve: MEASURED (Day-6, 5 close-states: 66–168 MB with the
+engine registry verifiably empty every time — variance is webview/GC noise,
+no leak signal extractable; release proven 5/5 live, matching the Rust
+regression test). True never-opened baseline + multi-doc cache pressure:
+still BLOCKED (single live process; app-level same-file dedup). See
+`docs/DAY6_PERFORMANCE.md` M4.
 
 ### B. Renderer memory comparison — BLOCKED
 Not run. pdf.js stays fully loaded under MuPDF mode (fallback + text/search/
 thumbnails), so double-engine memory is expected but unquantified.
 
-### C. 800% visual validation — PARTIAL
-Renders complete at zoom 8 (10x12 grids, firstVis ~81–98 ms Day-4). Text /
-vector sharpness, tile boundaries, and `MAX_RENDER_DIMENSION=6144` upscale
-softness: NOT eyeballed — no verdict recorded.
+### C. 800% visual validation — PASS (Day-6 M7)
+MuPDF at 800% on f.pdf (text + vector pages): text sharp, vector high
+quality, no tile seams, no 6144-cap upscaling softness observed. Renders
+complete at zoom 8 (10x12 grids, firstVis ~81–98 ms Day-4) — now with the
+sharpness verdict recorded. See `docs/DAY6_PERFORMANCE.md` M7.
 
-### D. Annotation scaling benchmark — BLOCKED (procedure recorded)
-Temporary harness `src/annotations/bench-day5.ts` (since removed) drove the
-real production paths on an offscreen canvas with synthetic pen strokes
-(40 pts/stroke): `renderCommittedAnnotations` (repaint),
-`findAnnotationAtPoint` hit+miss, `eraserTool.testErase`,
-`findAnnotationsInPolygon` (lasso), 5–15 reps with warmup, n = 10/100/1000.
-Console command was `await window.__day5bench()`. It was never executed —
-no numbers recorded. Re-add the (deleted) harness to run it; methodology
-above is sufficient to reproduce exactly.
+### D. Annotation scaling benchmark — SUPERSEDED by Day-6 M1 (procedure kept)
+Temporary harness `src/annotations/bench-day5.ts` (since removed) drove
+*annotation* paths on an offscreen canvas with synthetic pen strokes
+(40 pts/stroke). CORRECTION (Day-6): the procedure named
+`renderCommittedAnnotations`, which is caller-less — the live production
+repaint path is the twin `renderAnnotationsToCanvas` (same loop over
+`doc.annotations[pageIndex]`, reached via `repaintPageAnnotations`). Day-6
+re-ran the methodology against the live path at n = 10/100/1000 with
+median+p95 (see `docs/DAY6_PERFORMANCE.md` M1): repaint 0.3/3.6/23.9 ms,
+erase-drag ×20 0.2/1.4/14.0 ms (browser), ~linear everywhere, no threshold.
+Console command was `await window.__day5bench()` (Day-5) /
+`await window.__day6bench()` (Day-6, temp, since removed).
 
 ## 3. What Day-5 changed (files)
 
