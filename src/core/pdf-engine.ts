@@ -429,13 +429,19 @@ export class PDFEngine {
     return undefined;
   }
 
+  /**
+   * Render one page into an existing canvas. Returns true when pixels were
+   * actually painted (fresh render or cached placeholder blit), false when
+   * nothing was painted — the stub-backend fix uses this so a failed pdf.js
+   * fallback re-arms instead of stranding the page white.
+   */
   public async renderPageToCanvas(
     pageIndex: number,
     canvas: HTMLCanvasElement,
     scale: number = 1.0,
     rotation: number = 0
-  ): Promise<void> {
-    if (!this._pdfDoc) return;
+  ): Promise<boolean> {
+    if (!this._pdfDoc) return false;
     const renderDocId = this._currentDocId;
 
     const dpr = effectiveDpr();
@@ -445,11 +451,11 @@ export class PDFEngine {
       try {
         page = await this._pdfDoc.getPage(pageIndex + 1);
       } catch (e) {
-        return;
+        return false;
       }
       // Stale fetch after a tab switch must not pollute the new doc's cache.
-      if (renderDocId !== this._currentDocId) return;
-      if (!canvas.isConnected) return;
+      if (renderDocId !== this._currentDocId) return false;
+      if (!canvas.isConnected) return false;
       // Evict oldest page when cache gets large without killing active document
       if (this._pageCache.size >= 60) {
         for (const k of this._pageCache.keys()) {
@@ -537,7 +543,7 @@ export class PDFEngine {
       }
 
       if (cached.scale === scale && cached.rotation === totalRotation && cached.width === targetWidth && cached.height === targetHeight) {
-        return;
+        return true;
       }
     }
 
@@ -549,7 +555,7 @@ export class PDFEngine {
     offscreen.width = targetWidth;
     offscreen.height = targetHeight;
     const offCtx = offscreen.getContext('2d', { alpha: false });
-    if (!offCtx) return;
+    if (!offCtx) return false;
 
     offCtx.fillStyle = '#ffffff';
     offCtx.fillRect(0, 0, targetWidth, targetHeight);
@@ -573,13 +579,13 @@ export class PDFEngine {
       // Verify canvas is still mounted and bound to this page/doc before blit.
       // Same pageIndex is reused across docs/zooms, so doc + connection checks
       // stop a stale render from painting into a recycled canvas (ghost pages).
-      if (!canvas.isConnected) return;
-      if (renderDocId !== this._currentDocId) return;
+      if (!canvas.isConnected) return false;
+      if (renderDocId !== this._currentDocId) return false;
       if (canvas.dataset.pageIndex && canvas.dataset.pageIndex !== String(pageIndex)) {
-        return;
+        return false;
       }
       if (canvas.dataset.docId && renderDocId && canvas.dataset.docId !== renderDocId) {
-        return;
+        return false;
       }
 
       // PIPE_3 VRAM POOL OOM GUARD: Cap active bitmap cache to 6 max.
@@ -611,10 +617,12 @@ export class PDFEngine {
       }
       const ctx = canvas.getContext('2d', { alpha: false });
       ctx?.drawImage(offscreen, 0, 0);
+      return true;
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {
         console.error(`Error rendering page ${pageIndex}:`, err);
       }
+      return false;
     } finally {
       if (this._activeRenderTasks.get(pageIndex) === task) {
         this._activeRenderTasks.delete(pageIndex);

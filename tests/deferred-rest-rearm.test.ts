@@ -1,11 +1,10 @@
 /**
- * Day-6 stranded-rest re-arm regression test (narrowest seam).
- * A deferred-rest batch aborted as stale must invoke `onDeferredRestStale`
- * exactly once (handing the page back to normal scheduling); a non-stale
- * failure must NOT invoke it (genuinely-failed work still just warns); and a
- * missing owner must resolve quietly. The main-side handler (needsRaster +
- * one pass) is constructor-inline and DOM-bound — covered by operator
- * validation, not here.
+ * Day-6 stranded-rest re-arm regression test (narrowest seam), extended by
+ * the stub-backend fix: generic deferred failures re-arm while the document
+ * is still open (closed-doc stays silent), and a failed pdf.js fallback
+ * reports unpainted so the caller retries instead of stranding white.
+ * The main-side handler (needsRaster + one pass) is constructor-inline and
+ * DOM-bound — covered by operator validation, not here.
  */
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { getPageRenderer } from '../src/core/page-renderer';
@@ -80,8 +79,8 @@ describe('deferred-rest stale re-arm', () => {
     expect(cb).toHaveBeenCalledWith(3);
   });
 
-  it('does not invoke the callback on a non-stale failure', async () => {
-    renderEngineTileMock.mockRejectedValueOnce(new Error('boom'));
+  it('invokes the callback exactly once on an open-doc generic failure', async () => {
+    renderEngineTileMock.mockRejectedValueOnce(new Error('InvalidPage(3)'));
     const renderer = getPageRenderer() as unknown as {
       onDeferredRestStale: ((pageIndex: number) => void) | null;
       renderDeferredRest: (s: unknown) => Promise<void>;
@@ -89,6 +88,22 @@ describe('deferred-rest stale re-arm', () => {
     const cb = vi.fn();
     renderer.onDeferredRestStale = cb;
     await renderer.renderDeferredRest(snap(4));
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith(4);
+  });
+
+  it('does not invoke the callback on a closed-doc generic failure', async () => {
+    renderEngineTileMock.mockRejectedValueOnce(new Error('InvalidPage(5)'));
+    // Simulate the close-mid-flight race: timer-fire coherence checks pass
+    // (activeDocument still set) but the registry no longer tracks the doc.
+    store.openDocuments.delete('d6-strand');
+    const renderer = getPageRenderer() as unknown as {
+      onDeferredRestStale: ((pageIndex: number) => void) | null;
+      renderDeferredRest: (s: unknown) => Promise<void>;
+    };
+    const cb = vi.fn();
+    renderer.onDeferredRestStale = cb;
+    await renderer.renderDeferredRest(snap(5));
     expect(cb).not.toHaveBeenCalled();
   });
 
@@ -97,6 +112,17 @@ describe('deferred-rest stale re-arm', () => {
     const renderer = getPageRenderer() as unknown as {
       renderDeferredRest: (s: unknown) => Promise<void>;
     };
-    await expect(renderer.renderDeferredRest(snap(5))).resolves.toBeUndefined();
+    await expect(renderer.renderDeferredRest(snap(6))).resolves.toBeUndefined();
+  });
+
+  it('renderPage reports false when engine and fallback both fail', async () => {
+    // Engine open throws (no path/bytes on the fake doc) and pdfEngine has
+    // no document loaded, so the fallback reports unpainted: the caller must
+    // see false (re-arm eligible) instead of a white-stranding true.
+    const renderer = getPageRenderer() as unknown as {
+      renderPage: (pageIndex: number, canvas: HTMLCanvasElement, zoom: number, rotation: number) => Promise<boolean>;
+    };
+    const canvas = { isConnected: true } as unknown as HTMLCanvasElement;
+    await expect(renderer.renderPage(3, canvas, 1, 0)).resolves.toBe(false);
   });
 });

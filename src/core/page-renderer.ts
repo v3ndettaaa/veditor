@@ -172,6 +172,13 @@ class MupdfTileRenderer implements PageRenderer {
           this.onDeferredRestStale?.(pageIndex);
           return;
         }
+        // Stub-backend fix: a generic deferred failure (e.g. every tile
+        // rejected while the document is still open) strands the rest with
+        // no pass owning it — same re-arm as the stale case. Closed-document
+        // failures stay silent: cleanup owns those canvases.
+        if (canvas.isConnected && store.openDocuments.has(docId)) {
+          this.onDeferredRestStale?.(pageIndex);
+        }
         console.warn(`[mupdf] deferred rest failed for page ${pageIndex}:`, e);
         return;
       }
@@ -264,13 +271,14 @@ class MupdfTileRenderer implements PageRenderer {
       if (!docId || !store.openDocuments.has(docId)) return true;
       console.warn(`[mupdf] tile render failed for page ${pageIndex}, pdf.js fallback:`, e);
       try {
-        await pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
+        return await pdfEngine.renderPageToCanvas(pageIndex, canvas, zoom, rotation);
       } catch (e2) {
         // Both paths failed (e.g. transient mount + broken JPX fallback):
-        // terminal for this pass — a later scroll/zoom pass retries naturally.
+        // report unpainted so the bounded caller retry re-arms instead of
+        // stranding the page white.
         console.warn(`[mupdf] pdf.js fallback also failed for page ${pageIndex}:`, e2);
+        return false;
       }
-      return true;
     } finally {
       if (docId && this.inflightRenders.get(flightKey) === canvas) {
         this.inflightRenders.delete(flightKey);

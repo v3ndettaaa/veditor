@@ -68,17 +68,23 @@ regeneration via recorded seeds). Generator script temp-only, removed.
 - **C3 multi-doc, C4 close-all, C5 ratchet: NOT TESTED.** Day-6 close/release
   evidence (5/5 empty-registry cycles) stands; no inference.
 
-## 5. Filed defect (no fix — separate work item)
+## 5. Filed defect → FIXED and validated
 
 **Blank MuPDF switch on default (stub-backend) prod binary.** Default exe,
 Legacy→MuPDF: all pages pure white, silent; Legacy recovers instantly.
 Mechanism traced: `StubBackend::new(0, …)` reports 0 pages, every tile fails
-`InvalidPage`, and the designed per-page pdf.js fallback does not engage
-(exact bypass untraced). Affects default binary only; MuPDF binary and all
-Day-6 evidence unaffected. Severity = release-blocking iff the default
-binary ships; otherwise a dev/CI-only wart. Fix direction proposed (fail
-loud at open, or gate the Renderer select on backend availability) —
-**not implemented** in this phase.
+`InvalidPage`, and the failure lands in stranding branches — fully deferred
+pages return painted-nothing with no fallback/re-arm, and the per-page pdf.js
+fallback's silent no-ops resolve as success, consuming `needsRaster`.
+Affects default binary only; MuPDF binary and all Day-6 evidence unaffected.
+Fix (Fix A + Fix C, 3 files — `pdf-engine.ts`, `page-renderer.ts`,
+`deferred-rest-rearm.test.ts`; no scheduler/cache/worker/Rust/UI change):
+`renderPageToCanvas` reports painted/not, the render catch returns the
+fallback's outcome into the existing bounded retry, and the Day-6 re-arm
+seam covers generic deferred failures while the doc is open (closed-doc
+stays silent). Validated: unit 5/5, full gates green, operator B (fallback
+recovery ~2 s, one warn per page, no storm) + D (retained neighbors
+painted with zero extra input) + C (MuPDF build unchanged) all PASS.
 
 ## 6. Decision-gate status (evidence only, no decision)
 
