@@ -1,6 +1,6 @@
 import { Point, StrokePoint, Annotation, EraserMode } from '../../core/types';
 import { distance, distanceToSegment, isPointInBox, computePointsBoundingBox } from '../../utils/geometry';
-import { rotatePoint, boxCenter } from '../../annotations/selection';
+import { rotatePoint, boxCenter, getAnnotationSelectionBox } from '../../annotations/selection';
 
 export interface EraseResult {
   toRemove: Annotation[];
@@ -39,12 +39,13 @@ export class EraserTool {
 
     for (const ann of annotations) {
       if (ann.locked) continue;
+      const targetBox = getAnnotationSelectionBox(ann);
       // Points and boxes are stored unrotated: test in the local frame.
-      const localPt = ann.rotation ? rotatePoint(point, boxCenter(ann.box), -ann.rotation) : point;
+      const localPt = ann.rotation ? rotatePoint(point, boxCenter(targetBox), -ann.rotation) : point;
 
       if (this._mode === 'object') {
         // Object Eraser: Delete entire element if hit
-        if (isPointInBox(localPt, { ...ann.box, x: ann.box.x - r, y: ann.box.y - r, width: ann.box.width + r * 2, height: ann.box.height + r * 2 })) {
+        if (isPointInBox(localPt, { ...targetBox, x: targetBox.x - r, y: targetBox.y - r, width: targetBox.width + r * 2, height: targetBox.height + r * 2 })) {
           toRemove.push(ann);
         }
       } else if (this._mode === 'stroke') {
@@ -67,7 +68,7 @@ export class EraserTool {
           }
         } else {
           // Other shapes erased if touched
-          if (isPointInBox(localPt, ann.box)) {
+          if (isPointInBox(localPt, targetBox)) {
             toRemove.push(ann);
           }
         }

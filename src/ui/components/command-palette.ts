@@ -61,6 +61,7 @@ export class CommandPaletteComponent {
       // the default row, but it is a full tool and belongs in the palette.
       { id: 'tool-freeform', title: 'Freeform Shape Tool (freehand closed outline)', category: 'Tools', action: () => store.setActiveTool('freeform-shape') },
       { id: 'tool-text', title: 'Text Box Tool', category: 'Tools', shortcut: 'T', action: () => store.setActiveTool('text') },
+      { id: 'tool-sticky-note', title: 'Sticky Note Tool', category: 'Tools', action: () => store.setActiveTool('sticky-note') },
       { id: 'tool-stamp', title: 'Vector Stamp Tool', category: 'Tools', shortcut: 'M', action: () => store.setActiveTool('stamp') },
       { id: 'tool-signature', title: 'Signature Pad', category: 'Tools', shortcut: 'K', action: () => store.setSignatureModalOpen(true) },
       { id: 'tool-measure', title: 'Measure Distance Tool', category: 'Tools', action: () => store.setActiveTool('measure-distance') },

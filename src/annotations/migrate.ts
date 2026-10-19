@@ -14,7 +14,7 @@ import { Annotation, DocumentSession } from '../core/types';
  * Annotation types that existed in earlier builds and have since been removed
  * outright (replaced by nothing, or by an equivalent tool).
  */
-const REMOVED_ANNOTATION_TYPES = new Set<string>(['laser', 'callout', 'sticky-note']);
+const REMOVED_ANNOTATION_TYPES = new Set<string>(['laser', 'callout']);
 
 /**
  * Drops annotations of retired types from every page. Mutates `doc` in place

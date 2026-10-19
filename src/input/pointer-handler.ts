@@ -3,10 +3,10 @@
  * Handles 120/240Hz coalesced events, stylus pressure, palm rejection, and tool dispatching.
  */
 
-import { Point, StrokePoint, ToolType, ToolOptionKey, Annotation, BoundingBox, ShapeAnnotation, TextAnnotation } from '../core/types';
+import { Point, StrokePoint, ToolType, ToolOptionKey, Annotation, BoundingBox, ShapeAnnotation, TextAnnotation, StickyNoteAnnotation, StickyNoteStroke } from '../core/types';
 import { store } from '../core/store';
 import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotationsCommand, BulkModifyCommand, ModifyAnnotationCommand } from '../core/history';
-import { mergeBoundingBoxes, computePointsBoundingBox, findNearestVertex } from '../utils/geometry';
+import { mergeBoundingBoxes, computePointsBoundingBox, findNearestVertex, distance, distanceToSegment } from '../utils/geometry';
 import { resolveAdaptiveCanvasDpr } from '../utils/dpi';
 import { fitStroke, type FittedShape } from '../utils/shape-fit';
 import { renderLiveStroke } from '../annotations/spline';
@@ -19,6 +19,7 @@ import { highlighterTool } from '../annotations/tools/highlighter';
 import { eraserTool } from '../annotations/tools/eraser';
 import { shapesTool } from '../annotations/tools/shapes';
 import { textTool } from '../annotations/tools/text';
+import { stickyNoteTool } from '../annotations/tools/sticky-note';
 import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
 import { redactionTool } from '../annotations/tools/redaction';
@@ -81,6 +82,22 @@ export class PointerHandler {
   private _marquee: { pageIndex: number; start: Point; current: Point; additive: boolean } | null = null;
   /** Freehand lasso path (the Lasso tool, or Alt+drag in Select). */
   private _lasso: { pageIndex: number; points: Point[]; additive: boolean } | null = null;
+  /** Drag-to-size or click-to-place state when creating a new Sticky Note. */
+  private _stickyCreateDrag: { pageIndex: number; start: Point; current: Point } | null = null;
+  /** Dedicated in-note ink/eraser mode toggled from the Sticky Note floating bar. */
+  private _stickyInkMode: { noteId: string; mode: 'pen' | 'eraser'; color: string; strokeWidth: number } | null = null;
+  /** Active in-note freehand pen or eraser stroke clipped to an expanded Sticky Note. */
+  private _activeStickyStroke: {
+    pageIndex: number;
+    noteId: string;
+    mode: 'pen' | 'eraser';
+    points: StrokePoint[];
+    color: string;
+    strokeWidth: number;
+    originalNote: StickyNoteAnnotation;
+  } | null = null;
+  /** Tracks whether a collapsed sticky note was already selected before pointerdown in Select mode. */
+  private _wasCollapsedNoteSelectedOnDown: string | null = null;
 
   /**
    * Draw-and-hold shape recognition (pen only): holding the pointer nearly
@@ -526,8 +543,75 @@ export class PointerHandler {
       tool = 'eraser';
     }
     this._strokeTool = tool;
+    this._wasCollapsedNoteSelectedOnDown = null;
 
     const defaultLayerId = 'layer-default';
+    const pageAnns = store.activeDocument?.annotations[pageIndex] || [];
+
+    // 1. Check if clicking the top-right collapse button of any expanded Sticky Note
+    if (tool === 'select' || tool === 'sticky-note' || tool === 'pen') {
+      for (let i = pageAnns.length - 1; i >= 0; i--) {
+        const cand = pageAnns[i];
+        if (cand.type === 'sticky-note' && !cand.collapsed && !cand.locked) {
+          if (stickyNoteTool.hitTestCollapseButton(cand, pt)) {
+            this._isPointerDown = false;
+            this._strokeTool = null;
+            this._activePageIndex = -1;
+            this._pageScratchCanvas = null;
+            this._pageScratchCtx = null;
+            this._activeCanvasRect = null;
+            if (this._stickyInkMode?.noteId === cand.id) {
+              this._stickyInkMode = null;
+            }
+            const nextNote: StickyNoteAnnotation = {
+              ...cand,
+              collapsed: true,
+              updatedAt: Date.now()
+            };
+            history.execute(new ModifyAnnotationCommand(pageIndex, cand, nextNote));
+            store.selectAnnotation(cand.id);
+            onNeedRepaint();
+            return;
+          }
+          break;
+        }
+      }
+    }
+
+    // 2. Check if starting an in-note pen or eraser stroke inside an expanded Sticky Note
+    const stickyTarget = this.findExpandedStickyNoteForInk(pt, pageAnns, tool);
+    if (stickyTarget) {
+      const inkMode = stickyTarget.mode;
+      const note = stickyTarget.note;
+      const strokeColor = this._stickyInkMode?.noteId === note.id
+        ? this._stickyInkMode.color
+        : (tSettings.penColor || note.textColor || '#3b2f1e');
+      const strokeW = this._stickyInkMode?.noteId === note.id
+        ? this._stickyInkMode.strokeWidth
+        : (tSettings.penWidth || 2.5);
+      this._activeStickyStroke = {
+        pageIndex,
+        noteId: note.id,
+        mode: inkMode,
+        points: [pt],
+        color: strokeColor,
+        strokeWidth: strokeW,
+        originalNote: cloneAnnotation(note)
+      };
+      if (inkMode === 'eraser') {
+        this.applyStickyNoteEraser([pt], pageIndex, note.id, Math.max(8, tSettings.eraserWidth / 2));
+        onNeedRepaint();
+      } else if (this._pageScratchCtx && this._pageScratchCanvas) {
+        const c = this._pageScratchCtx;
+        const cv = this._pageScratchCanvas;
+        const rs = store.zoom * this.renderDpr();
+        c.clearRect(0, 0, cv.width, cv.height);
+        this.withScratchOffset(c, cv, () => {
+          stickyNoteTool.renderLiveStrokeInNote(c, note, [pt], strokeColor, strokeW, 1.0, rs);
+        });
+      }
+      return;
+    }
 
     switch (tool) {
       case 'pen': {
@@ -674,6 +758,37 @@ export class PointerHandler {
         return;
       }
 
+      case 'sticky-note': {
+        const existingAnns = store.activeDocument?.annotations[pageIndex] || [];
+        const hit = selectionManager.findAnnotationAtPoint(pt, existingAnns);
+        if (hit && hit.type === 'sticky-note') {
+          this._isPointerDown = false;
+          this._strokeTool = null;
+          this._activePageIndex = -1;
+          this._pageScratchCanvas = null;
+          this._pageScratchCtx = null;
+          this._activeCanvasRect = null;
+          if (hit.collapsed) {
+            const expanded: StickyNoteAnnotation = { ...hit, collapsed: false, updatedAt: Date.now() };
+            history.execute(new ModifyAnnotationCommand(pageIndex, hit, expanded));
+            store.setActiveTool('select');
+            store.selectAnnotation(hit.id);
+            onNeedRepaint();
+          } else {
+            store.setActiveTool('select');
+            this.selectCreatedAnnotation(hit.id);
+            this.editExistingStickyNote(hit, pageIndex, scratchCanvas, onNeedRepaint);
+          }
+          return;
+        }
+        this._stickyCreateDrag = {
+          pageIndex,
+          start: { x: pt.x, y: pt.y },
+          current: { x: pt.x, y: pt.y }
+        };
+        break;
+      }
+
       case 'stamp':
         const stampBase = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
         history.execute(new AddAnnotationCommand(pageIndex, stampBase));
@@ -723,6 +838,11 @@ export class PointerHandler {
         if (!doc) break;
         const pageAnns = doc.annotations[pageIndex] || [];
 
+        const hitBeforeDrag = selectionManager.findAnnotationAtPoint(pt, pageAnns);
+        if (hitBeforeDrag && hitBeforeDrag.type === 'sticky-note' && hitBeforeDrag.collapsed && store.selectedAnnotationIds.has(hitBeforeDrag.id)) {
+          this._wasCollapsedNoteSelectedOnDown = hitBeforeDrag.id;
+        }
+
         // Ctrl/Cmd-click adds to the selection exactly like Shift-click, so it
         // must not start a drag — otherwise multi-selecting for bulk delete
         // is impossible once something is already selected.
@@ -731,7 +851,7 @@ export class PointerHandler {
         if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) break;
 
         // 2. Click an annotation to (multi-)select it.
-        const ann = selectionManager.findAnnotationAtPoint(pt, pageAnns);
+        const ann = hitBeforeDrag;
         if (ann) {
           store.selectAnnotation(ann.id, additive);
           onNeedRepaint();
@@ -844,6 +964,44 @@ export class PointerHandler {
     if (pts.length === 0) return;
     const lastPt = pts[pts.length - 1];
     const shiftKey = (e as MouseEvent).shiftKey === true;
+
+    // Handle active in-note pen or eraser stroke inside an expanded Sticky Note
+    if (this._activeStickyStroke && this._activeStickyStroke.pageIndex === pageIndex) {
+      const s = this._activeStickyStroke;
+      const doc = store.activeDocument;
+      const currentNote = doc?.annotations[pageIndex]?.find(
+        (a): a is StickyNoteAnnotation => a.id === s.noteId && a.type === 'sticky-note'
+      );
+      if (currentNote) {
+        if (s.mode === 'eraser') {
+          this.applyStickyNoteEraser(pts, pageIndex, s.noteId, Math.max(8, store.toolSettings.eraserWidth / 2));
+          onNeedRepaint();
+          const activeScratch = this._pageScratchCanvas || scratchCanvas;
+          ctx.clearRect(0, 0, activeScratch.width, activeScratch.height);
+          this.withScratchOffset(ctx, activeScratch, () => {
+            eraserTool.renderScratchpad(ctx, lastPt, renderScale);
+          });
+        } else {
+          for (const pt of pts) {
+            s.points.push(pt);
+          }
+          const activeScratch = this._pageScratchCanvas || scratchCanvas;
+          ctx.clearRect(0, 0, activeScratch.width, activeScratch.height);
+          this.withScratchOffset(ctx, activeScratch, () => {
+            stickyNoteTool.renderLiveStrokeInNote(
+              ctx,
+              currentNote,
+              s.points,
+              s.color,
+              s.strokeWidth,
+              1.0,
+              renderScale
+            );
+          });
+        }
+      }
+      return;
+    }
 
     // Zero-latency leading + rAF-coalesced trailing path for freehand ink & highlighter
     if (tool === 'pen') {
@@ -1032,6 +1190,33 @@ export class PointerHandler {
           redactionTool.renderScratchpad(ctx, renderScale);
         });
         break;
+
+      case 'sticky-note':
+        if (this._stickyCreateDrag && this._stickyCreateDrag.pageIndex === pageIndex) {
+          this._stickyCreateDrag.current = { ...lastPt };
+          const d = distance(this._stickyCreateDrag.start, this._stickyCreateDrag.current);
+          if (d > 10) {
+            const rawBox = normalizeDragBox(this._stickyCreateDrag.start, this._stickyCreateDrag.current);
+            const previewBox: BoundingBox = {
+              x: rawBox.x,
+              y: rawBox.y,
+              width: Math.max(180, rawBox.width),
+              height: Math.max(150, rawBox.height)
+            };
+            const ts = store.toolSettings;
+            this.withScratchOffset(ctx, activeScratch, () => {
+              stickyNoteTool.renderPreview(
+                ctx,
+                previewBox,
+                renderScale,
+                ts.noteColor || '#ebd09e',
+                ts.noteAuthor !== undefined ? ts.noteAuthor : 'Kia Gh',
+                ts.noteTextColor || '#3b2f1e'
+              );
+            });
+          }
+        }
+        break;
     }
   }
 
@@ -1069,10 +1254,76 @@ export class PointerHandler {
       this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
     }
 
+    // Commit active in-note pen or eraser stroke if one was in flight
+    if (this._activeStickyStroke && this._activeStickyStroke.pageIndex === pageIndex) {
+      const s = this._activeStickyStroke;
+      this._activeStickyStroke = null;
+      const doc = store.activeDocument;
+      const currentNote = doc?.annotations[pageIndex]?.find(
+        (a): a is StickyNoteAnnotation => a.id === s.noteId && a.type === 'sticky-note'
+      );
+      if (currentNote) {
+        if (s.mode === 'eraser') {
+          const origCount = s.originalNote.strokes?.length ?? 0;
+          const curCount = currentNote.strokes?.length ?? 0;
+          if (origCount !== curCount) {
+            history.pushCommitted(new ModifyAnnotationCommand(pageIndex, s.originalNote, { ...currentNote }));
+          }
+        } else if (s.points.length >= 1) {
+          const newStroke: StickyNoteStroke = {
+            id: 'nstroke_' + Math.random().toString(36).substring(2, 9),
+            points: s.points.length === 1
+              ? [s.points[0], { ...s.points[0], x: s.points[0].x + 0.5, y: s.points[0].y + 0.5 }]
+              : s.points,
+            color: s.color,
+            strokeWidth: s.strokeWidth,
+            opacity: 1.0
+          };
+          const updatedNote: StickyNoteAnnotation = {
+            ...currentNote,
+            strokes: [...(currentNote.strokes || []), newStroke],
+            updatedAt: Date.now()
+          };
+          history.execute(new ModifyAnnotationCommand(pageIndex, s.originalNote, updatedNote));
+        }
+      }
+      this._isPointerDown = false;
+      this._strokeTool = null;
+      this._activePageIndex = -1;
+      this._pageScratchCanvas = null;
+      this._pageScratchCtx = null;
+      onNeedRepaint();
+      return;
+    }
+
     switch (tool) {
       case 'select':
-      case 'lasso':
+      case 'lasso': {
+        const dragBeforeCommit = this._selectDrag;
+        const clickUpPt = this.getPointInPage(_e, scratchCanvas);
+        const wasTinyClick = dragBeforeCommit
+          ? distance(dragBeforeCommit.startPt, clickUpPt) < 4
+          : false;
         this.commitSelectDrag();
+        // If user clicked an already-selected collapsed Sticky Note icon without dragging, expand it
+        if (wasTinyClick && this._wasCollapsedNoteSelectedOnDown) {
+          const doc = store.activeDocument;
+          const collapsedNote = doc?.annotations[pageIndex]?.find(
+            (a): a is StickyNoteAnnotation => a.id === this._wasCollapsedNoteSelectedOnDown && a.type === 'sticky-note' && a.collapsed === true
+          );
+          this._wasCollapsedNoteSelectedOnDown = null;
+          if (collapsedNote && !collapsedNote.locked) {
+            const expanded: StickyNoteAnnotation = {
+              ...collapsedNote,
+              collapsed: false,
+              updatedAt: Date.now()
+            };
+            history.execute(new ModifyAnnotationCommand(pageIndex, collapsedNote, expanded));
+            onNeedRepaint();
+            break;
+          }
+        }
+        this._wasCollapsedNoteSelectedOnDown = null;
         if (this._lasso) {
           const lasso = this._lasso;
           this._lasso = null;
@@ -1097,7 +1348,10 @@ export class PointerHandler {
           const doc = store.activeDocument;
           if (w < 4 && h < 4) {
             // Plain click on empty canvas.
-            if (!mq.additive) store.clearSelection();
+            if (!mq.additive) {
+              store.clearSelection();
+              this._stickyInkMode = null;
+            }
           } else if (doc?.annotations[mq.pageIndex]) {
             const hits = selectionManager
               .findAnnotationsInRect(normalizeDragBox(mq.start, mq.current), doc.annotations[mq.pageIndex])
@@ -1110,6 +1364,7 @@ export class PointerHandler {
           }
         }
         break;
+      }
 
       case 'pen': {
         const snapped = this._holdFired ? this._holdShape : null;
@@ -1196,6 +1451,41 @@ export class PointerHandler {
           history.execute(new AddAnnotationCommand(pageIndex, redAnn));
         }
         break;
+
+      case 'sticky-note': {
+        const drag = this._stickyCreateDrag;
+        this._stickyCreateDrag = null;
+        const startPt = drag ? drag.start : this.getPointInPage(_e, scratchCanvas);
+        const endPt = drag ? drag.current : startPt;
+        const dist = distance(startPt, endPt);
+        const ts = store.toolSettings;
+        let customBox: BoundingBox | undefined;
+        if (dist > 14) {
+          const raw = normalizeDragBox(startPt, endPt);
+          customBox = {
+            x: raw.x,
+            y: raw.y,
+            width: Math.max(180, raw.width),
+            height: Math.max(150, raw.height)
+          };
+        }
+        const noteAnn = stickyNoteTool.createStickyNote(pageIndex, startPt, {
+          layerId: defaultLayerId,
+          box: customBox,
+          color: ts.noteColor || '#ebd09e',
+          textColor: ts.noteTextColor || '#3b2f1e',
+          fontSize: ts.noteFontSize || 24,
+          fontFamily: ts.fontFamily || 'Inter',
+          textAlign: ts.textAlign || 'left',
+          author: ts.noteAuthor !== undefined ? ts.noteAuthor : 'Kia Gh'
+        });
+        history.execute(new AddAnnotationCommand(pageIndex, noteAnn));
+        store.setActiveTool('select');
+        this.selectCreatedAnnotation(noteAnn.id);
+        onNeedRepaint();
+        this.editExistingStickyNote(noteAnn, pageIndex, scratchCanvas, onNeedRepaint);
+        break;
+      }
     }
 
     if (this._pageScratchCtx && this._pageScratchCanvas) {
@@ -1475,6 +1765,19 @@ export class PointerHandler {
     if (selected.length === 0) return;
 
     const pt = this.getPointInPage(e, canvas);
+    if (selected.length === 1 && selected[0].type === 'sticky-note' && !selected[0].collapsed) {
+      if (stickyNoteTool.hitTestCollapseButton(selected[0], pt)) {
+        canvas.style.cursor = 'pointer';
+        floatingPropsBar?.setHoverState(true);
+        return;
+      }
+      if (this._stickyInkMode?.noteId === selected[0].id && stickyNoteTool.hitTest(selected[0], pt)) {
+        canvas.style.cursor = 'crosshair';
+        floatingPropsBar?.setHoverState(true);
+        return;
+      }
+    }
+
     const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
     const hit = selectionManager.hitTestSelection(
       pt, selected, store.zoom * this.renderDpr()
@@ -1774,6 +2077,170 @@ export class PointerHandler {
         onNeedRepaint();
       }
     });
+  }
+
+  /**
+   * Opens the floating inline text editor seamlessly inside an expanded
+   * StickyNoteAnnotation card while keeping the note's card background,
+   * top-right collapse button, author footer, and freehand strokes visible.
+   */
+  public editExistingStickyNote(
+    ann: StickyNoteAnnotation,
+    pageIndex: number,
+    canvas: HTMLCanvasElement,
+    onNeedRepaint: () => void
+  ): void {
+    if (ann.collapsed) return;
+    const zoom = store.zoom;
+    const cRect = canvas.getBoundingClientRect();
+    const padX = 16;
+    const headerH = 36;
+    const footerH = 34;
+
+    const screenRect = {
+      left: cRect.left + (ann.box.x + padX) * zoom,
+      top: cRect.top + (ann.box.y + headerH) * zoom,
+      width: Math.max(90, (ann.box.width - padX * 2) * zoom),
+      height: Math.max(48, (ann.box.height - headerH - footerH) * zoom)
+    };
+
+    annotationEngine.setEditingAnnotationId(ann.id);
+    onNeedRepaint();
+
+    openInlineEditor({
+      rect: screenRect,
+      value: ann.text || '',
+      fontSize: (ann.fontSize || 24) * zoom,
+      fontFamily: ann.fontFamily || 'Inter',
+      color: ann.textColor || '#3b2f1e',
+      backgroundColor: 'transparent',
+      textAlign: ann.textAlign || 'left',
+      padding: 4 * zoom,
+      placeholder: 'Write note… (Enter for new line, click outside or Ctrl+Enter to finish)',
+      selectAllOnOpen: false,
+      multilineEnter: true,
+      fixedSize: true,
+      seamlessCard: true,
+      onCommit: (rawText: string) => {
+        annotationEngine.setEditingAnnotationId(null);
+        const cleaned = rawText.replace(/\r\n/g, '\n');
+        const latestDoc = store.activeDocument;
+        const latestAnn = latestDoc?.annotations[pageIndex]?.find(
+          (a): a is StickyNoteAnnotation => a.id === ann.id && a.type === 'sticky-note'
+        ) || ann;
+        if (cleaned !== latestAnn.text) {
+          const next: StickyNoteAnnotation = {
+            ...latestAnn,
+            text: cleaned,
+            updatedAt: Date.now()
+          };
+          history.execute(new ModifyAnnotationCommand(pageIndex, latestAnn, next));
+        }
+        onNeedRepaint();
+      },
+      onCancel: () => {
+        annotationEngine.setEditingAnnotationId(null);
+        onNeedRepaint();
+      }
+    });
+  }
+
+  /** Gets or toggles the dedicated in-note pen/eraser mode for a Sticky Note. */
+  public getStickyInkMode(): { noteId: string; mode: 'pen' | 'eraser'; color: string; strokeWidth: number } | null {
+    return this._stickyInkMode;
+  }
+
+  public setStickyInkMode(
+    noteId: string | null,
+    mode: 'pen' | 'eraser' = 'pen',
+    color?: string,
+    strokeWidth?: number
+  ): void {
+    if (!noteId) {
+      this._stickyInkMode = null;
+      return;
+    }
+    const prev = this._stickyInkMode;
+    this._stickyInkMode = {
+      noteId,
+      mode,
+      color: color ?? prev?.color ?? store.toolSettings.noteTextColor ?? '#3b2f1e',
+      strokeWidth: strokeWidth ?? prev?.strokeWidth ?? 2.5
+    };
+  }
+
+  /**
+   * Determines if a pointerdown at `pt` should draw or erase freehand strokes
+   * inside an expanded Sticky Note on the page.
+   */
+  private findExpandedStickyNoteForInk(
+    pt: Point,
+    pageAnns: Annotation[],
+    activeTool: ToolType
+  ): { note: StickyNoteAnnotation; mode: 'pen' | 'eraser' } | null {
+    // 1. Explicit in-note ink mode activated from the Sticky Note floating bar
+    if (this._stickyInkMode) {
+      const target = pageAnns.find(
+        (a): a is StickyNoteAnnotation =>
+          a.id === this._stickyInkMode!.noteId && a.type === 'sticky-note' && !a.collapsed && !a.locked
+      );
+      if (target && stickyNoteTool.hitTest(target, pt) && !stickyNoteTool.hitTestCollapseButton(target, pt)) {
+        return { note: target, mode: this._stickyInkMode.mode };
+      }
+    }
+
+    // 2. Main Pen or Eraser tool used directly over an expanded Sticky Note card
+    if (activeTool === 'pen' || (activeTool === 'eraser' && store.toolSettings.eraserMode !== 'object')) {
+      for (let i = pageAnns.length - 1; i >= 0; i--) {
+        const cand = pageAnns[i];
+        if (cand.type === 'sticky-note' && !cand.collapsed && !cand.locked) {
+          if (stickyNoteTool.hitTest(cand, pt) && !stickyNoteTool.hitTestCollapseButton(cand, pt)) {
+            if (activeTool === 'pen') {
+              return { note: cand, mode: 'pen' };
+            }
+            if (activeTool === 'eraser' && (cand.strokes?.length ?? 0) > 0) {
+              return { note: cand, mode: 'eraser' };
+            }
+          }
+          break;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Live-erases freehand strokes inside a Sticky Note that are touched by `points`.
+   */
+  private applyStickyNoteEraser(points: Point[], pageIndex: number, noteId: string, radius: number): void {
+    const doc = store.activeDocument;
+    if (!doc?.annotations[pageIndex]) return;
+    const idx = doc.annotations[pageIndex].findIndex(a => a.id === noteId && a.type === 'sticky-note');
+    if (idx === -1) return;
+    const note = doc.annotations[pageIndex][idx] as StickyNoteAnnotation;
+    if (!note.strokes || note.strokes.length === 0) return;
+
+    let remaining = note.strokes;
+    for (const rawPt of points) {
+      const localPt = note.rotation ? rotatePoint(rawPt, boxCenter(note.box), -note.rotation) : rawPt;
+      remaining = remaining.filter(stroke => {
+        const pad = (stroke.strokeWidth || 2) / 2;
+        for (let i = 0; i < stroke.points.length; i++) {
+          if (distance(localPt, stroke.points[i]) <= radius + pad) return false;
+          if (i > 0 && distanceToSegment(localPt, stroke.points[i - 1], stroke.points[i]) <= radius + pad) return false;
+        }
+        return true;
+      });
+    }
+
+    if (remaining.length !== note.strokes.length) {
+      doc.annotations[pageIndex][idx] = {
+        ...note,
+        strokes: remaining,
+        updatedAt: Date.now()
+      };
+      doc.lastModifiedAt = Date.now();
+    }
   }
 
   /** Page coordinates for events that do not draw, such as context menus. */

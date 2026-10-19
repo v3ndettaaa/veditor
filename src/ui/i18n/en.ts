@@ -23,6 +23,7 @@ export const en = {
     polygon: 'Polygon',
     freeform: 'Freeform Shape',
     text: 'Text Box (T)',
+    stickyNote: 'Sticky Note',
     stamp: 'Stamp / Image (M)',
     measure: 'Measurement Tools',
     distance: 'Measure Distance',

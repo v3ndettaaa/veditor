@@ -30,7 +30,7 @@ export class TextTool {
     fontSize: number = 16,
     fontFamily: string = 'Inter',
     padding: number = 8,
-    fontWeight: string = 'normal',
+    fontWeight: string | number = 'normal',
     fontStyle: string = 'normal'
   ): { width: number; height: number } {
     const rawLines = (text || ' ').split('\n');

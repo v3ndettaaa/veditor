@@ -6,7 +6,7 @@
 
 import { store } from '../core/store';
 import { history, AddAnnotationCommand } from '../core/history';
-import { cloneAnnotation } from './selection';
+import { offsetAnnotation } from './selection';
 
 const OFFSET = 12;
 
@@ -19,16 +19,8 @@ export function duplicateSelectedAnnotations(): string[] {
     const pageIndex = parseInt(pageIdx, 10);
     const sel = doc.annotations[pageIndex].filter(a => selectedIds.includes(a.id));
     for (const ann of sel) {
-      const copy: any = cloneAnnotation(ann);
+      const copy: any = offsetAnnotation(ann, OFFSET, OFFSET);
       copy.id = Math.random().toString(36).substring(2, 10);
-      copy.box = { ...copy.box, x: copy.box.x + OFFSET, y: copy.box.y + OFFSET };
-      const shiftPts = (pts: any[]) => pts.map((p: any) => ({ ...p, x: p.x + OFFSET, y: p.y + OFFSET }));
-      if (Array.isArray(copy.points) && copy.points.length > 0 && Array.isArray(copy.points[0])) {
-        // Signature strokes: array of point arrays.
-        copy.points = (copy.points as any[]).map((stroke: any[]) => shiftPts(stroke));
-      } else if (Array.isArray(copy.points)) {
-        copy.points = shiftPts(copy.points);
-      }
       copy.createdAt = Date.now();
       copy.updatedAt = Date.now();
       history.execute(new AddAnnotationCommand(pageIndex, copy));

@@ -4,11 +4,11 @@ import {
 } from 'pdf-lib';
 import type { PDFFont } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
-import type { Annotation, BoundingBox, HighlighterAnnotation, Point, ShapeAnnotation, StampAnnotation, TextAnnotation } from './types';
+import type { Annotation, BoundingBox, HighlighterAnnotation, Point, ShapeAnnotation, StampAnnotation, StickyNoteAnnotation, TextAnnotation } from './types';
 import { STAMP_PRESETS } from '../annotations/tools/stamp';
 
 type QuadHighlight = HighlighterAnnotation & { quadPoints: Point[][] };
-type NativeAnnotation = TextAnnotation | ShapeAnnotation | QuadHighlight | StampAnnotation;
+type NativeAnnotation = TextAnnotation | ShapeAnnotation | QuadHighlight | StampAnnotation | StickyNoteAnnotation;
 type Entry = { pageIndex: number; index: number; raw: PDFObject; dict: PDFDict; annotation: NativeAnnotation };
 type Color = { rgb: number[]; alpha: number };
 const name = PDFName.of;
@@ -95,11 +95,13 @@ function validModel(value: unknown): value is NativeAnnotation {
     const common = ['id', 'pageIndex', 'layerId', 'type', 'box', 'createdAt', 'updatedAt', 'opacity', 'blendMode', 'locked', 'rotation'];
     const specific = value.type === 'text'
       ? ['text', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'color', 'backgroundColor', 'borderColor', 'textAlign', 'padding']
-      : value.type === 'highlighter'
-        ? ['points', 'quadPoints', 'color', 'strokeWidth', 'straightLine', 'tipShape']
-        : value.type === 'stamp'
-          ? ['stampType', 'presetKey', 'imageUrl', 'svgData', 'color']
-          : ['strokeColor', 'fillColor', 'strokeWidth', 'outline', 'strokeStyle', 'cornerRadius', 'points', 'arrowStart', 'arrowEnd'];
+      : value.type === 'sticky-note'
+        ? ['text', 'author', 'color', 'textColor', 'fontFamily', 'fontSize', 'textAlign', 'collapsed', 'strokes']
+        : value.type === 'highlighter'
+          ? ['points', 'quadPoints', 'color', 'strokeWidth', 'straightLine', 'tipShape']
+          : value.type === 'stamp'
+            ? ['stampType', 'presetKey', 'imageUrl', 'svgData', 'color']
+            : ['strokeColor', 'fillColor', 'strokeWidth', 'outline', 'strokeStyle', 'cornerRadius', 'points', 'arrowStart', 'arrowEnd'];
     if (Object.keys(value).some(k => !common.includes(k) && !specific.includes(k))) return false;
   }
   if (!record(value) || typeof value.id !== 'string' || !value.id || value.id.length > 4096 ||
@@ -119,6 +121,17 @@ function validModel(value: unknown): value is NativeAnnotation {
       (value.padding === undefined || (finite(value.padding) && value.padding >= 0)) &&
       (value.backgroundColor === undefined || validColor(value.backgroundColor)) &&
       (value.borderColor === undefined || validColor(value.borderColor));
+  }
+  if (value.type === 'sticky-note') {
+    return positive(b.width) && positive(b.height) && typeof value.text === 'string' && value.text.length <= 1000000 &&
+      typeof value.author === 'string' && value.author.length <= 1000 &&
+      typeof value.fontFamily === 'string' && positive(value.fontSize) &&
+      validColor(value.color) && validColor(value.textColor) &&
+      ['left', 'center', 'right'].includes(value.textAlign as string) &&
+      typeof value.collapsed === 'boolean' &&
+      Array.isArray(value.strokes) &&
+      value.strokes.every(s => record(s) && typeof s.id === 'string' && validColor(s.color) &&
+        positive(s.strokeWidth) && unit(s.opacity) && Array.isArray(s.points) && s.points.every(point));
   }
   if (value.type === 'highlighter') {
     return positive(b.width) && positive(b.height) && validColor(value.color) && positive(value.strokeWidth) &&
@@ -266,7 +279,7 @@ function appearanceText(dict: PDFDict, page: PDFPage) {
 }
 
 function subtypeFor(ann: NativeAnnotation): string {
-  if (ann.type === 'text') return 'FreeText';
+  if (ann.type === 'text' || ann.type === 'sticky-note') return 'FreeText';
   if (ann.type === 'rectangle') return 'Square';
   if (ann.type === 'ellipse') return 'Circle';
   if (ann.type === 'highlighter') return 'Highlight';
@@ -529,6 +542,92 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     set('Q', PDFNumber.of(['left', 'center', 'right'].indexOf(ann.textAlign)));
     set('C', ctx.obj(bg.alpha ? bg.rgb : []));
     set('BS', ctx.obj({ W: width, S: dash.length ? 'D' : 'S', ...(dash.length ? { D: dash } : {}) }));
+  } else if (ann.type === 'sticky-note') {
+    const bg = color(ann.color || '#fef08a');
+    const borderCol: Color = { rgb: bg.rgb.map(c => Math.max(0, c * 0.78)), alpha: 1 };
+    const fg = color(ann.textColor || '#3b2f1e');
+    if (ann.collapsed) {
+      const s = 38, fold = 10;
+      const ix = b.x, iy = b.y;
+      paint(bg, borderCol);
+      ops.push('1.25 w', '[] 0 d');
+      path([
+        { x: ix, y: iy },
+        { x: ix + s, y: iy },
+        { x: ix + s, y: iy + s - fold },
+        { x: ix + s - fold, y: iy + s },
+        { x: ix, y: iy + s }
+      ], true);
+      ops.push('B');
+      const foldFill: Color = { rgb: bg.rgb.map(c => Math.max(0, c * 0.85)), alpha: 1 };
+      paint(foldFill, borderCol);
+      path([
+        { x: ix + s - fold, y: iy + s },
+        { x: ix + s - fold, y: iy + s - fold },
+        { x: ix + s, y: iy + s - fold }
+      ], true);
+      ops.push('B');
+      paint(fg, fg);
+      ops.push('1.5 w');
+      for (const [ry, rw] of [[0.32, 0.72], [0.50, 0.72], [0.68, 0.50]]) {
+        path([{ x: ix + s * 0.22, y: iy + s * ry }, { x: ix + s * rw, y: iy + s * ry }], false);
+        ops.push('S');
+      }
+      geometry.length = 0;
+      geometry.push(...corners({ x: ix, y: iy, width: s, height: s }));
+    } else {
+      paint(bg, borderCol);
+      ops.push('1 w', '[] 0 d');
+      rectangle();
+      ops.push('B');
+      // Header separator line
+      ops.push('0.75 w');
+      path([{ x: b.x + 12, y: b.y + 36 }, { x: b.x + b.width - 12, y: b.y + 36 }], false);
+      ops.push('S');
+      // Typed text
+      if (font && ann.text) {
+        paint(fg, fg);
+        const padX = 16, topStart = b.y + 48;
+        const ascent = font.heightAtSize(ann.fontSize, { descender: false });
+        ops.push('BT', `/F0 ${n(ann.fontSize)} Tf`);
+        ann.text.split(/\r\n|\r|\n/).forEach((line, i) => {
+          const top = topStart + i * ann.fontSize * 1.38;
+          if (top + ascent > b.y + b.height - 28) return;
+          const encoded = font.encodeText(line);
+          const w = font.widthOfTextAtSize(line, ann.fontSize);
+          const x = ann.textAlign === 'center' ? b.x + (b.width - w) / 2 : ann.textAlign === 'right' ? b.x + b.width - padX - w : b.x + padX;
+          ops.push(`1 0 0 -1 ${list([x, top + ascent])} Tm`, `${encoded.toString()} Tj`);
+        });
+        ops.push('ET');
+      }
+      // Author signature at bottom-left
+      if (font && ann.author && ann.author.trim()) {
+        const authorCol: Color = { rgb: fg.rgb, alpha: 0.72 };
+        paint(authorCol, authorCol);
+        const authorSize = 11.5;
+        const encoded = font.encodeText(ann.author.trim());
+        ops.push('BT', `/F0 ${n(authorSize)} Tf`, `1 0 0 -1 ${list([b.x + 16, b.y + b.height - 13])} Tm`, `${encoded.toString()} Tj`, 'ET');
+      }
+      // Freehand strokes inside note
+      if (Array.isArray(ann.strokes)) {
+        for (const stroke of ann.strokes) {
+          if (!stroke.points || stroke.points.length < 2) continue;
+          const sc = color(stroke.color || ann.textColor || '#3b2f1e');
+          sc.alpha *= stroke.opacity ?? 1;
+          paint(sc, sc);
+          ops.push(`${n(stroke.strokeWidth || 2)} w`, '[] 0 d');
+          path(stroke.points, false);
+          ops.push('S');
+        }
+      }
+    }
+    set('Contents', PDFHexString.fromText(ann.text || ''));
+    if (ann.author) set('T', PDFHexString.fromText(ann.author));
+    set('DA', PDFString.of(`/F0 ${n(ann.fontSize)} Tf ${list(fg.rgb)} rg`));
+    if (font) set('DR', ctx.obj({ Font: { F0: font.ref } }));
+    set('Q', PDFNumber.of(['left', 'center', 'right'].indexOf(ann.textAlign)));
+    set('C', ctx.obj(bg.alpha ? bg.rgb : []));
+    set('BS', ctx.obj({ W: 1, S: 'S' }));
   } else if (ann.type === 'highlighter') {
     const fill = color(ann.color);
     paint(fill, fill, ann.blendMode === 'multiply');
@@ -643,7 +742,7 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
     const byId = new Map(originals.map(e => [e.annotation.id, e]));
     const originalIndices = new Set(originals.map(e => e.index));
     const annots = get(page.node, 'Annots');
-    const candidates = (annotationsByPage[pageIndex] ?? []).filter(a => ['text', 'rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'freeform-shape', 'stamp'].includes(a.type) || (a.type === 'highlighter' && 'quadPoints' in a));
+    const candidates = (annotationsByPage[pageIndex] ?? []).filter(a => ['text', 'sticky-note', 'rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'freeform-shape', 'stamp'].includes(a.type) || (a.type === 'highlighter' && 'quadPoints' in a));
     if (!originals.length && !candidates.length) continue;
     if (annots !== undefined && !(annots instanceof PDFArray)) throw new Error('Cannot safely update malformed /Annots');
     const keep = annots instanceof PDFArray ? annots.asArray().filter((_, i) => !originalIndices.has(i)) : [];
@@ -660,11 +759,12 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
         continue;
       }
       let font: PDFFont | undefined;
-      if (ann.type === 'text') {
-        const fontName = standardFont(ann);
+      if (ann.type === 'text' || ann.type === 'sticky-note') {
+        const fontName = ann.type === 'text' ? standardFont(ann) : StandardFonts.Helvetica;
         font = fonts.get(fontName);
         if (!font) { font = await pdfDoc.embedFont(fontName); fonts.set(fontName, font); }
-        try { for (const line of ann.text.split(/\r\n|\r|\n/)) font.encodeText(line); }
+        const textToCheck = ann.type === 'sticky-note' ? `${ann.text || ''}\n${ann.author || ''}` : ann.text;
+        try { for (const line of textToCheck.split(/\r\n|\r|\n/)) font.encodeText(line); }
         catch {
           if (!unicodeFontProvider) throw new Error(`FreeText ${ann.id}: standard WinAnsi fonts cannot encode this text. Content was preserved; a Unicode font provider is required.`);
           if (!unicodeFont) {
@@ -672,7 +772,7 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
             unicodeFont = await pdfDoc.embedFont(await unicodeFontProvider(), { subset: true });
           }
           const supported = new Set(unicodeFont.getCharacterSet());
-          if ([...ann.text].some(ch => !['\r', '\n'].includes(ch) && !supported.has(ch.codePointAt(0)!))) {
+          if ([...textToCheck].some(ch => !['\r', '\n'].includes(ch) && !supported.has(ch.codePointAt(0)!))) {
             throw new Error(`FreeText ${ann.id}: the bundled font does not contain every required character.`);
           }
           font = unicodeFont;

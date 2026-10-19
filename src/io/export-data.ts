@@ -68,6 +68,10 @@ export class DataExporter {
           xfdf += `    <freetext page="${pageIndex}" rect="${rectStr}" color="${ann.color}">\n`;
           xfdf += `      <contents>${escapeXml(ann.text)}</contents>\n`;
           xfdf += `    </freetext>\n`;
+        } else if (ann.type === 'sticky-note') {
+          xfdf += `    <text page="${pageIndex}" rect="${rectStr}" color="${ann.color}" title="${escapeXml(ann.author || '')}">\n`;
+          xfdf += `      <contents>${escapeXml(ann.text || '')}</contents>\n`;
+          xfdf += `    </text>\n`;
         }
       }
     }

@@ -21,6 +21,7 @@ import { traceRoundedPolygon, fillLineRibbon } from '../utils/geometry';
 export const SHAPE_CORNER_RADIUS = 0.75;
 import { renderSmoothStroke } from './spline';
 import { textTool } from './tools/text';
+import { stickyNoteTool } from './tools/sticky-note';
 import { stampTool } from './tools/stamp';
 import { measureTool } from './tools/measure';
 import { signatureTool } from './tools/signature';
@@ -111,7 +112,7 @@ export class AnnotationEngine {
     scale: number = 1.0
   ): void {
     for (const ann of annotations) {
-      if (this._editingAnnotationId && ann.id === this._editingAnnotationId) continue;
+      if (this._editingAnnotationId && ann.id === this._editingAnnotationId && ann.type !== 'sticky-note') continue;
       ctx.save();
       // Highlighter ink already carries its translucency in the color alpha;
       // applying `opacity` again would double-fade it (and diverge from the
@@ -137,7 +138,7 @@ export class AnnotationEngine {
     const visibleAnnotations = doc.annotations[pageIndex] || [];
 
     for (const ann of visibleAnnotations) {
-      if (this._editingAnnotationId && ann.id === this._editingAnnotationId) continue;
+      if (this._editingAnnotationId && ann.id === this._editingAnnotationId && ann.type !== 'sticky-note') continue;
       ctx.save();
       // Highlighter ink already carries its translucency in the color alpha;
       // applying `opacity` again would double-fade it (and diverge from the
@@ -244,6 +245,10 @@ export class AnnotationEngine {
 
       case 'text':
         textTool.renderToCanvas(ctx, ann, scale);
+        break;
+
+      case 'sticky-note':
+        stickyNoteTool.renderToCanvas(ctx, ann, scale, this._editingAnnotationId === ann.id);
         break;
 
       case 'stamp':

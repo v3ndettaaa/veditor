@@ -16,6 +16,7 @@ export type ToolType =
   | 'polygon'
   | 'freeform-shape'
   | 'text'
+  | 'sticky-note'
   | 'stamp'
   | 'measure-distance'
   | 'measure-angle'
@@ -173,11 +174,44 @@ export interface RedactionAnnotation extends BaseAnnotation {
   applied?: boolean; // false = pending redaction mark, true = applied/scrubbed
 }
 
+export interface StickyNoteStroke {
+  id: string;
+  points: StrokePoint[];
+  color: string;
+  strokeWidth: number;
+  opacity?: number;
+}
+
+export interface StickyNoteAnnotation extends BaseAnnotation {
+  type: 'sticky-note';
+  /** Sticky note card background paper color (e.g. '#fef08a'). */
+  color: string;
+  /** Typed text inside the sticky note. */
+  text: string;
+  /** Text color inside the sticky note (e.g. '#3b2f1e'). */
+  textColor: string;
+  fontSize: number;
+  fontFamily: string;
+  fontWeight?: 'normal' | 'bold' | string | number;
+  fontStyle?: 'normal' | 'italic';
+  textAlign: 'left' | 'center' | 'right';
+  listStyle?: 'none' | 'bullet' | 'number';
+  /** Configurable author signature displayed at the bottom-left of the note card. */
+  author: string;
+  /** True when minimized into a compact folded-corner sticky note icon. */
+  collapsed: boolean;
+  /** Preserved full card dimensions while collapsed so expanding restores exact size. */
+  expandedBox?: BoundingBox;
+  /** Freehand pen strokes drawn inside the sticky note card (in page coordinates). */
+  strokes: StickyNoteStroke[];
+}
+
 export type Annotation =
   | PenAnnotation
   | HighlighterAnnotation
   | ShapeAnnotation
   | TextAnnotation
+  | StickyNoteAnnotation
   | StampAnnotation
   | MeasurementAnnotation
   | SignatureAnnotation
@@ -224,7 +258,7 @@ export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
   'select', 'lasso', 'hand',
   'pen', 'highlighter', 'eraser',
   'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
-  'text', 'stamp', 'measure-distance', 'signature', 'redaction', 'scratchpad'
+  'text', 'sticky-note', 'stamp', 'measure-distance', 'signature', 'redaction', 'scratchpad'
 ];
 
 /** Visual family per toolbar tool; separators render between families. */
@@ -377,6 +411,10 @@ export interface ToolSettings {
   drawingCursor: DrawingCursorType;
   stampPreset: string;
   redactionColor: string;
+  noteColor: string;
+  noteTextColor: string;
+  noteFontSize: number;
+  noteAuthor: string;
   /**
    * Per-tool: constrain the tool's segments to 15° increments. Lives here (and
    * not in AppSettings) because it is a drawing option of the shape tools, so

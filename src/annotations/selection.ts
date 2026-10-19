@@ -5,6 +5,7 @@
 
 import { Point, BoundingBox, Annotation, ShapeAnnotation } from '../core/types';
 import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect, computePointsBoundingBox } from '../utils/geometry';
+import { stickyNoteTool } from './tools/sticky-note';
 
 /**
  * Rotates point `p` around `center` by `angle` radians (counter-clockwise in
@@ -57,6 +58,12 @@ export function offsetAnnotation<T extends Annotation>(ann: T, dx: number, dy: n
   if (value.arrowPoint) value.arrowPoint = shift(value.arrowPoint);
   if (value.knee) value.knee = shift(value.knee);
   if (value.anchor) value.anchor = shift(value.anchor);
+  if (Array.isArray(value.strokes)) {
+    value.strokes = value.strokes.map((s: any) => ({
+      ...s,
+      points: Array.isArray(s.points) ? s.points.map(shift) : []
+    }));
+  }
   return next;
 }
 
@@ -76,6 +83,9 @@ export function moveAnnotationsInZOrder<T extends Annotation>(
 }
 
 export function getAnnotationSelectionBox(ann: Annotation): BoundingBox {
+  if (ann.type === 'sticky-note' && ann.collapsed) {
+    return stickyNoteTool.getCollapsedIconBox(ann);
+  }
   return ann.box;
 }
 
@@ -159,6 +169,37 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   }
   if (ann.type === 'text' && typeof a.fontSize === 'number') {
     next.fontSize = Math.max(4, a.fontSize * meanScale);
+  }
+  if (ann.type === 'sticky-note') {
+    if (ann.collapsed) {
+      const shiftX = c1.x - b.x;
+      const shiftY = c1.y - b.y;
+      next.box = {
+        x: b.x + shiftX,
+        y: b.y + shiftY,
+        width: b.width,
+        height: b.height,
+        ...(b.rotation !== undefined ? { rotation: b.rotation } : {})
+      };
+      if (Array.isArray(a.strokes)) {
+        next.strokes = a.strokes.map((s: any) => ({
+          ...s,
+          points: Array.isArray(s.points)
+            ? s.points.map((pt: Point) => ({ ...pt, x: pt.x + shiftX, y: pt.y + shiftY }))
+            : []
+        }));
+      }
+    } else {
+      next.box.width = Math.max(120, next.box.width);
+      next.box.height = Math.max(100, next.box.height);
+      if (Array.isArray(a.strokes)) {
+        next.strokes = a.strokes.map((s: any) => ({
+          ...s,
+          strokeWidth: Math.max(0.5, (s.strokeWidth || 2) * meanScale),
+          points: Array.isArray(s.points) ? s.points.map(mapPt) : []
+        }));
+      }
+    }
   }
   return next as T;
 }
@@ -260,9 +301,10 @@ export class SelectionManager {
     for (let i = annotations.length - 1; i >= 0; i--) {
       const ann = annotations[i];
       if (ann.locked) continue;
+      const selBox = getAnnotationSelectionBox(ann);
       // Rotated annotations hit-test in their unrotated frame.
-      const local = ann.rotation ? rotatePoint(point, boxCenter(ann.box), -ann.rotation) : point;
-      if (isPointInBox(local, ann.box)) {
+      const local = ann.rotation ? rotatePoint(point, boxCenter(selBox), -ann.rotation) : point;
+      if (isPointInBox(local, selBox)) {
         return ann;
       }
     }
@@ -278,7 +320,7 @@ export class SelectionManager {
       { x: rect.x + rect.width, y: rect.y + rect.height },
       0
     );
-    return annotations.filter(a => !a.locked && boxesIntersect(norm, a.box));
+    return annotations.filter(a => !a.locked && boxesIntersect(norm, getAnnotationSelectionBox(a)));
   }
 
   /**
@@ -295,9 +337,10 @@ export class SelectionManager {
     const hits: Annotation[] = [];
     for (const ann of annotations) {
       if (ann.locked) continue;
-      if (!boxesIntersect(lassoBox, ann.box)) continue;
+      const selBox = getAnnotationSelectionBox(ann);
+      if (!boxesIntersect(lassoBox, selBox)) continue;
       // Test in the annotation's unrotated frame (boxes stay unrotated).
-      const center = boxCenter(ann.box);
+      const center = boxCenter(selBox);
       const rot = ann.rotation || 0;
       const local: Point[] = rot ? poly.map(p => rotatePoint(p, center, -rot)) : poly;
       if (this.annotationIntersectsPolygon(ann, local, strokePad)) hits.push(ann);

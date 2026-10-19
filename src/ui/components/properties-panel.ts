@@ -92,6 +92,7 @@ export class PropertiesPanelComponent {
     const firstOutline = (firstAnn as any).outline !== false;
     const strokeCol = (firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5';
     const isTextAnn = 'fontSize' in firstAnn;
+    const isStickyNote = firstAnn.type === 'sticky-note';
     const widthVal = Number((firstAnn as any).strokeWidth || (firstAnn as any).fontSize || 3);
     const widthMax = isTextAnn ? 120 : 60;
     const opacityPct = Math.round((firstAnn.opacity ?? 1) * 100);
@@ -235,6 +236,38 @@ export class PropertiesPanelComponent {
                 <span class="gn-tile-label">Right</span>
               </button>
             </div>
+          </div>
+        ` : ''}
+
+        ${isStickyNote ? `
+          <div class="prop-group">
+            <div class="prop-label-row">
+              <span class="prop-label">Text & Ink Color</span>
+              <input type="color" id="prop-note-textcolor" class="color-picker-input"
+                     style="width:28px; height:28px; border-radius:6px; cursor:pointer;"
+                     value="${(firstAnn as any).textColor || '#3b2f1e'}">
+            </div>
+          </div>
+          <div class="prop-group">
+            <div class="prop-label-row">
+              <span class="prop-label">Author Signature</span>
+            </div>
+            <input type="text" id="prop-note-author" class="prop-hex-input"
+                   style="width:100%; text-align:left; padding:6px 10px; font-family:var(--font-en);"
+                   value="${(firstAnn as any).author !== undefined ? (firstAnn as any).author : 'Kia Gh'}"
+                   placeholder="Author signature (e.g. Kia Gh)" maxlength="40">
+          </div>
+          <div class="prop-group" style="display:flex; gap:8px;">
+            <button type="button" id="prop-note-collapse-btn" class="gn-setting-row" style="flex:1; justify-content:center;">
+              ${getIconSvg((firstAnn as any).collapsed ? 'expand' : 'compress', 14)}
+              <span>${(firstAnn as any).collapsed ? 'Expand Note' : 'Collapse Note'}</span>
+            </button>
+            ${((firstAnn as any).strokes?.length ?? 0) > 0 ? `
+              <button type="button" id="prop-note-clear-ink-btn" class="gn-setting-row" style="flex:1; justify-content:center;">
+                ${getIconSvg('eraser', 14)}
+                <span>Clear Ink</span>
+              </button>
+            ` : ''}
           </div>
         ` : ''}
 
@@ -535,6 +568,53 @@ export class PropertiesPanelComponent {
         });
         store.setActivePageIndex(store.activePageIndex);
       });
+    });
+
+    // Sticky Note specific controls
+    const noteTextColInput = this._container.querySelector<HTMLInputElement>('#prop-note-textcolor');
+    noteTextColInput?.addEventListener('input', () => {
+      const val = noteTextColInput.value;
+      selectedAnnotations.forEach(ann => {
+        if (ann.type === 'sticky-note') {
+          const next = { ...ann, textColor: val, updatedAt: Date.now() };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+        }
+      });
+      store.updateToolSettings({ noteTextColor: val });
+      store.setActivePageIndex(store.activePageIndex);
+    });
+
+    const noteAuthorInput = this._container.querySelector<HTMLInputElement>('#prop-note-author');
+    noteAuthorInput?.addEventListener('change', () => {
+      const val = noteAuthorInput.value;
+      selectedAnnotations.forEach(ann => {
+        if (ann.type === 'sticky-note') {
+          const next = { ...ann, author: val, updatedAt: Date.now() };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+        }
+      });
+      store.updateToolSettings({ noteAuthor: val });
+      store.setActivePageIndex(store.activePageIndex);
+    });
+
+    this._container.querySelector('#prop-note-collapse-btn')?.addEventListener('click', () => {
+      selectedAnnotations.forEach(ann => {
+        if (ann.type === 'sticky-note') {
+          const next = { ...ann, collapsed: !ann.collapsed, updatedAt: Date.now() };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+        }
+      });
+      store.setActivePageIndex(store.activePageIndex);
+    });
+
+    this._container.querySelector('#prop-note-clear-ink-btn')?.addEventListener('click', () => {
+      selectedAnnotations.forEach(ann => {
+        if (ann.type === 'sticky-note' && (ann.strokes?.length ?? 0) > 0) {
+          const next = { ...ann, strokes: [], updatedAt: Date.now() };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+        }
+      });
+      store.setActivePageIndex(store.activePageIndex);
     });
   }
 }

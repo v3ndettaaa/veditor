@@ -16,6 +16,12 @@ export interface InlineEditorOptions {
   padding?: number;
   placeholder?: string;
   selectAllOnOpen?: boolean;
+  /** When true (e.g. inside a Sticky Note card), Enter inserts a newline and Ctrl/Cmd+Enter or clicking outside commits. */
+  multilineEnter?: boolean;
+  /** When true, keeps the textarea locked to `rect.width` and `rect.height` instead of auto-growing horizontally. */
+  fixedSize?: boolean;
+  /** Optional seamless embedded mode (transparent background over canvas card). */
+  seamlessCard?: boolean;
   onCommit: (text: string) => void;
   onCancel?: () => void;
 }
@@ -54,9 +60,11 @@ export function openInlineEditor(options: InlineEditorOptions): void {
   const pad = Math.max(4, Math.round(options.padding ?? 8));
   const textColor = options.color || '#111827';
   const hasBg = !!options.backgroundColor && options.backgroundColor !== 'transparent';
-  const editorBg = hasBg
-    ? options.backgroundColor!
-    : (isVeryLightColor(textColor) ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.96)');
+  const editorBg = options.seamlessCard
+    ? (options.backgroundColor || 'transparent')
+    : hasBg
+      ? options.backgroundColor!
+      : (isVeryLightColor(textColor) ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.96)');
 
   const area = document.createElement('textarea');
   area.className = 'inline-annotation-editor';
@@ -64,29 +72,33 @@ export function openInlineEditor(options: InlineEditorOptions): void {
   area.spellcheck = false;
   area.placeholder = options.placeholder ?? 'Type text… (Shift+Enter for new line)';
 
-  const minW = Math.max(140, Math.round(rect.width));
-  const minH = Math.max(Math.round(fontSize * 1.35 + pad * 2 + 4), Math.round(rect.height));
+  const minW = options.fixedSize ? Math.max(80, Math.round(rect.width)) : Math.max(140, Math.round(rect.width));
+  const minH = options.fixedSize
+    ? Math.max(40, Math.round(rect.height))
+    : Math.max(Math.round(fontSize * 1.35 + pad * 2 + 4), Math.round(rect.height));
 
   Object.assign(area.style, {
     position: 'fixed',
-    left: `${Math.max(8, Math.min(window.innerWidth - 160, Math.round(rect.left)))}px`,
+    left: `${Math.max(8, Math.min(window.innerWidth - 100, Math.round(rect.left)))}px`,
     top: `${Math.max(8, Math.min(window.innerHeight - 60, Math.round(rect.top)))}px`,
     width: `${minW}px`,
     height: `${minH}px`,
     zIndex: '2500',
-    resize: 'both',
-    overflow: 'hidden',
+    resize: options.fixedSize ? 'none' : 'both',
+    overflow: options.fixedSize ? 'auto' : 'hidden',
     boxSizing: 'border-box',
-    border: '2px solid var(--accent, #6366f1)',
-    borderRadius: '6px',
+    border: options.seamlessCard ? '1.5px dashed rgba(59, 47, 30, 0.35)' : '2px solid var(--accent, #6366f1)',
+    borderRadius: options.seamlessCard ? '8px' : '6px',
     padding: `${pad}px`,
     background: editorBg,
     color: textColor,
     textAlign: options.textAlign || 'left',
-    font: `${fontSize}px "${fontFamily}", sans-serif`,
+    font: `500 ${fontSize}px "${fontFamily}", -apple-system, BlinkMacSystemFont, sans-serif`,
     lineHeight: '1.35',
     outline: 'none',
-    boxShadow: '0 10px 28px rgba(0, 0, 0, 0.28), 0 0 0 3px rgba(99, 102, 241, 0.22)'
+    boxShadow: options.seamlessCard
+      ? 'none'
+      : '0 10px 28px rgba(0, 0, 0, 0.28), 0 0 0 3px rgba(99, 102, 241, 0.22)'
   });
 
   let done = false;
@@ -105,6 +117,7 @@ export function openInlineEditor(options: InlineEditorOptions): void {
   activeInlineEditorFinish = finish;
 
   const autoGrow = () => {
+    if (options.fixedSize) return;
     const lines = (area.value || area.placeholder || ' ').split('\n');
     const longest = lines.reduce((m, l) => Math.max(m, l.length), 1);
     const estW = Math.max(minW, Math.min(window.innerWidth - 32, Math.ceil(longest * fontSize * 0.62 + pad * 2 + 24)));
@@ -126,8 +139,8 @@ export function openInlineEditor(options: InlineEditorOptions): void {
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      finish(false);
-    } else if (e.key === 'Enter' && !e.shiftKey) {
+      finish(options.multilineEnter ? true : false);
+    } else if (e.key === 'Enter' && (options.multilineEnter ? (e.ctrlKey || e.metaKey) : !e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
       finish(true);

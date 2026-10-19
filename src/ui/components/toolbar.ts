@@ -24,6 +24,7 @@ export const TOOL_SHORT_LABELS: Record<string, string> = {
   arrow: 'Arrow',
   polygon: 'Polygon',
   text: 'Text',
+  'sticky-note': 'Note',
   stamp: 'Stamp',
   'measure-distance': 'Measure',
   signature: 'Signature',
@@ -757,6 +758,105 @@ export class ToolbarComponent {
             </div>
           </div>
 
+          <!-- Sticky Note Tool with Goodnotes Popover Card -->
+          <div class="tool-btn-wrapper ${this._pinnedTool === 'sticky-note' ? 'is-pinned' : ''}" data-wrapper-tool="sticky-note">
+            <button class="tool-btn has-popover ${activeTool === 'sticky-note' ? 'active' : ''}" data-tool="sticky-note" title="${t('tools.stickyNote')}">
+              ${getIconSvg('sticky-note')}
+              <span class="tool-color-dot note-dot" style="background-color:${s.noteColor || '#ebd09e'};"></span>
+              <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
+            </button>
+            <div class="tool-hover-card gn-popover">
+              <div class="gn-popover-arrow"></div>
+
+              <div class="gn-card-header">
+                <span class="gn-card-title">${t('tools.stickyNote')}</span>
+                <span class="gn-card-meta note-meta-badge">${s.noteFontSize || 24}px</span>
+              </div>
+
+              <!-- Live Sticky Note Mini Card Preview -->
+              <div class="gn-preview-stage" style="height:76px; padding:6px;">
+                <div class="gn-note-preview-card"
+                     style="width:168px; height:60px; border-radius:8px; background:${s.noteColor || '#ebd09e'}; border:1.5px solid rgba(59,47,30,0.22); padding:6px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 3px 10px rgba(0,0,0,0.16);">
+                  <span class="gn-note-preview-text"
+                        style="color:${s.noteTextColor || '#3b2f1e'}; font-family:${s.fontFamily || 'Inter'}; font-size:${Math.min(18, Math.max(11, Math.round((s.noteFontSize || 24) * 0.65)))}px; font-weight:500; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">
+                    Sticky Note…
+                  </span>
+                  <span class="gn-note-preview-author"
+                        style="color:${s.noteTextColor || '#3b2f1e'}; opacity:0.65; font-size:10px; font-weight:500;">
+                    ${(s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh') || ' '}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Paper Background Color Swatches -->
+              <div class="gn-section">
+                <div class="gn-section-header">
+                  <span class="gn-section-label">Note Paper Color</span>
+                  <input type="text" id="hover-note-color-hex" class="hex-type-input" value="${s.noteColor || '#ebd09e'}"
+                         spellcheck="false" maxlength="7" title="Type any hex paper color" aria-label="Note paper color hex">
+                </div>
+                <div class="color-swatches-group gn-swatch-grid">
+                  ${renderDefaultSwatches('sticky-note', 'note-color', 'note-swatch', ['#ebd09e', '#fef08a', '#bbf7d0', '#bae6fd', '#fbcfe8', '#e9d5ff', '#fed7aa'], s.noteColor || '#ebd09e')}
+                  ${renderCustomPaletteSwatches('note-color', 'note-swatch', s.noteColor || '#ebd09e')}
+                  ${renderAddToPaletteButton(s.noteColor || '#ebd09e')}
+                  <div class="color-picker-wrapper" title="Custom note paper color">
+                    <input type="color" id="hover-note-color-picker" class="color-picker-input" value="${s.noteColor || '#ebd09e'}">
+                  </div>
+                </div>
+              </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Text & Ink Color Swatches -->
+              <div class="gn-section">
+                <div class="gn-section-header">
+                  <span class="gn-section-label">Text & Ink Color</span>
+                  <div class="color-picker-wrapper" title="Custom text & ink color" style="width:22px; height:22px;">
+                    <input type="color" id="hover-note-textcolor-picker" class="color-picker-input" value="${s.noteTextColor || '#3b2f1e'}">
+                  </div>
+                </div>
+                <div class="color-swatches-group gn-swatch-grid">
+                  ${['#3b2f1e', '#0f172a', '#1e3a8a', '#065f46', '#991b1b', '#581c87'].map(c => `
+                    <button type="button" class="color-swatch ${(s.noteTextColor || '#3b2f1e').toLowerCase() === c ? 'active' : ''}"
+                            style="background-color:${c};" data-note-textcolor="${c}" title="${c}"></button>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Note Font Size -->
+              <div class="gn-section">
+                <div class="gn-section-header">
+                  <span class="gn-section-label">Font Size</span>
+                  <div class="gn-num-badge">
+                    <input type="number" id="hover-note-fontsize-input" class="size-readout size-type-input"
+                           min="10" max="96" step="1" value="${s.noteFontSize || 24}" title="Font size (10-96px)" aria-label="Note font size">
+                    <span class="gn-unit">px</span>
+                  </div>
+                </div>
+                <div class="gn-slider-wrap">
+                  <input type="range" id="hover-note-fontsize-slider" class="gn-range-slider"
+                         min="10" max="72" step="1" value="${s.noteFontSize || 24}"
+                         style="--slider-pct:${sliderPercent(s.noteFontSize || 24, 10, 72)}%" aria-label="Note font size slider">
+                </div>
+              </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Author Signature Label -->
+              <div class="gn-section">
+                <div class="gn-section-header" style="gap:8px;">
+                  <span class="gn-section-label">Author Signature</span>
+                  <input type="text" id="hover-note-author-input" class="hex-type-input"
+                         style="width:118px; text-align:left; font-family:var(--font-en);"
+                         value="${s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh'}"
+                         placeholder="Author name" maxlength="40" aria-label="Note author signature">
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Stamp with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'stamp' ? 'is-pinned' : ''}" data-wrapper-tool="stamp">
             <button class="tool-btn has-popover ${activeTool === 'stamp' ? 'active' : ''}" data-tool="stamp" title="${t('tools.stamp')} (M)">
@@ -1240,6 +1340,69 @@ export class ToolbarComponent {
       const activeFam = s.fontFamily || 'Inter';
       el.classList.toggle('active', fam ? activeFam.includes(fam) : false);
     });
+
+    // 5b. Sticky Note Indicators + Live Preview
+    const noteCol = s.noteColor || '#ebd09e';
+    const noteTxtCol = s.noteTextColor || '#3b2f1e';
+    const noteFs = s.noteFontSize || 24;
+    const noteAuth = s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh';
+
+    const noteDot = this._container.querySelector<HTMLElement>('.note-dot');
+    if (noteDot) noteDot.style.backgroundColor = noteCol;
+
+    const noteMeta = this._container.querySelector<HTMLElement>('.note-meta-badge');
+    if (noteMeta) noteMeta.textContent = `${noteFs}px`;
+
+    const notePreviewCard = this._container.querySelector<HTMLElement>('.gn-note-preview-card');
+    if (notePreviewCard) notePreviewCard.style.background = noteCol;
+
+    const notePreviewText = this._container.querySelector<HTMLElement>('.gn-note-preview-text');
+    if (notePreviewText) {
+      notePreviewText.style.color = noteTxtCol;
+      notePreviewText.style.fontFamily = s.fontFamily || 'Inter';
+      notePreviewText.style.fontSize = `${Math.min(18, Math.max(11, Math.round(noteFs * 0.65)))}px`;
+    }
+
+    const notePreviewAuthor = this._container.querySelector<HTMLElement>('.gn-note-preview-author');
+    if (notePreviewAuthor) {
+      notePreviewAuthor.style.color = noteTxtCol;
+      notePreviewAuthor.textContent = noteAuth || ' ';
+    }
+
+    this._container.querySelectorAll('[data-note-color]').forEach(el => {
+      const c = el.getAttribute('data-note-color');
+      el.classList.toggle('active', !!c && c.toLowerCase() === noteCol.toLowerCase());
+    });
+
+    this._container.querySelectorAll('[data-note-textcolor]').forEach(el => {
+      const c = el.getAttribute('data-note-textcolor');
+      el.classList.toggle('active', !!c && c.toLowerCase() === noteTxtCol.toLowerCase());
+    });
+
+    const notePicker = this._container.querySelector<HTMLInputElement>('#hover-note-color-picker');
+    if (notePicker && notePicker.value !== noteCol) notePicker.value = noteCol;
+
+    const noteHex = this._container.querySelector<HTMLInputElement>('#hover-note-color-hex');
+    if (noteHex && document.activeElement !== noteHex && noteHex.value !== noteCol) noteHex.value = noteCol;
+
+    const noteTextPicker = this._container.querySelector<HTMLInputElement>('#hover-note-textcolor-picker');
+    if (noteTextPicker && noteTextPicker.value !== noteTxtCol) noteTextPicker.value = noteTxtCol;
+
+    const noteFsInput = this._container.querySelector<HTMLInputElement>('#hover-note-fontsize-input');
+    if (noteFsInput && document.activeElement !== noteFsInput && noteFsInput.value !== String(noteFs)) {
+      noteFsInput.value = String(noteFs);
+    }
+
+    const noteFsSlider = this._container.querySelector<HTMLInputElement>('#hover-note-fontsize-slider');
+    if (noteFsSlider) {
+      if (document.activeElement !== noteFsSlider) noteFsSlider.value = String(noteFs);
+      noteFsSlider.style.setProperty('--slider-pct', `${sliderPercent(noteFs, 10, 72)}%`);
+    }
+
+    const noteAuthorInput = this._container.querySelector<HTMLInputElement>('#hover-note-author-input');
+    if (noteAuthorInput && document.activeElement !== noteAuthorInput && noteAuthorInput.value !== noteAuth) {
+      noteAuthorInput.value = noteAuth;
+    }
 
     // 6. Stamp Indicators
     const stampPreview = this._container.querySelector<HTMLElement>('.gn-stamp-preview-badge');
@@ -2049,6 +2212,76 @@ export class ToolbarComponent {
           this.updateIndicators();
         }
       });
+    });
+
+    // Sticky Note listeners
+    this._container.querySelectorAll('[data-note-color]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const color = el.getAttribute('data-note-color');
+        if (color) {
+          store.updateToolSettings({ noteColor: color });
+          this.updateIndicators();
+        }
+      });
+    });
+
+    const noteColorPicker = this._container.querySelector<HTMLInputElement>('#hover-note-color-picker');
+    noteColorPicker?.addEventListener('input', (e) => {
+      const color = (e.target as HTMLInputElement).value;
+      store.updateToolSettings({ noteColor: color });
+      this.updateIndicators();
+    });
+
+    const noteColorHex = this._container.querySelector<HTMLInputElement>('#hover-note-color-hex');
+    noteColorHex?.addEventListener('change', (e) => {
+      const parsed = parseHexColor((e.target as HTMLInputElement).value);
+      if (parsed) {
+        store.updateToolSettings({ noteColor: parsed });
+      }
+      this.updateIndicators();
+    });
+
+    this._container.querySelectorAll('[data-note-textcolor]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const color = el.getAttribute('data-note-textcolor');
+        if (color) {
+          store.updateToolSettings({ noteTextColor: color });
+          this.updateIndicators();
+        }
+      });
+    });
+
+    const noteTextColorPicker = this._container.querySelector<HTMLInputElement>('#hover-note-textcolor-picker');
+    noteTextColorPicker?.addEventListener('input', (e) => {
+      const color = (e.target as HTMLInputElement).value;
+      store.updateToolSettings({ noteTextColor: color });
+      this.updateIndicators();
+    });
+
+    const noteFsSlider = this._container.querySelector<HTMLInputElement>('#hover-note-fontsize-slider');
+    noteFsSlider?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const sz = parseInt((e.target as HTMLInputElement).value || '24', 10);
+      store.updateToolSettings({ noteFontSize: sz });
+      this.updateIndicators();
+    });
+
+    const noteFsInput = this._container.querySelector<HTMLInputElement>('#hover-note-fontsize-input');
+    noteFsInput?.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const sz = clampTypedNumber((e.target as HTMLInputElement).value, 10, 96, store.toolSettings.noteFontSize || 24);
+      store.updateToolSettings({ noteFontSize: Math.round(sz) });
+      this.updateIndicators();
+    });
+
+    const noteAuthorInput = this._container.querySelector<HTMLInputElement>('#hover-note-author-input');
+    noteAuthorInput?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const author = (e.target as HTMLInputElement).value;
+      store.updateToolSettings({ noteAuthor: author });
+      this.updateIndicators();
     });
 
     // Stamp listeners

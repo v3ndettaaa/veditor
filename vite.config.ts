@@ -6,7 +6,10 @@ import fs from 'fs';
 const rootDir = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(fs.readFileSync(resolve(rootDir, 'package.json'), 'utf-8'));
 
-export default defineConfig(({ mode }) => {
+// Prevent Vite from exiting when spawned with closed stdin during container pre-warming
+process.env.CI = 'true';
+
+export default defineConfig(({ mode, command }) => {
   const isDesktop = mode === 'desktop';
   const isFirefox = mode === 'firefox';
   const outDir = isDesktop ? 'dist/desktop' : (isFirefox ? 'dist/firefox' : 'dist/chrome');
@@ -23,7 +26,8 @@ export default defineConfig(({ mode }) => {
     base: './',
     server: {
       port: 3000,
-      host: '0.0.0.0'
+      host: '0.0.0.0',
+      allowedHosts: true
     },
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version)
@@ -60,7 +64,13 @@ export default defineConfig(({ mode }) => {
           const distWorker = resolve(rootDir, 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs');
           const publicWorker = resolve(rootDir, 'public/pdf.worker.min.mjs');
           if (fs.existsSync(distWorker)) {
-            fs.copyFileSync(distWorker, publicWorker);
+            const needsCopy =
+              !fs.existsSync(publicWorker) ||
+              fs.statSync(distWorker).size !== fs.statSync(publicWorker).size;
+            if (needsCopy) {
+              fs.mkdirSync(dirname(publicWorker), { recursive: true });
+              fs.copyFileSync(distWorker, publicWorker);
+            }
           }
         },
         configureServer(server) {
@@ -78,18 +88,25 @@ export default defineConfig(({ mode }) => {
           });
         },
         closeBundle() {
+          // Only copy extension build artifacts during actual production builds,
+          // never during dev dependency pre-bundling or Vitest runs.
+          if (command !== 'build' || process.env.VITEST) return;
+
+          const outDirPath = resolve(rootDir, outDir);
+          fs.mkdirSync(outDirPath, { recursive: true });
+
           // Copy appropriate manifest if building an extension
           if (!isDesktop) {
             const manifestSource = isFirefox ? 'manifest.firefox.json' : 'manifest.chrome.json';
             if (fs.existsSync(manifestSource)) {
-              fs.copyFileSync(manifestSource, `${outDir}/manifest.json`);
+              fs.copyFileSync(manifestSource, resolve(outDirPath, 'manifest.json'));
               console.log(`Copied ${manifestSource} -> ${outDir}/manifest.json`);
             }
           }
 
           // Ensure icons directory is copied
           const iconsSrc = resolve(rootDir, 'public/icons');
-          const iconsDest = resolve(rootDir, `${outDir}/icons`);
+          const iconsDest = resolve(outDirPath, 'icons');
           if (fs.existsSync(iconsSrc)) {
             fs.mkdirSync(iconsDest, { recursive: true });
             fs.readdirSync(iconsSrc).forEach(file => {
@@ -103,7 +120,7 @@ export default defineConfig(({ mode }) => {
           const fallbackWorkerSrc = resolve(rootDir, 'public/pdf.worker.min.mjs');
           const actualWorkerSrc = fs.existsSync(workerSrc) ? workerSrc : fallbackWorkerSrc;
           if (fs.existsSync(actualWorkerSrc)) {
-            fs.copyFileSync(actualWorkerSrc, `${outDir}/pdf.worker.min.mjs`);
+            fs.copyFileSync(actualWorkerSrc, resolve(outDirPath, 'pdf.worker.min.mjs'));
             console.log(`Copied PDF.js worker to ${outDir}/pdf.worker.min.mjs`);
           }
 
@@ -122,11 +139,11 @@ export default defineConfig(({ mode }) => {
           };
           copyDirRecursive(
             resolve(rootDir, 'node_modules/pdfjs-dist/cmaps'),
-            resolve(rootDir, `${outDir}/cmaps`)
+            resolve(outDirPath, 'cmaps')
           );
           copyDirRecursive(
             resolve(rootDir, 'node_modules/pdfjs-dist/standard_fonts'),
-            resolve(rootDir, `${outDir}/standard_fonts`)
+            resolve(outDirPath, 'standard_fonts')
           );
         }
       }

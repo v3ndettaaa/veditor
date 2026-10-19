@@ -30,7 +30,7 @@ import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
-import { history, AddAnnotationCommand, DeleteAnnotationsCommand, BulkModifyCommand } from './core/history';
+import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, BulkModifyCommand } from './core/history';
 import { stampTool } from './annotations/tools/stamp';
 import { duplicateSelectedAnnotations } from './annotations/duplicate';
 import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
@@ -2022,9 +2022,8 @@ class VeditorApp {
         return;
       }
 
-      // Double-clicking a TextAnnotation in Select, Hand, or Text mode opens
-      // the inline text editor directly over the annotation on the page.
-      if (store.activeTool === 'select' || store.activeTool === 'hand' || store.activeTool === 'text') {
+      // Double-clicking a TextAnnotation or StickyNoteAnnotation in Select, Hand, Text, or Sticky Note mode
+      if (store.activeTool === 'select' || store.activeTool === 'hand' || store.activeTool === 'text' || store.activeTool === 'sticky-note') {
         const point = pointerHandler.pagePointForEvent(e, canvas);
         const hit = selectionManager.findAnnotationAtPoint(
           point, store.activeDocument?.annotations[pageIndex] || []
@@ -2033,6 +2032,32 @@ class VeditorApp {
           store.setActiveTool('select');
           store.selectAnnotation(hit.id);
           pointerHandler.editExistingTextAnnotation(hit, pageIndex, canvas, onRepaint);
+          return;
+        }
+        if (hit && hit.type === 'sticky-note') {
+          store.setActiveTool('select');
+          store.selectAnnotation(hit.id);
+          if (hit.collapsed) {
+            history.execute(new ModifyAnnotationCommand(pageIndex, hit, {
+              ...hit,
+              collapsed: false,
+              updatedAt: Date.now()
+            }));
+            onRepaint();
+          } else {
+            const localY = point.y - hit.box.y;
+            if (localY <= 40 || localY >= hit.box.height - 34) {
+              pointerHandler.setStickyInkMode(null);
+              history.execute(new ModifyAnnotationCommand(pageIndex, hit, {
+                ...hit,
+                collapsed: true,
+                updatedAt: Date.now()
+              }));
+              onRepaint();
+            } else {
+              pointerHandler.editExistingStickyNote(hit, pageIndex, canvas, onRepaint);
+            }
+          }
           return;
         }
         if (hit && store.activeTool === 'hand') {
@@ -2384,10 +2409,6 @@ class VeditorApp {
       else if (key === 'f') store.toggleFocusMode();
       else if (key === '?') store.setShortcutsModalOpen(true);
       else if (key === '0') viewportManager.fitToWidth();
-      else if (key === 'z') {
-        e.preventDefault();
-        this.toggleZoomTool();
-      }
     }, { capture: true });
   }
 

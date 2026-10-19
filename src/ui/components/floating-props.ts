@@ -6,12 +6,13 @@
 
 import { store } from '../../core/store';
 import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand, AddAnnotationCommand } from '../../core/history';
-import { getAnnotationSelectionBox } from '../../annotations/selection';
+import { getAnnotationSelectionBox, offsetAnnotation } from '../../annotations/selection';
 import { mergeBoundingBoxes } from '../../utils/geometry';
 import { viewportManager } from '../../core/viewport';
 import { getIconSvg } from '../../utils/icons';
-import { Annotation, TextAnnotation } from '../../core/types';
+import { Annotation, TextAnnotation, StickyNoteAnnotation } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
+import { STICKY_NOTE_COLORS } from '../../annotations/tools/sticky-note';
 import { pointerHandler } from '../../input/pointer-handler';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
@@ -93,6 +94,8 @@ export class FloatingPropsBarComponent {
       window.clearTimeout(this._hoverTimeout);
     }
     this._hoverTimeout = window.setTimeout(() => {
+      const activeEl = document.activeElement;
+      if (activeEl && this._container.contains(activeEl)) return;
       if (!this._isHoveredOverItem && !this._isHoveredOverBar) {
         this.hideImmediate();
       }
@@ -190,25 +193,39 @@ export class FloatingPropsBarComponent {
     const first = selected[0] as any;
     const isShape = selected.some(a => ['rectangle', 'ellipse', 'polygon', 'freeform-shape'].includes(a.type));
     const isSingleText = selected.length === 1 && first.type === 'text';
+    const isSingleSticky = selected.length === 1 && first.type === 'sticky-note';
+    const isAllSticky = selected.every(a => a.type === 'sticky-note');
     const currentColor = first.color || first.strokeColor || '#4f46e5';
     const currentWidth = Math.round(Number(first.strokeWidth || first.fontSize || 3));
     const currentOpacity = Math.round((first.opacity ?? 1.0) * 100);
     const isLocked = first.locked === true;
 
+    const stickyInk = isSingleSticky ? pointerHandler.getStickyInkMode() : null;
+    const isNotePenActive = isSingleSticky && stickyInk?.noteId === first.id && stickyInk?.mode === 'pen';
+    const isNoteEraserActive = isSingleSticky && stickyInk?.noteId === first.id && stickyInk?.mode === 'eraser';
+
+    const swatchColors = isAllSticky
+      ? STICKY_NOTE_COLORS
+      : [
+          { hex: '#0f172a', label: 'Black' },
+          { hex: '#6366f1', label: 'Indigo' },
+          { hex: '#10b981', label: 'Emerald' },
+          { hex: '#f59e0b', label: 'Amber' },
+          { hex: '#f43f5e', label: 'Rose' }
+        ];
+
     this._container.innerHTML = `
       <div class="props-bar-inner">
         <!-- Color Preview & Quick Swatches -->
         <div class="props-bar-group">
-          <label class="props-color-bubble-wrap" title="Pick color">
+          <label class="props-color-bubble-wrap" title="${isAllSticky ? 'Note paper color' : 'Pick color'}">
             <span class="props-color-bubble" style="background-color: ${currentColor}"></span>
             <input type="color" class="props-native-color-picker" id="fp-color-picker" value="${this.ensureHex(currentColor)}">
           </label>
           <div class="props-swatch-strip">
-            <button class="props-mini-swatch" data-fp-color="#0f172a" style="background: #0f172a;" title="Black"></button>
-            <button class="props-mini-swatch" data-fp-color="#6366f1" style="background: #6366f1;" title="Indigo"></button>
-            <button class="props-mini-swatch" data-fp-color="#10b981" style="background: #10b981;" title="Emerald"></button>
-            <button class="props-mini-swatch" data-fp-color="#f59e0b" style="background: #f59e0b;" title="Amber"></button>
-            <button class="props-mini-swatch" data-fp-color="#f43f5e" style="background: #f43f5e;" title="Rose"></button>
+            ${swatchColors.map(sw => `
+              <button class="props-mini-swatch" data-fp-color="${sw.hex}" style="background: ${sw.hex};" title="${sw.label}"></button>
+            `).join('')}
           </div>
         </div>
 
@@ -243,6 +260,30 @@ export class FloatingPropsBarComponent {
           <div class="props-bar-group">
             <button class="props-pill-btn" id="fp-edit-text-btn" title="Double-click or click to edit text">
               Edit Text
+            </button>
+          </div>
+        ` : ''}
+
+        ${isSingleSticky ? `
+          <div class="props-bar-divider"></div>
+          <div class="props-bar-group">
+            <label class="props-color-bubble-wrap" title="Text & ink color">
+              <span class="props-color-bubble" style="background-color: ${first.textColor || '#3b2f1e'}; width: 16px; height: 16px;"></span>
+              <input type="color" class="props-native-color-picker" id="fp-note-textcolor-picker" value="${this.ensureHex(first.textColor || '#3b2f1e')}">
+            </label>
+            ${!first.collapsed ? `
+              <button class="props-pill-btn" id="fp-edit-note-btn" title="Edit note text">
+                Edit Text
+              </button>
+              <button class="props-icon-btn ${isNotePenActive ? 'active' : ''}" id="fp-note-pen-btn" title="Draw inside note with pen">
+                ${getIconSvg('pen', 14)}
+              </button>
+              <button class="props-icon-btn ${isNoteEraserActive ? 'active' : ''}" id="fp-note-eraser-btn" title="Erase ink strokes inside note">
+                ${getIconSvg('eraser', 14)}
+              </button>
+            ` : ''}
+            <button class="props-icon-btn" id="fp-note-collapse-btn" title="${first.collapsed ? 'Expand note' : 'Collapse note to icon'}">
+              ${getIconSvg(first.collapsed ? 'expand' : 'compress', 14)}
             </button>
           </div>
         ` : ''}
@@ -344,18 +385,90 @@ export class FloatingPropsBarComponent {
       }
     });
 
+    // Sticky Note Text & Ink Color Picker
+    const noteTextColorPicker = this._container.querySelector<HTMLInputElement>('#fp-note-textcolor-picker');
+    noteTextColorPicker?.addEventListener('input', (e) => {
+      const val = (e.target as HTMLInputElement).value;
+      const first = selected[0];
+      if (!first || first.type !== 'sticky-note') return;
+      const next: StickyNoteAnnotation = { ...first, textColor: val, updatedAt: Date.now() };
+      history.execute(new ModifyAnnotationCommand(first.pageIndex, first, next));
+      const inkMode = pointerHandler.getStickyInkMode();
+      if (inkMode?.noteId === first.id) {
+        pointerHandler.setStickyInkMode(first.id, inkMode.mode, val, inkMode.strokeWidth);
+      }
+      store.updateToolSettings({ noteTextColor: val });
+      window.app?.repaintAllRenderedAnnotations();
+    });
+
+    // Sticky Note Edit Text button
+    this._container.querySelector('#fp-edit-note-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const first = selected[0];
+      if (!first || first.type !== 'sticky-note') return;
+      pointerHandler.setStickyInkMode(null);
+      const pageContainer = document.querySelector<HTMLElement>(`.pdf-page-container[data-page-index="${first.pageIndex}"]`);
+      const scratchCanvas = pageContainer?.querySelector<HTMLCanvasElement>('.scratchpad-canvas');
+      if (scratchCanvas) {
+        this.hideImmediate();
+        pointerHandler.editExistingStickyNote(first, first.pageIndex, scratchCanvas, () => {
+          window.app?.repaintAllRenderedAnnotations();
+        });
+      }
+    });
+
+    // Sticky Note In-Note Pen toggle
+    this._container.querySelector('#fp-note-pen-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const first = selected[0];
+      if (!first || first.type !== 'sticky-note') return;
+      const cur = pointerHandler.getStickyInkMode();
+      if (cur?.noteId === first.id && cur.mode === 'pen') {
+        pointerHandler.setStickyInkMode(null);
+      } else {
+        pointerHandler.setStickyInkMode(first.id, 'pen', first.textColor || '#3b2f1e', 2.5);
+      }
+      this.renderContent();
+    });
+
+    // Sticky Note In-Note Eraser toggle
+    this._container.querySelector('#fp-note-eraser-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const first = selected[0];
+      if (!first || first.type !== 'sticky-note') return;
+      const cur = pointerHandler.getStickyInkMode();
+      if (cur?.noteId === first.id && cur.mode === 'eraser') {
+        pointerHandler.setStickyInkMode(null);
+      } else {
+        pointerHandler.setStickyInkMode(first.id, 'eraser', first.textColor || '#3b2f1e', 2.5);
+      }
+      this.renderContent();
+    });
+
+    // Sticky Note Collapse / Expand toggle
+    this._container.querySelector('#fp-note-collapse-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const first = selected[0];
+      if (!first || first.type !== 'sticky-note') return;
+      pointerHandler.setStickyInkMode(null);
+      const next: StickyNoteAnnotation = {
+        ...first,
+        collapsed: !first.collapsed,
+        updatedAt: Date.now()
+      };
+      history.execute(new ModifyAnnotationCommand(first.pageIndex, first, next));
+      window.app?.repaintAllRenderedAnnotations();
+      this.renderContent();
+      this.updatePosition();
+    });
+
     // Duplicate
     this._container.querySelector('#fp-duplicate-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
       const newIds: string[] = [];
       selected.forEach(ann => {
-        const duplicate = JSON.parse(JSON.stringify(ann));
+        const duplicate = offsetAnnotation(ann, 16, 16);
         duplicate.id = 'ann_' + Math.random().toString(36).substring(2, 9);
-        duplicate.box.x += 16;
-        duplicate.box.y += 16;
-        if (Array.isArray(duplicate.points)) {
-          duplicate.points = duplicate.points.map((p: any) => ({ ...p, x: p.x + 16, y: p.y + 16 }));
-        }
         duplicate.createdAt = Date.now();
         duplicate.updatedAt = Date.now();
         history.execute(new AddAnnotationCommand(ann.pageIndex, duplicate));
@@ -378,6 +491,7 @@ export class FloatingPropsBarComponent {
     // Delete
     this._container.querySelector('#fp-delete-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      pointerHandler.setStickyInkMode(null);
       history.execute(new DeleteAnnotationsCommand(pageIndex, selected));
       store.clearSelection();
       this.hideImmediate();
@@ -390,6 +504,9 @@ export class FloatingPropsBarComponent {
       const next = { ...prev, updatedAt: Date.now() };
       if ('color' in next) next.color = color;
       if ('strokeColor' in next) next.strokeColor = color;
+      if (ann.type === 'sticky-note') {
+        store.updateToolSettings({ noteColor: color });
+      }
       history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
     });
     store.setActivePageIndex(selected[0].pageIndex);
@@ -402,6 +519,15 @@ export class FloatingPropsBarComponent {
       if ('strokeWidth' in a) {
         const nw = Math.max(0.5, Math.min(80, (a.strokeWidth || 3) + delta));
         const next = { ...a, strokeWidth: nw, updatedAt: Date.now() };
+        history.execute(new ModifyAnnotationCommand(ann.pageIndex, a, next));
+      } else if (a.type === 'sticky-note') {
+        const nf = Math.max(10, Math.min(96, (a.fontSize || 24) + delta * 2));
+        const next: StickyNoteAnnotation = {
+          ...a,
+          fontSize: nf,
+          updatedAt: Date.now()
+        };
+        store.updateToolSettings({ noteFontSize: nf });
         history.execute(new ModifyAnnotationCommand(ann.pageIndex, a, next));
       } else if ('fontSize' in a) {
         const nf = Math.max(8, Math.min(120, (a.fontSize || 16) + delta * 2));

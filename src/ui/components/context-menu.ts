@@ -9,12 +9,15 @@ import {
   history,
   BulkAddAnnotationsCommand,
   DeleteAnnotationsCommand,
+  ModifyAnnotationCommand,
   ReorderAnnotationsCommand
 } from '../../core/history';
 import {
   Annotation,
-  Point
+  Point,
+  StickyNoteAnnotation
 } from '../../core/types';
+import { pointerHandler } from '../../input/pointer-handler';
 import {
   cloneAnnotation,
   getAnnotationSelectionBox,
@@ -175,6 +178,40 @@ export class AnnotationContextMenu {
     }
 
     const entries: MenuEntry[] = [];
+    if (selection.length === 1 && selection[0].type === 'sticky-note') {
+      const note = selection[0] as StickyNoteAnnotation;
+      if (!note.collapsed) {
+        entries.push({
+          kind: 'action',
+          id: 'edit-note',
+          label: 'Edit note text',
+          icon: 'text',
+          run: () => {
+            const pageContainer = document.querySelector<HTMLElement>(`.pdf-page-container[data-page-index="${target.pageIndex}"]`);
+            const scratchCanvas = pageContainer?.querySelector<HTMLCanvasElement>('.scratchpad-canvas');
+            if (scratchCanvas) {
+              pointerHandler.editExistingStickyNote(note, target.pageIndex, scratchCanvas, () => target.onRepaint(target.pageIndex));
+            }
+          }
+        });
+      }
+      entries.push({
+        kind: 'action',
+        id: 'toggle-note-collapse',
+        label: note.collapsed ? 'Expand note' : 'Collapse note to icon',
+        icon: note.collapsed ? 'expand' : 'compress',
+        run: () => {
+          pointerHandler.setStickyInkMode(null);
+          history.execute(new ModifyAnnotationCommand(target.pageIndex, note, {
+            ...note,
+            collapsed: !note.collapsed,
+            updatedAt: Date.now()
+          }));
+          target.onRepaint(target.pageIndex);
+        }
+      });
+      entries.push({ kind: 'separator' });
+    }
     if (selection.length > 0) {
       entries.push(
         { kind: 'action', id: 'cut', label: 'Cut', icon: 'cut', run: () => this.cutSelection(target, selection) },

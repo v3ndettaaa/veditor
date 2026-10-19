@@ -95,6 +95,10 @@ class StateStore {
     drawingCursor: 'pen',
     stampPreset: 'APPROVED',
     redactionColor: '#000000',
+    noteColor: '#ebd09e',
+    noteTextColor: '#3b2f1e',
+    noteFontSize: 24,
+    noteAuthor: 'Kia Gh',
     snapAngle15: {},
     connectLines: {}
   };
@@ -533,6 +537,10 @@ class StateStore {
       highlighterCursor: 'rectangle',
       stampPreset: 'APPROVED',
       redactionColor: '#000000',
+      noteColor: '#ebd09e',
+      noteTextColor: '#3b2f1e',
+      noteFontSize: 24,
+      noteAuthor: 'Kia Gh',
       snapAngle15: {},
       connectLines: {}
     };

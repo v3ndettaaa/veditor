@@ -23,6 +23,7 @@ export const fa = {
     polygon: 'چندضلعی',
     freeform: 'شکل آزاد',
     text: 'جعبه متنی (T)',
+    stickyNote: 'یادداشت چسبان (Note)',
     stamp: 'مهر و تصویر (M)',
     measure: 'ابزارهای اندازه‌گیری',
     distance: 'اندازه‌گیری فاصله',
