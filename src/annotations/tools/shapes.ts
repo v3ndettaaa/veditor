@@ -64,6 +64,7 @@ export class ShapesTool {
   private _type: 'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'freeform-shape' = 'rectangle';
   private _strokeColor: string = '#ef4444';
   private _fillColor: string = 'transparent';
+  private _fillOpacity: number = 1.0;
   private _strokeWidth: number = 2;
   private _outline: boolean = true;
   private _strokeStyle: 'solid' | 'dashed' | 'dotted' = 'solid';
@@ -80,7 +81,8 @@ export class ShapesTool {
     fillColor: string,
     strokeWidth: number,
     strokeStyle: 'solid' | 'dashed' | 'dotted',
-    outline: boolean = true
+    outline: boolean = true,
+    fillOpacity: number = 1.0
   ) {
     this._startPoint = point;
     this._currentPoint = point;
@@ -88,6 +90,7 @@ export class ShapesTool {
     this._type = type;
     this._strokeColor = strokeColor;
     this._fillColor = fillColor;
+    this._fillOpacity = Math.max(0, Math.min(1, fillOpacity));
     this._strokeWidth = strokeWidth;
     this._outline = outline;
     this._strokeStyle = strokeStyle;
@@ -182,6 +185,15 @@ export class ShapesTool {
 
     // Lines and arrows are pure stroke; closed shapes honor the outline toggle.
     const outline = this._outline || this._type === 'line' || this._type === 'arrow';
+    const hasFill = Boolean(this._fillColor && this._fillColor !== 'transparent' && this._fillOpacity > 0);
+    const fillInterior = () => {
+      if (!hasFill) return;
+      ctx.save();
+      ctx.globalAlpha *= this._fillOpacity;
+      ctx.fillStyle = this._fillColor;
+      ctx.fill();
+      ctx.restore();
+    };
 
     if (this._type === 'rectangle') {
       const x = Math.min(sp.x, cp.x);
@@ -194,9 +206,7 @@ export class ShapesTool {
       traceRoundedPolygon(ctx, [
         { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }
       ], r, true);
-      if (this._fillColor && this._fillColor !== 'transparent') {
-        ctx.fill();
-      }
+      fillInterior();
       if (outline) ctx.stroke();
     } else if (this._type === 'ellipse') {
       const cx = (sp.x + cp.x) / 2;
@@ -205,19 +215,34 @@ export class ShapesTool {
       const ry = Math.abs(cp.y - sp.y) / 2;
       ctx.beginPath();
       ctx.ellipse(cx, cy, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2);
-      if (this._fillColor && this._fillColor !== 'transparent') {
-        ctx.fill();
-      }
+      fillInterior();
       if (outline) ctx.stroke();
     } else if (this._type === 'line') {
-      fillLineRibbon(ctx, sp.x, sp.y, cp.x, cp.y, this._strokeWidth);
+      ctx.fillStyle = this._strokeColor;
+      if (this._strokeStyle === 'dashed' || this._strokeStyle === 'dotted') {
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y);
+        ctx.lineTo(cp.x, cp.y);
+        ctx.stroke();
+      } else {
+        fillLineRibbon(ctx, sp.x, sp.y, cp.x, cp.y, this._strokeWidth);
+      }
     } else if (this._type === 'arrow') {
-      fillLineRibbon(ctx, sp.x, sp.y, cp.x, cp.y, this._strokeWidth);
+      ctx.fillStyle = this._strokeColor;
+      if (this._strokeStyle === 'dashed' || this._strokeStyle === 'dotted') {
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y);
+        ctx.lineTo(cp.x, cp.y);
+        ctx.stroke();
+      } else {
+        fillLineRibbon(ctx, sp.x, sp.y, cp.x, cp.y, this._strokeWidth);
+      }
       // Arrowhead as filled polygon
       const dx = cp.x - sp.x;
       const dy = cp.y - sp.y;
       const len = Math.hypot(dx, dy);
       if (len > 0.001) {
+        ctx.setLineDash([]);
         const headLen = Math.max(12, this._strokeWidth * 4);
         const angle = Math.atan2(dy, dx);
         ctx.beginPath();
@@ -239,15 +264,14 @@ export class ShapesTool {
         const previewPts = cp ? [...this._polygonPoints, cp] : [...this._polygonPoints];
         ctx.beginPath();
         traceRoundedPolygon(ctx, previewPts, SHAPE_CORNER_RADIUS, false);
-        if (this._fillColor && this._fillColor !== 'transparent') {
-          ctx.fill();
-        }
+        fillInterior();
         if (outline) ctx.stroke();
 
         // If hovering near start point (closing threshold), highlight start point
         if (cp && this._polygonPoints.length >= 3) {
           const p0 = this._polygonPoints[0];
           if (Math.hypot(cp.x - p0.x, cp.y - p0.y) < 14) {
+            ctx.setLineDash([]);
             ctx.beginPath();
             ctx.arc(p0.x, p0.y, 8, 0, Math.PI * 2);
             ctx.fillStyle = 'rgba(34, 197, 94, 0.4)';
@@ -262,9 +286,7 @@ export class ShapesTool {
       if (this._polygonPoints.length > 1) {
         ctx.beginPath();
         traceRoundedPolygon(ctx, this._polygonPoints, SHAPE_CORNER_RADIUS, true);
-        if (this._fillColor && this._fillColor !== 'transparent') {
-          ctx.fill();
-        }
+        fillInterior();
         if (outline) ctx.stroke();
       }
     }
@@ -310,6 +332,7 @@ export class ShapesTool {
       box,
       strokeColor: this._strokeColor,
       fillColor: this._fillColor,
+      fillOpacity: this._fillOpacity,
       strokeWidth: this._strokeWidth,
       outline: this._outline,
       strokeStyle: this._strokeStyle,
@@ -334,13 +357,14 @@ export class ShapesTool {
   private applyStyle(ctx: CanvasRenderingContext2D) {
     ctx.strokeStyle = this._strokeColor;
     ctx.fillStyle = this._fillColor;
-    ctx.lineWidth = this._strokeWidth;
+    const w = Math.max(1, this._strokeWidth || 2);
+    ctx.lineWidth = w;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     if (this._strokeStyle === 'dashed') {
-      ctx.setLineDash([8, 6]);
+      ctx.setLineDash([Math.max(8, w * 2.0), Math.max(6, w * 1.55)]);
     } else if (this._strokeStyle === 'dotted') {
-      ctx.setLineDash([3, 4]);
+      ctx.setLineDash([0.1, Math.max(5, w * 1.85)]);
     } else {
       ctx.setLineDash([]);
     }

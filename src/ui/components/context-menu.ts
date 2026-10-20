@@ -201,7 +201,6 @@ export class AnnotationContextMenu {
         label: note.collapsed ? 'Expand note' : 'Collapse note to icon',
         icon: note.collapsed ? 'expand' : 'compress',
         run: () => {
-          pointerHandler.setStickyInkMode(null);
           history.execute(new ModifyAnnotationCommand(target.pageIndex, note, {
             ...note,
             collapsed: !note.collapsed,

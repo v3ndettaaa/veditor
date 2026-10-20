@@ -284,16 +284,27 @@ export class AnnotationEngine {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
+    const w = Math.max(1, ann.strokeWidth || 2);
     if (ann.strokeStyle === 'dashed') {
-      ctx.setLineDash([8, 6]);
+      ctx.setLineDash([Math.max(8, w * 2.0), Math.max(6, w * 1.55)]);
     } else if (ann.strokeStyle === 'dotted') {
-      ctx.setLineDash([3, 4]);
+      ctx.setLineDash([0.1, Math.max(5, w * 1.85)]);
     } else {
       ctx.setLineDash([]);
     }
 
     const b = ann.box;
     const outline = shapeHasOutline(ann);
+    const fillAlpha = Math.max(0, Math.min(1, ann.fillOpacity ?? 1));
+    const hasFill = Boolean(ann.fillColor && ann.fillColor !== 'transparent' && fillAlpha > 0);
+    const fillInterior = () => {
+      if (!hasFill) return;
+      ctx.save();
+      ctx.globalAlpha *= fillAlpha;
+      ctx.fillStyle = ann.fillColor;
+      ctx.fill();
+      ctx.restore();
+    };
 
     if (ann.type === 'rectangle') {
       const radius = Math.max(0, Math.min(
@@ -317,9 +328,7 @@ export class AnnotationEngine {
       } else {
         ctx.rect(b.x, b.y, b.width, b.height);
       }
-      if (ann.fillColor && ann.fillColor !== 'transparent') {
-        ctx.fill();
-      }
+      fillInterior();
       if (outline) ctx.stroke();
     } else if (ann.type === 'ellipse') {
       ctx.beginPath();
@@ -332,23 +341,26 @@ export class AnnotationEngine {
         0,
         Math.PI * 2
       );
-      if (ann.fillColor && ann.fillColor !== 'transparent') {
-        ctx.fill();
-      }
+      fillInterior();
       if (outline) ctx.stroke();
     } else if ((ann.type === 'line' || ann.type === 'arrow') && ann.points?.length >= 2) {
-      // Supports connected multi-point polylines (see "Connect Lines"), not
-      // just two-point segments.
       const pts = ann.points;
-      const w = ann.strokeWidth;
-      // Render the shaft as a filled ribbon instead of stroking. A filled
-      // outline gets proper coverage anti-aliasing from the rasteriser, unlike
-      // a thin stroked polyline which aliases badly on diagonal segments.
-      for (let i = 0; i < pts.length - 1; i++) {
-        fillLineRibbon(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+      ctx.fillStyle = ann.strokeColor;
+      if (ann.strokeStyle === 'dashed' || ann.strokeStyle === 'dotted') {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.stroke();
+      } else {
+        for (let i = 0; i < pts.length - 1; i++) {
+          fillLineRibbon(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+        }
       }
 
       if (ann.type === 'arrow') {
+        ctx.setLineDash([]);
         const prev = pts[pts.length - 2];
         const tip = pts[pts.length - 1];
         const headLen = Math.max(12, w * 4);
@@ -377,9 +389,7 @@ export class AnnotationEngine {
       const radius = Number.isFinite(ann.cornerRadius) ? ann.cornerRadius : SHAPE_CORNER_RADIUS;
       ctx.beginPath();
       traceRoundedPolygon(ctx, ann.points, radius, closed);
-      if (ann.fillColor && ann.fillColor !== 'transparent') {
-        ctx.fill();
-      }
+      fillInterior();
       if (outline) ctx.stroke();
     }
 

@@ -2047,7 +2047,6 @@ class VeditorApp {
           } else {
             const localY = point.y - hit.box.y;
             if (localY <= 40 || localY >= hit.box.height - 34) {
-              pointerHandler.setStickyInkMode(null);
               history.execute(new ModifyAnnotationCommand(pageIndex, hit, {
                 ...hit,
                 collapsed: true,

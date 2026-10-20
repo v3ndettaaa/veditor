@@ -29,6 +29,21 @@ export class EraserTool {
     this._lastPoint = null;
   }
 
+  public get radius(): number {
+    return this._radius;
+  }
+
+  public getLiveBoundingBox(point: Point | null = this._lastPoint): { x: number; y: number; width: number; height: number } | null {
+    if (!point) return null;
+    const pad = this._radius + 4;
+    return {
+      x: point.x - pad,
+      y: point.y - pad,
+      width: pad * 2,
+      height: pad * 2
+    };
+  }
+
   /**
    * Evaluates annotations on page and returns list of annotations that should be removed or replaced.
    */
@@ -43,22 +58,33 @@ export class EraserTool {
       // Points and boxes are stored unrotated: test in the local frame.
       const localPt = ann.rotation ? rotatePoint(point, boxCenter(targetBox), -ann.rotation) : point;
 
+      const strokePadding = ((ann as any).strokeWidth || 2) / 2;
+      const hitRadius = r + strokePadding;
+
+      // Fast O(1) Axis-Aligned Bounding Box (AABB) rejection before testing dense stroke vertices
+      if (
+        localPt.x < targetBox.x - hitRadius ||
+        localPt.x > targetBox.x + targetBox.width + hitRadius ||
+        localPt.y < targetBox.y - hitRadius ||
+        localPt.y > targetBox.y + targetBox.height + hitRadius
+      ) {
+        continue;
+      }
+
       if (this._mode === 'object') {
         // Object Eraser: Delete entire element if hit
-        if (isPointInBox(localPt, { ...targetBox, x: targetBox.x - r, y: targetBox.y - r, width: targetBox.width + r * 2, height: targetBox.height + r * 2 })) {
-          toRemove.push(ann);
-        }
+        toRemove.push(ann);
       } else if (this._mode === 'stroke') {
         // Stroke Eraser: Erase pen/highlighter if pointer touches any point or segment
         if (ann.type === 'pen' || (ann.type === 'highlighter' && !ann.quadPoints)) {
           let hit = false;
-          const strokePadding = (ann.strokeWidth || 2) / 2;
-          for (let i = 0; i < ann.points.length; i++) {
-            if (distance(localPt, ann.points[i]) <= r + strokePadding) {
+          const pts = ann.points;
+          for (let i = 0; i < pts.length; i++) {
+            if (distance(localPt, pts[i]) <= hitRadius) {
               hit = true;
               break;
             }
-            if (i > 0 && distanceToSegment(localPt, ann.points[i - 1], ann.points[i]) <= r + strokePadding) {
+            if (i > 0 && distanceToSegment(localPt, pts[i - 1], pts[i]) <= hitRadius) {
               hit = true;
               break;
             }
@@ -75,16 +101,14 @@ export class EraserTool {
       } else if (this._mode === 'pixel') {
         // Pixel / Segment Eraser: Slice freehand strokes into remaining sub-segments
         if (ann.type === 'pen' || (ann.type === 'highlighter' && !ann.quadPoints)) {
-          const strokePadding = (ann.strokeWidth || 2) / 2;
-          const hitRadius = r + strokePadding;
-
           let anyHit = false;
-          for (let i = 0; i < ann.points.length; i++) {
-            if (distance(localPt, ann.points[i]) <= hitRadius) {
+          const pts = ann.points;
+          for (let i = 0; i < pts.length; i++) {
+            if (distance(localPt, pts[i]) <= hitRadius) {
               anyHit = true;
               break;
             }
-            if (i > 0 && distanceToSegment(localPt, ann.points[i - 1], ann.points[i]) <= hitRadius) {
+            if (i > 0 && distanceToSegment(localPt, pts[i - 1], pts[i]) <= hitRadius) {
               anyHit = true;
               break;
             }
@@ -98,17 +122,15 @@ export class EraserTool {
             const runs: StrokePoint[][] = [];
             let currentRun: StrokePoint[] = [];
 
-            for (let i = 0; i < ann.points.length; i++) {
-              const pt = ann.points[i];
+            for (let i = 0; i < pts.length; i++) {
+              const pt = pts[i];
               const isInside = distance(localPt, pt) <= hitRadius;
 
               if (!isInside) {
                 currentRun.push(pt);
-              } else {
-                if (currentRun.length > 0) {
-                  runs.push(currentRun);
-                  currentRun = [];
-                }
+              } else if (currentRun.length > 0) {
+                runs.push(currentRun);
+                currentRun = [];
               }
             }
 
@@ -149,7 +171,7 @@ export class EraserTool {
     ctx.scale(scale, scale);
     ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
     ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.5 / Math.max(0.5, scale * 0.5);
     ctx.beginPath();
     ctx.arc(point.x, point.y, this._radius, 0, Math.PI * 2);
     ctx.fill();

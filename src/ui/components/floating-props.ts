@@ -198,11 +198,18 @@ export class FloatingPropsBarComponent {
     const currentColor = first.color || first.strokeColor || '#4f46e5';
     const currentWidth = Math.round(Number(first.strokeWidth || first.fontSize || 3));
     const currentOpacity = Math.round((first.opacity ?? 1.0) * 100);
+    const hasFill = Boolean(first.fillColor && first.fillColor !== 'transparent');
+    const currentFillColor = hasFill ? first.fillColor : (first.strokeColor || store.toolSettings.shapeColor || '#6366f1');
+    const currentFillOpacity = hasFill
+      ? Math.round((first.fillOpacity ?? 1.0) * 100)
+      : Math.round((first.fillOpacity ?? store.toolSettings.shapeFillOpacity ?? 1.0) * 100);
     const isLocked = first.locked === true;
 
-    const stickyInk = isSingleSticky ? pointerHandler.getStickyInkMode() : null;
-    const isNotePenActive = isSingleSticky && stickyInk?.noteId === first.id && stickyInk?.mode === 'pen';
-    const isNoteEraserActive = isSingleSticky && stickyInk?.noteId === first.id && stickyInk?.mode === 'eraser';
+    // Preserve active slider/number input interaction so dragging or typing never loses focus
+    const activeEl = document.activeElement;
+    if (activeEl && this._container.contains(activeEl) && activeEl.classList.contains('fp-live-input')) {
+      return;
+    }
 
     const swatchColors = isAllSticky
       ? STICKY_NOTE_COLORS
@@ -218,7 +225,7 @@ export class FloatingPropsBarComponent {
       <div class="props-bar-inner">
         <!-- Color Preview & Quick Swatches -->
         <div class="props-bar-group">
-          <label class="props-color-bubble-wrap" title="${isAllSticky ? 'Note paper color' : 'Pick color'}">
+          <label class="props-color-bubble-wrap" title="${isAllSticky ? 'Note paper color' : (isShape ? 'Border / Stroke color' : 'Pick color')}">
             <span class="props-color-bubble" style="background-color: ${currentColor}"></span>
             <input type="color" class="props-native-color-picker" id="fp-color-picker" value="${this.ensureHex(currentColor)}">
           </label>
@@ -238,22 +245,43 @@ export class FloatingPropsBarComponent {
           <button class="props-icon-btn" id="fp-width-inc" title="Increase size">+</button>
         </div>
 
-        <!-- Opacity Presets -->
-        <div class="props-bar-divider"></div>
-        <div class="props-bar-group">
-          <button class="props-pill-btn ${currentOpacity <= 35 ? 'active' : ''}" data-fp-opacity="0.3">30%</button>
-          <button class="props-pill-btn ${currentOpacity > 35 && currentOpacity <= 75 ? 'active' : ''}" data-fp-opacity="0.6">60%</button>
-          <button class="props-pill-btn ${currentOpacity > 75 ? 'active' : ''}" data-fp-opacity="1.0">100%</button>
-        </div>
-
         ${isShape ? `
           <div class="props-bar-divider"></div>
-          <div class="props-bar-group">
-            <button class="props-pill-btn ${first.fillColor && first.fillColor !== 'transparent' ? 'active' : ''}" id="fp-fill-toggle">
+          <div class="props-bar-group props-slider-group">
+            <button class="props-pill-btn ${hasFill ? 'active' : ''}" id="fp-fill-toggle" title="Toggle interior fill">
               Fill
             </button>
+            <label class="props-color-bubble-wrap" title="Fill color">
+              <span class="props-color-bubble" id="fp-fill-color-bubble" style="background-color: ${currentFillColor}; width: 16px; height: 16px; opacity: ${hasFill ? Math.max(0.25, currentFillOpacity / 100) : 0.35};"></span>
+              <input type="color" class="props-native-color-picker" id="fp-fill-color-picker" value="${this.ensureHex(currentFillColor)}">
+            </label>
+            <input type="range" class="props-range-slider fp-live-input" id="fp-fill-opacity-slider"
+                   min="0" max="100" step="1" value="${hasFill ? currentFillOpacity : 0}"
+                   style="--slider-pct:${hasFill ? currentFillOpacity : 0}%"
+                   title="Fill opacity (0-100%, outline stays solid)" aria-label="Shape fill opacity slider">
+            <div class="props-num-badge" title="Type fill opacity percentage (0-100%)">
+              <input type="number" class="props-num-input fp-live-input" id="fp-fill-opacity-input"
+                     min="0" max="100" step="1" value="${hasFill ? currentFillOpacity : 0}"
+                     aria-label="Shape fill opacity percentage">
+              <span class="props-num-unit">%</span>
+            </div>
           </div>
-        ` : ''}
+        ` : `
+          <div class="props-bar-divider"></div>
+          <div class="props-bar-group props-slider-group">
+            <span class="props-slider-label">Opacity</span>
+            <input type="range" class="props-range-slider fp-live-input" id="fp-opacity-slider"
+                   min="5" max="100" step="1" value="${currentOpacity}"
+                   style="--slider-pct:${Math.round(((currentOpacity - 5) / 95) * 100)}%"
+                   title="Opacity (5-100%)" aria-label="Annotation opacity slider">
+            <div class="props-num-badge" title="Type opacity percentage (5-100%)">
+              <input type="number" class="props-num-input fp-live-input" id="fp-opacity-input"
+                     min="5" max="100" step="1" value="${currentOpacity}"
+                     aria-label="Annotation opacity percentage">
+              <span class="props-num-unit">%</span>
+            </div>
+          </div>
+        `}
 
         ${isSingleText ? `
           <div class="props-bar-divider"></div>
@@ -267,19 +295,13 @@ export class FloatingPropsBarComponent {
         ${isSingleSticky ? `
           <div class="props-bar-divider"></div>
           <div class="props-bar-group">
-            <label class="props-color-bubble-wrap" title="Text & ink color">
+            <label class="props-color-bubble-wrap" title="Text color">
               <span class="props-color-bubble" style="background-color: ${first.textColor || '#3b2f1e'}; width: 16px; height: 16px;"></span>
               <input type="color" class="props-native-color-picker" id="fp-note-textcolor-picker" value="${this.ensureHex(first.textColor || '#3b2f1e')}">
             </label>
             ${!first.collapsed ? `
               <button class="props-pill-btn" id="fp-edit-note-btn" title="Edit note text">
                 Edit Text
-              </button>
-              <button class="props-icon-btn ${isNotePenActive ? 'active' : ''}" id="fp-note-pen-btn" title="Draw inside note with pen">
-                ${getIconSvg('pen', 14)}
-              </button>
-              <button class="props-icon-btn ${isNoteEraserActive ? 'active' : ''}" id="fp-note-eraser-btn" title="Erase ink strokes inside note">
-                ${getIconSvg('eraser', 14)}
               </button>
             ` : ''}
             <button class="props-icon-btn" id="fp-note-collapse-btn" title="${first.collapsed ? 'Expand note' : 'Collapse note to icon'}">
@@ -342,32 +364,140 @@ export class FloatingPropsBarComponent {
       this.adjustWidth(selected, 1);
     });
 
-    // Opacity
-    this._container.querySelectorAll('[data-fp-opacity]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const op = parseFloat(btn.getAttribute('data-fp-opacity') || '1.0');
-        selected.forEach(ann => {
-          const next = { ...ann, opacity: op, updatedAt: Date.now() };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
-        });
-        store.setActivePageIndex(pageIndex);
-        this.renderContent();
-      });
-    });
-
-    // Shape Fill Toggle
-    this._container.querySelector('#fp-fill-toggle')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      selected.forEach(ann => {
-        const a = ann as any;
-        const current = a.fillColor;
-        const nextFill = (!current || current === 'transparent') ? (a.color || a.strokeColor || '#6366f1') : 'transparent';
-        const next = { ...a, fillColor: nextFill, updatedAt: Date.now() };
+    // Non-shape Opacity Slider + Number Input
+    const opSlider = this._container.querySelector<HTMLInputElement>('#fp-opacity-slider');
+    const opInput = this._container.querySelector<HTMLInputElement>('#fp-opacity-input');
+    const applyGeneralOpacity = (pctRaw: number, rerender: boolean) => {
+      const pct = Math.max(5, Math.min(100, Math.round(pctRaw)));
+      const op = pct / 100;
+      if (opSlider && document.activeElement !== opSlider) opSlider.value = String(pct);
+      if (opSlider) opSlider.style.setProperty('--slider-pct', `${Math.round(((pct - 5) / 95) * 100)}%`);
+      if (opInput && document.activeElement !== opInput) opInput.value = String(pct);
+      const currentSelected = this.getSelectedAnnotations();
+      currentSelected.forEach(ann => {
+        const next = { ...ann, opacity: op, updatedAt: Date.now() };
         history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
       });
       store.setActivePageIndex(pageIndex);
+      if (rerender) this.renderContent();
+    };
+    opSlider?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyGeneralOpacity(val, false);
+    });
+    opInput?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyGeneralOpacity(val, false);
+    });
+    opInput?.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyGeneralOpacity(val, false);
+    });
+
+    // Shape Fill Toggle, Fill Color Picker, and Independent Fill Opacity Slider + Number Input
+    const fillToggleBtn = this._container.querySelector<HTMLButtonElement>('#fp-fill-toggle');
+    const fillColorPicker = this._container.querySelector<HTMLInputElement>('#fp-fill-color-picker');
+    const fillColorBubble = this._container.querySelector<HTMLElement>('#fp-fill-color-bubble');
+    const fillOpSlider = this._container.querySelector<HTMLInputElement>('#fp-fill-opacity-slider');
+    const fillOpInput = this._container.querySelector<HTMLInputElement>('#fp-fill-opacity-input');
+
+    const syncFillControlsDOM = (pct: number, hasActiveFill: boolean, fillCol?: string) => {
+      if (fillOpSlider && document.activeElement !== fillOpSlider) fillOpSlider.value = String(pct);
+      if (fillOpSlider) fillOpSlider.style.setProperty('--slider-pct', `${pct}%`);
+      if (fillOpInput && document.activeElement !== fillOpInput) fillOpInput.value = String(pct);
+      fillToggleBtn?.classList.toggle('active', hasActiveFill && pct > 0);
+      if (fillColorBubble) {
+        if (fillCol && fillCol !== 'transparent') fillColorBubble.style.backgroundColor = fillCol;
+        fillColorBubble.style.opacity = (hasActiveFill && pct > 0) ? String(Math.max(0.25, pct / 100)) : '0.35';
+      }
+    };
+
+    fillToggleBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentSelected = this.getSelectedAnnotations();
+      currentSelected.forEach(ann => {
+        const a = ann as any;
+        const current = a.fillColor;
+        const isCurrentlyFilled = Boolean(current && current !== 'transparent' && (a.fillOpacity ?? 1) > 0);
+        const nextFill = isCurrentlyFilled
+          ? 'transparent'
+          : (store.toolSettings.shapeFillColor !== 'transparent'
+              ? store.toolSettings.shapeFillColor
+              : (a.color || a.strokeColor || '#6366f1'));
+        const nextFillOp = isCurrentlyFilled
+          ? (a.fillOpacity ?? 1.0)
+          : ((a.fillOpacity && a.fillOpacity > 0) ? a.fillOpacity : (store.toolSettings.shapeFillOpacity || 0.35));
+        const next = { ...a, fillColor: nextFill, fillOpacity: nextFillOp, updatedAt: Date.now() };
+        history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+        store.updateToolSettings({ shapeFillColor: nextFill, shapeFillOpacity: nextFillOp });
+      });
+      store.setActivePageIndex(pageIndex);
       this.renderContent();
+    });
+
+    fillColorPicker?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const chosenColor = (e.target as HTMLInputElement).value;
+      const currentSelected = this.getSelectedAnnotations();
+      let appliedPct = 100;
+      currentSelected.forEach(ann => {
+        const a = ann as any;
+        const nextOp = (a.fillOpacity !== undefined && a.fillOpacity > 0) ? a.fillOpacity : (store.toolSettings.shapeFillOpacity || 1.0);
+        appliedPct = Math.round(nextOp * 100);
+        const next = { ...a, fillColor: chosenColor, fillOpacity: nextOp, updatedAt: Date.now() };
+        history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+      });
+      store.updateToolSettings({ shapeFillColor: chosenColor });
+      syncFillControlsDOM(appliedPct, true, chosenColor);
+      store.setActivePageIndex(pageIndex);
+    });
+
+    const applyShapeFillOpacityLive = (pctRaw: number) => {
+      const pct = Math.max(0, Math.min(100, Math.round(pctRaw)));
+      const fillOp = pct / 100;
+      const currentSelected = this.getSelectedAnnotations();
+      let activeFillHex = '#6366f1';
+      currentSelected.forEach(ann => {
+        const a = ann as any;
+        let nextFillColor = a.fillColor;
+        if ((!nextFillColor || nextFillColor === 'transparent') && pct > 0) {
+          nextFillColor = store.toolSettings.shapeFillColor !== 'transparent'
+            ? store.toolSettings.shapeFillColor
+            : (a.strokeColor || a.color || '#6366f1');
+        }
+        if (nextFillColor && nextFillColor !== 'transparent') {
+          activeFillHex = nextFillColor;
+        }
+        const next = {
+          ...a,
+          fillColor: pct === 0 ? 'transparent' : nextFillColor,
+          fillOpacity: fillOp,
+          updatedAt: Date.now()
+        };
+        history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+      });
+      store.updateToolSettings({ shapeFillOpacity: fillOp });
+      syncFillControlsDOM(pct, pct > 0, activeFillHex);
+      store.setActivePageIndex(pageIndex);
+    };
+
+    fillOpSlider?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyShapeFillOpacityLive(val);
+    });
+    fillOpInput?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyShapeFillOpacityLive(val);
+    });
+    fillOpInput?.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyShapeFillOpacityLive(val);
     });
 
     // Edit Text button
@@ -393,10 +523,6 @@ export class FloatingPropsBarComponent {
       if (!first || first.type !== 'sticky-note') return;
       const next: StickyNoteAnnotation = { ...first, textColor: val, updatedAt: Date.now() };
       history.execute(new ModifyAnnotationCommand(first.pageIndex, first, next));
-      const inkMode = pointerHandler.getStickyInkMode();
-      if (inkMode?.noteId === first.id) {
-        pointerHandler.setStickyInkMode(first.id, inkMode.mode, val, inkMode.strokeWidth);
-      }
       store.updateToolSettings({ noteTextColor: val });
       window.app?.repaintAllRenderedAnnotations();
     });
@@ -406,7 +532,6 @@ export class FloatingPropsBarComponent {
       e.stopPropagation();
       const first = selected[0];
       if (!first || first.type !== 'sticky-note') return;
-      pointerHandler.setStickyInkMode(null);
       const pageContainer = document.querySelector<HTMLElement>(`.pdf-page-container[data-page-index="${first.pageIndex}"]`);
       const scratchCanvas = pageContainer?.querySelector<HTMLCanvasElement>('.scratchpad-canvas');
       if (scratchCanvas) {
@@ -417,40 +542,11 @@ export class FloatingPropsBarComponent {
       }
     });
 
-    // Sticky Note In-Note Pen toggle
-    this._container.querySelector('#fp-note-pen-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const first = selected[0];
-      if (!first || first.type !== 'sticky-note') return;
-      const cur = pointerHandler.getStickyInkMode();
-      if (cur?.noteId === first.id && cur.mode === 'pen') {
-        pointerHandler.setStickyInkMode(null);
-      } else {
-        pointerHandler.setStickyInkMode(first.id, 'pen', first.textColor || '#3b2f1e', 2.5);
-      }
-      this.renderContent();
-    });
-
-    // Sticky Note In-Note Eraser toggle
-    this._container.querySelector('#fp-note-eraser-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const first = selected[0];
-      if (!first || first.type !== 'sticky-note') return;
-      const cur = pointerHandler.getStickyInkMode();
-      if (cur?.noteId === first.id && cur.mode === 'eraser') {
-        pointerHandler.setStickyInkMode(null);
-      } else {
-        pointerHandler.setStickyInkMode(first.id, 'eraser', first.textColor || '#3b2f1e', 2.5);
-      }
-      this.renderContent();
-    });
-
     // Sticky Note Collapse / Expand toggle
     this._container.querySelector('#fp-note-collapse-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
       const first = selected[0];
       if (!first || first.type !== 'sticky-note') return;
-      pointerHandler.setStickyInkMode(null);
       const next: StickyNoteAnnotation = {
         ...first,
         collapsed: !first.collapsed,
@@ -491,7 +587,6 @@ export class FloatingPropsBarComponent {
     // Delete
     this._container.querySelector('#fp-delete-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      pointerHandler.setStickyInkMode(null);
       history.execute(new DeleteAnnotationsCommand(pageIndex, selected));
       store.clearSelection();
       this.hideImmediate();

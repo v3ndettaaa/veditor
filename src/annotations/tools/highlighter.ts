@@ -21,6 +21,8 @@ export class HighlighterTool {
   private _maxX: number = -Infinity;
   private _maxY: number = -Infinity;
 
+  private _liveTip: StrokePoint | null = null;
+
   public start(
     point: StrokePoint,
     pageIndex: number,
@@ -32,6 +34,7 @@ export class HighlighterTool {
     opacity: number = 0.3
   ) {
     this._activePoints = [point];
+    this._liveTip = null;
     this._pageIndex = pageIndex;
     this._opacity = opacity;
     // Always store a translucent color; toolbar swatches and the native color
@@ -58,30 +61,39 @@ export class HighlighterTool {
       const dy = Math.abs(point.y - p0.y);
       const p1 = dx >= dy ? { ...point, y: p0.y } : { ...point, x: p0.x };
       this._activePoints = [p0, p1];
+      this._liveTip = null;
       this._minX = Math.min(p0.x, p1.x);
       this._minY = Math.min(p0.y, p1.y);
       this._maxX = Math.max(p0.x, p1.x);
       this._maxY = Math.max(p0.y, p1.y);
     } else {
+      if (point.x < this._minX) this._minX = point.x;
+      if (point.y < this._minY) this._minY = point.y;
+      if (point.x > this._maxX) this._maxX = point.x;
+      if (point.y > this._maxY) this._maxY = point.y;
+
       const len = this._activePoints.length;
       if (len > 0) {
         const prev = this._activePoints[len - 1];
         const dx = point.x - prev.x;
         const dy = point.y - prev.y;
-        const minDist = 0.8 / Math.max(1, zoom);
-        if (dx * dx + dy * dy < minDist * minDist) return;
+        const minDist = 0.65 / Math.max(1, zoom);
+        if (dx * dx + dy * dy < minDist * minDist) {
+          return;
+        }
       }
-      if (point.x < this._minX) this._minX = point.x;
-      if (point.y < this._minY) this._minY = point.y;
-      if (point.x > this._maxX) this._maxX = point.x;
-      if (point.y > this._maxY) this._maxY = point.y;
       this._activePoints.push(point);
+      this._liveTip = null;
     }
+  }
+
+  private getRenderPoints(): StrokePoint[] {
+    return this._activePoints;
   }
 
   public getLiveBoundingBox(): BoundingBox | null {
     if (this._activePoints.length === 0) return null;
-    const pad = this._width * 1.5 + 6;
+    const pad = this._width * 1.5 + 8;
     return {
       x: this._minX - pad,
       y: this._minY - pad,
@@ -91,13 +103,14 @@ export class HighlighterTool {
   }
 
   public renderScratchpad(ctx: CanvasRenderingContext2D, scale: number): void {
-    if (this._activePoints.length === 0) return;
+    const pts = this.getRenderPoints();
+    if (pts.length === 0) return;
 
     ctx.save();
     ctx.scale(scale, scale);
     renderSmoothStroke(
       ctx,
-      this._activePoints,
+      pts,
       this._color,
       this._width,
       'linear',
@@ -110,9 +123,10 @@ export class HighlighterTool {
   }
 
   public finish(layerId: string): HighlighterAnnotation | null {
-    if (this._activePoints.length === 0) return null;
+    const finalPoints = this.getRenderPoints();
+    if (finalPoints.length === 0) return null;
 
-    const box: BoundingBox = computePointsBoundingBox(this._activePoints, this._width);
+    const box: BoundingBox = computePointsBoundingBox(finalPoints, this._width);
 
     const annotation: HighlighterAnnotation = {
       id: Math.random().toString(36).substring(2, 9),
@@ -120,7 +134,7 @@ export class HighlighterTool {
       layerId,
       type: 'highlighter',
       box,
-      points: [...this._activePoints],
+      points: [...finalPoints],
       color: normalizeHighlighterColor(this._color, this._opacity),
       strokeWidth: this._width,
       blendMode: 'source-over',
@@ -137,6 +151,7 @@ export class HighlighterTool {
 
   public cancel(): void {
     this._activePoints = [];
+    this._liveTip = null;
     this._minX = Infinity;
     this._minY = Infinity;
     this._maxX = -Infinity;

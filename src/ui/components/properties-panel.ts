@@ -138,7 +138,7 @@ export class PropertiesPanelComponent {
           </div>
         </div>
 
-        <!-- Fill Color (if shape selected) -->
+        <!-- Fill Color & Fill Opacity (if shape selected) -->
         ${hasShape ? `
           <div class="prop-group">
             <div class="prop-label-row">
@@ -161,6 +161,21 @@ export class PropertiesPanelComponent {
                           style="background-color:${c};" data-prop-quick-fill="${c}" title="${c}"></button>
                 `).join('')}
               </div>
+            </div>
+            <div class="prop-label-row" style="margin-top: 10px;">
+              <span class="prop-label">Fill Opacity</span>
+              <div class="gn-num-badge">
+                <input type="number" class="prop-value prop-num-input" id="prop-fill-opacity-val"
+                       min="0" max="100" step="1" value="${Math.round(((firstAnn as any).fillOpacity ?? 1) * 100)}"
+                       title="Fill opacity (0-100%, outline stays solid)" aria-label="Fill opacity percentage">
+                <span class="gn-unit">%</span>
+              </div>
+            </div>
+            <div class="gn-slider-wrap">
+              <input type="range" id="prop-fill-opacity-slider" class="gn-range-slider"
+                     min="0" max="100" step="1" value="${Math.round(((firstAnn as any).fillOpacity ?? 1) * 100)}"
+                     style="--slider-pct:${sliderPercent(Math.round(((firstAnn as any).fillOpacity ?? 1) * 100), 0, 100)}%"
+                     aria-label="Fill opacity slider">
             </div>
           </div>
         ` : ''}
@@ -419,6 +434,40 @@ export class PropertiesPanelComponent {
 
     this._container.querySelector('#prop-no-fill-btn')?.addEventListener('click', () => {
       onFillChange('transparent');
+    });
+
+    const fillOpNum = this._container.querySelector<HTMLInputElement>('#prop-fill-opacity-val');
+    const fillOpSlider = this._container.querySelector<HTMLInputElement>('#prop-fill-opacity-slider');
+    const applyFillOpacity = (pctRaw: number) => {
+      const pct = Math.max(0, Math.min(100, Math.round(pctRaw)));
+      const fillOp = pct / 100;
+      if (fillOpSlider && document.activeElement !== fillOpSlider) fillOpSlider.value = String(pct);
+      if (fillOpSlider) fillOpSlider.style.setProperty('--slider-pct', `${sliderPercent(pct, 0, 100)}%`);
+      if (fillOpNum && document.activeElement !== fillOpNum) fillOpNum.value = String(pct);
+      selectedAnnotations.forEach(ann => {
+        if ('fillColor' in ann || ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' || ann.type === 'freeform-shape') {
+          const prev = { ...ann } as any;
+          const nextFillColor = (!prev.fillColor || prev.fillColor === 'transparent') && pct > 0
+            ? (store.toolSettings.shapeFillColor !== 'transparent' ? store.toolSettings.shapeFillColor : (prev.strokeColor || '#6366f1'))
+            : prev.fillColor;
+          const next = { ...prev, fillColor: pct === 0 ? 'transparent' : nextFillColor, fillOpacity: fillOp };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+        }
+      });
+      store.updateToolSettings({ shapeFillOpacity: fillOp });
+      store.setActivePageIndex(store.activePageIndex);
+    };
+    fillOpSlider?.addEventListener('input', () => {
+      const val = parseFloat(fillOpSlider.value || '100');
+      if (Number.isFinite(val)) applyFillOpacity(val);
+    });
+    fillOpNum?.addEventListener('input', () => {
+      const val = parseFloat(fillOpNum.value);
+      if (Number.isFinite(val)) applyFillOpacity(val);
+    });
+    fillOpNum?.addEventListener('change', () => {
+      const val = parseFloat(fillOpNum.value);
+      if (Number.isFinite(val)) applyFillOpacity(val);
     });
 
     const applyStrokeWidth = (val: number) => {

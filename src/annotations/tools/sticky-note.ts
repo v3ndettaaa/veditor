@@ -8,11 +8,14 @@ import {
   Point,
   StrokePoint,
   BoundingBox,
+  Annotation,
+  ShapeAnnotation,
   StickyNoteAnnotation,
   StickyNoteStroke
 } from '../../core/types';
-import { isPointInBox } from '../../utils/geometry';
+import { isPointInBox, traceRoundedPolygon, fillLineRibbon } from '../../utils/geometry';
 import { renderSmoothStroke } from '../spline';
+import { textTool } from './text';
 
 export const STICKY_NOTE_DEFAULT_SIZE = 210;
 export const STICKY_NOTE_MIN_WIDTH = 150;
@@ -138,6 +141,7 @@ export interface CreateStickyNoteOptions {
   opacity?: number;
   collapsed?: boolean;
   strokes?: StickyNoteStroke[];
+  items?: Annotation[];
 }
 
 export class StickyNoteTool {
@@ -212,6 +216,7 @@ export class StickyNoteTool {
       textAlign: opts.textAlign || 'left',
       author: opts.author !== undefined ? opts.author : 'Kia Gh',
       strokes: opts.strokes ? opts.strokes.map(s => ({ ...s, points: s.points.map(p => ({ ...p })) })) : [],
+      ...(opts.items ? { items: JSON.parse(JSON.stringify(opts.items)) } : {}),
       opacity: opts.opacity ?? 1.0,
       createdAt: now,
       updatedAt: now
@@ -276,6 +281,60 @@ export class StickyNoteTool {
       local.y >= b.y + 36 &&
       local.y <= b.y + b.height - 8
     );
+  }
+
+  /**
+   * Clamps a point (or StrokePoint) so it stays strictly inside the Sticky Note's border
+   * (with `pad` inset) while drawing or writing inside the note.
+   */
+  public clampPointToNote<P extends Point>(ann: StickyNoteAnnotation, pt: P, pad: number = 3): P {
+    const b = ann.box;
+    const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    const rot = ann.rotation || 0;
+    const local = rot ? rotatePointAround(pt, center, -rot) : pt;
+    const safePad = Math.max(2, Math.min(pad, b.width * 0.25, b.height * 0.25));
+    const clampedLocal: Point = {
+      x: Math.max(b.x + safePad, Math.min(b.x + b.width - safePad, local.x)),
+      y: Math.max(b.y + safePad, Math.min(b.y + b.height - safePad, local.y))
+    };
+    const world = rot ? rotatePointAround(clampedLocal, center, rot) : clampedLocal;
+    return { ...pt, x: world.x, y: world.y };
+  }
+
+  /**
+   * Executes `drawFn` clipped strictly inside the Sticky Note's full rounded card border.
+   */
+  public withNoteClip(
+    ctx: CanvasRenderingContext2D,
+    ann: StickyNoteAnnotation,
+    scaleOrFn: number | (() => void),
+    maybeDrawFn?: () => void
+  ): void {
+    const scale = typeof scaleOrFn === 'number' ? scaleOrFn : 1;
+    const drawFn = typeof scaleOrFn === 'function' ? scaleOrFn : maybeDrawFn;
+    if (!drawFn) return;
+    const b = ann.box;
+    ctx.save();
+    ctx.scale(scale, scale);
+    if (ann.rotation) {
+      const cx = b.x + b.width / 2;
+      const cy = b.y + b.height / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(ann.rotation);
+      ctx.translate(-cx, -cy);
+    }
+    drawRoundedRectPath(
+      ctx,
+      b.x + 1.5,
+      b.y + 1.5,
+      b.width - 3,
+      b.height - 3,
+      Math.max(2, STICKY_NOTE_CORNER_RADIUS - 1.5)
+    );
+    ctx.clip();
+    ctx.scale(1 / scale, 1 / scale);
+    drawFn();
+    ctx.restore();
   }
 
   public start(
@@ -344,7 +403,7 @@ export class StickyNoteTool {
   }
 
   /**
-   * Renders a live in-progress pen stroke clipped inside `ann.box`.
+   * Renders a live in-progress pen or highlighter stroke clipped inside the full `ann.box` card border.
    */
   public renderLiveStroke(
     ctx: CanvasRenderingContext2D,
@@ -353,7 +412,13 @@ export class StickyNoteTool {
     color: string,
     strokeWidth: number,
     opacity: number = 1,
-    scale: number = 1
+    scale: number = 1,
+    isHighlighter: boolean = false,
+    pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
+    pressureEnabled: boolean = true,
+    pressureStrength: 'light' | 'balanced' | 'strong' = 'balanced',
+    tipShape: 'chisel' | 'round' = 'round',
+    smoothing: 'none' | 'subtle' | 'medium' | 'high' | 'light' | 'heavy' = 'medium'
   ): void {
     if (ann.collapsed || points.length === 0) return;
     const b = ann.box;
@@ -366,20 +431,29 @@ export class StickyNoteTool {
       ctx.rotate(ann.rotation);
       ctx.translate(-cx, -cy);
     }
-    drawRoundedRectPath(ctx, b.x + 2, b.y + 36, b.width - 4, b.height - 40, Math.max(2, STICKY_NOTE_CORNER_RADIUS - 2));
+    drawRoundedRectPath(
+      ctx,
+      b.x + 1.5,
+      b.y + 1.5,
+      b.width - 3,
+      b.height - 3,
+      Math.max(2, STICKY_NOTE_CORNER_RADIUS - 1.5)
+    );
     ctx.clip();
-    ctx.globalAlpha = opacity;
+    ctx.globalAlpha = isHighlighter ? 1.0 : opacity;
+    const mappedSmoothing: 'none' | 'subtle' | 'medium' | 'high' =
+      smoothing === 'light' ? 'subtle' : smoothing === 'heavy' ? 'high' : smoothing;
     renderSmoothStroke(
       ctx,
       points,
       color || ann.textColor || '#3b2f1e',
       strokeWidth || 2,
-      'linear',
-      false,
-      true,
-      'balanced',
-      'round',
-      'medium'
+      pressureCurve,
+      isHighlighter,
+      pressureEnabled,
+      pressureStrength,
+      tipShape,
+      mappedSmoothing
     );
     ctx.restore();
   }
@@ -391,9 +465,58 @@ export class StickyNoteTool {
     color: string,
     strokeWidth: number,
     opacity: number = 1,
-    scale: number = 1
+    scale: number = 1,
+    optionsOrIsHighlighter?:
+      | boolean
+      | {
+          tool?: 'pen' | 'highlighter' | string;
+          pressureEnabled?: boolean;
+          pressureCurve?: 'linear' | 'soft' | 'firm' | 'exponential';
+          pressureStrength?: 'light' | 'balanced' | 'strong';
+          smoothing?: 'none' | 'subtle' | 'medium' | 'high' | 'light' | 'heavy';
+          blendMode?: 'multiply' | 'source-over';
+          tipShape?: 'chisel' | 'round';
+        },
+    pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
+    pressureEnabled: boolean = true,
+    pressureStrength: 'light' | 'balanced' | 'strong' = 'balanced',
+    tipShape: 'chisel' | 'round' = 'round',
+    smoothing: 'none' | 'subtle' | 'medium' | 'high' | 'light' | 'heavy' = 'medium'
   ): void {
-    this.renderLiveStroke(ctx, ann, points, color, strokeWidth, opacity, scale);
+    if (typeof optionsOrIsHighlighter === 'object' && optionsOrIsHighlighter !== null) {
+      const isHigh = optionsOrIsHighlighter.tool === 'highlighter';
+      this.renderLiveStroke(
+        ctx,
+        ann,
+        points,
+        color,
+        strokeWidth,
+        opacity,
+        scale,
+        isHigh,
+        optionsOrIsHighlighter.pressureCurve || 'linear',
+        optionsOrIsHighlighter.pressureEnabled !== false,
+        optionsOrIsHighlighter.pressureStrength || 'balanced',
+        optionsOrIsHighlighter.tipShape || (isHigh ? 'chisel' : 'round'),
+        optionsOrIsHighlighter.smoothing || 'medium'
+      );
+      return;
+    }
+    this.renderLiveStroke(
+      ctx,
+      ann,
+      points,
+      color,
+      strokeWidth,
+      opacity,
+      scale,
+      Boolean(optionsOrIsHighlighter),
+      pressureCurve,
+      pressureEnabled,
+      pressureStrength,
+      tipShape,
+      smoothing
+    );
   }
 
   /**
@@ -478,7 +601,7 @@ export class StickyNoteTool {
     ctx.lineWidth = 1.1;
     ctx.stroke();
 
-    // 3. Header bar separator and top-right collapse button
+    // 3. Header bar separator line
     ctx.save();
     ctx.strokeStyle = 'rgba(59, 47, 30, 0.14)';
     ctx.lineWidth = 1;
@@ -486,41 +609,15 @@ export class StickyNoteTool {
     ctx.moveTo(b.x + 12, b.y + 36);
     ctx.lineTo(b.x + b.width - 12, b.y + 36);
     ctx.stroke();
-
-    // Top-right collapse button icon (inward diagonal arrows)
-    const btnCx = b.x + b.width - 21;
-    const btnCy = b.y + 18;
-    ctx.fillStyle = 'rgba(59, 47, 30, 0.08)';
-    drawRoundedRectPath(ctx, btnCx - 11, btnCy - 11, 22, 22, 6);
-    ctx.fill();
-
-    ctx.strokeStyle = ann.textColor || '#3b2f1e';
-    ctx.globalAlpha = (ann.opacity ?? 1) * 0.72;
-    ctx.lineWidth = 1.4;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    // Top-right arrow pointing inward
-    ctx.moveTo(btnCx + 5, btnCy - 5);
-    ctx.lineTo(btnCx + 1, btnCy - 1);
-    ctx.moveTo(btnCx + 1, btnCy - 4.5);
-    ctx.lineTo(btnCx + 1, btnCy - 1);
-    ctx.lineTo(btnCx + 4.5, btnCy - 1);
-    // Bottom-left arrow pointing inward
-    ctx.moveTo(btnCx - 5, btnCy + 5);
-    ctx.lineTo(btnCx - 1, btnCy + 1);
-    ctx.moveTo(btnCx - 1, btnCy + 4.5);
-    ctx.lineTo(btnCx - 1, btnCy + 1);
-    ctx.lineTo(btnCx - 4.5, btnCy + 1);
-    ctx.stroke();
     ctx.restore();
 
-    // 4. Clipped interior for freehand ink strokes & typography
+    // 4. Clipped interior for typography, freehand strokes (pen & highlighter), and embedded items (shapes & text)
     ctx.save();
-    drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
+    drawRoundedRectPath(ctx, b.x + 1.5, b.y + 1.5, b.width - 3, b.height - 3, Math.max(2, r - 1.5));
     ctx.clip();
 
     const hasStrokes = Array.isArray(ann.strokes) && ann.strokes.length > 0;
+    const hasItems = Array.isArray(ann.items) && ann.items.length > 0;
     const rawText = (ann.text || '').trim();
     const padX = 14;
     const padTop = 44;
@@ -563,39 +660,42 @@ export class StickyNoteTool {
           ctx.fillText(line, drawX, curY);
           curY += lineHeight;
         }
-      } else if (!hasStrokes) {
-        // Centered "Add text" placeholder matching reference screenshot 1
-        const placeholderSize = Math.max(14, Math.min(20, Math.round(Math.min(b.width, b.height) * 0.10)));
-        ctx.font = `400 ${placeholderSize}px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
-        ctx.fillStyle = 'rgba(59, 47, 30, 0.42)';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Add text', b.x + b.width / 2, b.y + 36 + (b.height - 36 - (ann.author ? 24 : 0)) / 2);
       }
     }
 
-    // Render internal freehand ink strokes inside note
+    // Render internal freehand strokes (both pen and highlighter) clipped inside note
     if (hasStrokes) {
       for (const stroke of ann.strokes) {
         if (stroke.points && stroke.points.length > 0) {
+          const isHl = stroke.tool === 'highlighter';
           ctx.save();
-          if (stroke.opacity !== undefined) {
+          if (!isHl && stroke.opacity !== undefined) {
             ctx.globalAlpha = (ann.opacity ?? 1) * stroke.opacity;
           }
+          const rawSm = stroke.smoothing || stroke.strokeSmoothing || 'medium';
+          const mappedSm: 'none' | 'subtle' | 'medium' | 'high' =
+            rawSm === 'light' ? 'subtle' : rawSm === 'heavy' ? 'high' : rawSm;
           renderSmoothStroke(
             ctx,
             stroke.points,
             stroke.color || ann.textColor || '#3b2f1e',
             stroke.strokeWidth || 2.0,
-            'linear',
-            false,
-            true,
-            'balanced',
-            'round',
-            'medium'
+            stroke.pressureCurve || 'linear',
+            isHl,
+            isHl ? false : (stroke.pressureEnabled !== false),
+            stroke.pressureStrength || 'balanced',
+            stroke.tipShape || 'round',
+            mappedSm
           );
           ctx.restore();
         }
+      }
+    }
+
+    // Render embedded board items (shapes, text) clipped inside note
+    if (hasItems && ann.items) {
+      for (const item of ann.items) {
+        this.renderEmbeddedItem(ctx, item);
       }
     }
 
@@ -611,6 +711,157 @@ export class StickyNoteTool {
     }
 
     ctx.restore();
+
+    // 6. Top-right collapse button icon rendered on top so it stays crisp and accessible
+    ctx.save();
+    const btnCx = b.x + b.width - 21;
+    const btnCy = b.y + 18;
+    ctx.fillStyle = 'rgba(59, 47, 30, 0.08)';
+    drawRoundedRectPath(ctx, btnCx - 11, btnCy - 11, 22, 22, 6);
+    ctx.fill();
+
+    ctx.strokeStyle = ann.textColor || '#3b2f1e';
+    ctx.globalAlpha = (ann.opacity ?? 1) * 0.72;
+    ctx.lineWidth = 1.4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(btnCx + 5, btnCy - 5);
+    ctx.lineTo(btnCx + 1, btnCy - 1);
+    ctx.moveTo(btnCx + 1, btnCy - 4.5);
+    ctx.lineTo(btnCx + 1, btnCy - 1);
+    ctx.lineTo(btnCx + 4.5, btnCy - 1);
+    ctx.moveTo(btnCx - 5, btnCy + 5);
+    ctx.lineTo(btnCx - 1, btnCy + 1);
+    ctx.moveTo(btnCx - 1, btnCy + 4.5);
+    ctx.lineTo(btnCx - 1, btnCy + 1);
+    ctx.lineTo(btnCx - 4.5, btnCy + 1);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders an embedded Shape or Text annotation inside a Sticky Note card's clipped coordinate space.
+   */
+  private renderEmbeddedItem(ctx: CanvasRenderingContext2D, item: Annotation): void {
+    ctx.save();
+    ctx.globalAlpha = item.opacity ?? 1.0;
+    if (item.type === 'text') {
+      textTool.renderToCanvas(ctx, item, 1);
+      ctx.restore();
+      return;
+    }
+    if (item.type === 'pen') {
+      renderSmoothStroke(
+        ctx,
+        item.points,
+        item.color,
+        item.strokeWidth,
+        item.pressureCurve || 'linear',
+        false,
+        item.pressureEnabled !== false,
+        item.pressureStrength || 'balanced',
+        'round',
+        item.strokeSmoothing || 'medium'
+      );
+      ctx.restore();
+      return;
+    }
+    if (item.type === 'highlighter') {
+      renderSmoothStroke(
+        ctx,
+        item.points,
+        item.color,
+        item.strokeWidth,
+        'linear',
+        true,
+        false,
+        'balanced',
+        item.tipShape || 'round'
+      );
+      ctx.restore();
+      return;
+    }
+    if (
+      item.type === 'rectangle' ||
+      item.type === 'ellipse' ||
+      item.type === 'line' ||
+      item.type === 'arrow' ||
+      item.type === 'polygon' ||
+      item.type === 'freeform-shape'
+    ) {
+      const sh = item as ShapeAnnotation;
+      const w = Math.max(1, sh.strokeWidth || 2);
+      const outline = sh.type === 'line' || sh.type === 'arrow' || sh.outline !== false;
+      ctx.strokeStyle = sh.strokeColor;
+      ctx.fillStyle = sh.fillColor || 'transparent';
+      ctx.lineWidth = w;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      if (sh.strokeStyle === 'dashed') {
+        ctx.setLineDash([Math.max(8, w * 2.0), Math.max(6, w * 1.55)]);
+      } else if (sh.strokeStyle === 'dotted') {
+        ctx.setLineDash([0.1, Math.max(5, w * 1.85)]);
+      } else {
+        ctx.setLineDash([]);
+      }
+      const sb = sh.box;
+      if (sh.type === 'rectangle') {
+        const radius = Math.max(0, Math.min(sh.cornerRadius ?? 0.75, sb.width / 2, sb.height / 2));
+        drawRoundedRectPath(ctx, sb.x, sb.y, sb.width, sb.height, radius);
+        if (sh.fillColor && sh.fillColor !== 'transparent') ctx.fill();
+        if (outline) ctx.stroke();
+      } else if (sh.type === 'ellipse') {
+        ctx.beginPath();
+        ctx.ellipse(
+          sb.x + sb.width / 2,
+          sb.y + sb.height / 2,
+          Math.max(1, sb.width / 2),
+          Math.max(1, sb.height / 2),
+          0,
+          0,
+          Math.PI * 2
+        );
+        if (sh.fillColor && sh.fillColor !== 'transparent') ctx.fill();
+        if (outline) ctx.stroke();
+      } else if ((sh.type === 'line' || sh.type === 'arrow') && sh.points && sh.points.length >= 2) {
+        const pts = sh.points;
+        if (sh.strokeStyle === 'dashed' || sh.strokeStyle === 'dotted') {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.stroke();
+        } else {
+          for (let i = 0; i < pts.length - 1; i++) {
+            fillLineRibbon(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+          }
+        }
+        if (sh.type === 'arrow') {
+          ctx.setLineDash([]);
+          const prev = pts[pts.length - 2];
+          const tip = pts[pts.length - 1];
+          const headLen = Math.max(12, w * 4);
+          const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
+          ctx.beginPath();
+          ctx.moveTo(tip.x, tip.y);
+          ctx.lineTo(tip.x - headLen * Math.cos(angle - Math.PI / 6), tip.y - headLen * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(tip.x - headLen * Math.cos(angle + Math.PI / 6), tip.y - headLen * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fillStyle = sh.strokeColor;
+          ctx.fill();
+          ctx.lineWidth = Math.min(2, w * 0.5);
+          ctx.stroke();
+        }
+      } else if ((sh.type === 'polygon' || sh.type === 'freeform-shape') && sh.points && sh.points.length >= 2) {
+        const radius = Number.isFinite(sh.cornerRadius) ? sh.cornerRadius! : 0.75;
+        ctx.beginPath();
+        traceRoundedPolygon(ctx, sh.points, radius, true);
+        if (sh.fillColor && sh.fillColor !== 'transparent') ctx.fill();
+        if (outline) ctx.stroke();
+      }
+    }
     ctx.restore();
   }
 

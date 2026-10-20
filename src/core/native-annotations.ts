@@ -96,12 +96,12 @@ function validModel(value: unknown): value is NativeAnnotation {
     const specific = value.type === 'text'
       ? ['text', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'color', 'backgroundColor', 'borderColor', 'textAlign', 'padding']
       : value.type === 'sticky-note'
-        ? ['text', 'author', 'color', 'textColor', 'fontFamily', 'fontSize', 'textAlign', 'collapsed', 'strokes']
+        ? ['text', 'author', 'color', 'textColor', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'listStyle', 'textAlign', 'collapsed', 'expandedBox', 'strokes', 'items']
         : value.type === 'highlighter'
           ? ['points', 'quadPoints', 'color', 'strokeWidth', 'straightLine', 'tipShape']
           : value.type === 'stamp'
             ? ['stampType', 'presetKey', 'imageUrl', 'svgData', 'color']
-            : ['strokeColor', 'fillColor', 'strokeWidth', 'outline', 'strokeStyle', 'cornerRadius', 'points', 'arrowStart', 'arrowEnd'];
+            : ['strokeColor', 'fillColor', 'fillOpacity', 'strokeWidth', 'outline', 'strokeStyle', 'cornerRadius', 'points', 'arrowStart', 'arrowEnd'];
     if (Object.keys(value).some(k => !common.includes(k) && !specific.includes(k))) return false;
   }
   if (!record(value) || typeof value.id !== 'string' || !value.id || value.id.length > 4096 ||
@@ -131,7 +131,8 @@ function validModel(value: unknown): value is NativeAnnotation {
       typeof value.collapsed === 'boolean' &&
       Array.isArray(value.strokes) &&
       value.strokes.every(s => record(s) && typeof s.id === 'string' && validColor(s.color) &&
-        positive(s.strokeWidth) && unit(s.opacity) && Array.isArray(s.points) && s.points.every(point));
+        positive(s.strokeWidth) && (s.opacity === undefined || unit(s.opacity)) && Array.isArray(s.points) && s.points.every(point)) &&
+      (value.items === undefined || Array.isArray(value.items));
   }
   if (value.type === 'highlighter') {
     return positive(b.width) && positive(b.height) && validColor(value.color) && positive(value.strokeWidth) &&
@@ -152,6 +153,7 @@ function validModel(value: unknown): value is NativeAnnotation {
   if (!['rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'freeform-shape'].includes(value.type as string) || !validColor(value.strokeColor) ||
     !finite(value.strokeWidth) || value.strokeWidth < 0 || !['solid', 'dashed', 'dotted'].includes(value.strokeStyle as string) ||
     (value.fillColor !== undefined && !validColor(value.fillColor)) ||
+    (value.fillOpacity !== undefined && !unit(value.fillOpacity)) ||
     (value.outline !== undefined && typeof value.outline !== 'boolean') ||
     (value.arrowStart !== undefined && typeof value.arrowStart !== 'boolean') ||
     (value.arrowEnd !== undefined && typeof value.arrowEnd !== 'boolean') ||

@@ -96,10 +96,14 @@ function parseHexColor(raw: string): string | null {
   return /^#[0-9a-f]{6}$/.test(h) ? h : null;
 }
 
+function shapePreviewStrokeWidth(width: number): number {
+  return Math.max(1.5, Math.min(6.5, 1.2 + width * 0.22));
+}
+
 function shapeDashArray(style: string, width: number): string {
-  const sw = Math.max(1.5, Math.min(10, width));
-  if (style === 'dashed') return `${sw * 3.2} ${sw * 2.2}`;
-  if (style === 'dotted') return `${sw * 0.4} ${sw * 2.4}`;
+  const sw = shapePreviewStrokeWidth(width);
+  if (style === 'dashed') return `${(sw * 1.45).toFixed(1)} ${(sw * 1.85).toFixed(1)}`;
+  if (style === 'dotted') return `0.1 ${(sw * 1.95).toFixed(1)}`;
   return 'none';
 }
 
@@ -606,6 +610,31 @@ export class ToolbarComponent {
                          style="--slider-pct:${sliderPercent(s.eraserWidth, 4, 120)}%" aria-label="Eraser width slider">
                 </div>
               </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Eraser Cursor Selector -->
+              <div class="gn-section">
+                <span class="gn-section-label" style="margin-bottom:6px; display:block;">Cursor</span>
+                <div class="gn-tile-grid cols-4">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${(s.eraserCursor || 'circle') === 'circle' ? 'active' : ''}" data-eraser-cursor="circle" title="Circle Size Cursor">
+                    <span class="gn-tile-icon">${getIconSvg('cursorCircle', 17)}</span>
+                    <span class="gn-tile-label">Circle</span>
+                  </button>
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'dot' ? 'active' : ''}" data-eraser-cursor="dot" title="Precision Dot Cursor">
+                    <span class="gn-tile-icon">${getIconSvg('cursorDot', 17)}</span>
+                    <span class="gn-tile-label">Dot</span>
+                  </button>
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'crosshair' ? 'active' : ''}" data-eraser-cursor="crosshair" title="Crosshair Cursor">
+                    <span class="gn-tile-icon">${getIconSvg('cursorCrosshair', 17)}</span>
+                    <span class="gn-tile-label">Cross</span>
+                  </button>
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'eraser' ? 'active' : ''}" data-eraser-cursor="eraser" title="Eraser Icon Cursor">
+                    <span class="gn-tile-icon">${getIconSvg('eraser', 17)}</span>
+                    <span class="gn-tile-label">Icon</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -778,9 +807,7 @@ export class ToolbarComponent {
                 <div class="gn-note-preview-card"
                      style="width:168px; height:60px; border-radius:8px; background:${s.noteColor || '#ebd09e'}; border:1.5px solid rgba(59,47,30,0.22); padding:6px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 3px 10px rgba(0,0,0,0.16);">
                   <span class="gn-note-preview-text"
-                        style="color:${s.noteTextColor || '#3b2f1e'}; font-family:${s.fontFamily || 'Inter'}; font-size:${Math.min(18, Math.max(11, Math.round((s.noteFontSize || 24) * 0.65)))}px; font-weight:500; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">
-                    Sticky Note…
-                  </span>
+                        style="color:${s.noteTextColor || '#3b2f1e'}; font-family:${s.fontFamily || 'Inter'}; font-size:${Math.min(18, Math.max(11, Math.round((s.noteFontSize || 24) * 0.65)))}px; font-weight:500; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
                   <span class="gn-note-preview-author"
                         style="color:${s.noteTextColor || '#3b2f1e'}; opacity:0.65; font-size:10px; font-weight:500;">
                     ${(s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh') || ' '}
@@ -1193,6 +1220,11 @@ export class ToolbarComponent {
       eraserSlider.style.setProperty('--slider-pct', `${sliderPercent(s.eraserWidth, 4, 120)}%`);
     }
 
+    this._container.querySelectorAll('[data-eraser-cursor]').forEach(el => {
+      const cur = el.getAttribute('data-eraser-cursor');
+      el.classList.toggle('active', cur === (s.eraserCursor || 'circle'));
+    });
+
     // 4. Shape Indicators across all 5 shape cards
     this._container.querySelectorAll<HTMLElement>('.shape-dot').forEach(dot => {
       dot.style.backgroundColor = s.shapeColor;
@@ -1206,7 +1238,7 @@ export class ToolbarComponent {
     const showOutline = s.shapeOutline !== false;
     const strokeCol = showOutline ? s.shapeColor : 'none';
     const fillCol = s.shapeFillColor === 'transparent' ? 'none' : s.shapeFillColor;
-    const previewSw = Math.max(1.5, Math.min(10, s.shapeWidth));
+    const previewSw = shapePreviewStrokeWidth(s.shapeWidth);
 
     this._container.querySelectorAll<SVGElement>('.gn-shape-preview-el').forEach(el => {
       const kind = el.getAttribute('data-preview-shape');
@@ -1215,8 +1247,11 @@ export class ToolbarComponent {
       } else {
         el.setAttribute('stroke', strokeCol);
         el.setAttribute('fill', fillCol);
+        el.setAttribute('fill-opacity', String(s.shapeFillOpacity ?? 1));
       }
       el.setAttribute('stroke-width', String(previewSw));
+      el.setAttribute('stroke-linecap', 'round');
+      el.setAttribute('stroke-linejoin', 'round');
       if (dashArr === 'none') el.removeAttribute('stroke-dasharray');
       else el.setAttribute('stroke-dasharray', dashArr);
     });
@@ -1292,6 +1327,16 @@ export class ToolbarComponent {
     this._container.querySelectorAll<HTMLInputElement>('.shape-fill-hex').forEach(el => {
       const shown = s.shapeFillColor === 'transparent' ? '' : s.shapeFillColor;
       if (document.activeElement !== el && el.value !== shown) el.value = shown;
+    });
+
+    const fillOpPct = Math.round((s.shapeFillOpacity ?? 1) * 100);
+    this._container.querySelectorAll<HTMLInputElement>('.shape-fill-opacity-slider').forEach(slider => {
+      if (document.activeElement !== slider) slider.value = String(fillOpPct);
+      slider.style.setProperty('--slider-pct', `${sliderPercent(fillOpPct, 0, 100)}%`);
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-fill-opacity-input').forEach(el => {
+      if (document.activeElement !== el && el.value !== String(fillOpPct)) el.value = String(fillOpPct);
     });
 
     // 5. Text Indicators + Live Typography Preview
@@ -1455,7 +1500,8 @@ export class ToolbarComponent {
       ? s.shapeColor
       : (showOutline ? s.shapeColor : 'none');
     const fillCol = s.shapeFillColor === 'transparent' ? 'none' : s.shapeFillColor;
-    const sw = Math.max(1.5, Math.min(10, s.shapeWidth));
+    const fillOp = s.shapeFillOpacity ?? 1;
+    const sw = shapePreviewStrokeWidth(s.shapeWidth);
     const dash = shapeDashArray(s.shapeStyle || 'solid', s.shapeWidth);
     const dashAttr = dash === 'none' ? '' : `stroke-dasharray="${dash}"`;
 
@@ -1464,7 +1510,7 @@ export class ToolbarComponent {
         <svg class="gn-preview-svg" viewBox="0 0 260 66" fill="none" aria-hidden="true">
           <rect class="gn-shape-preview-el" data-preview-shape="rectangle"
                 x="68" y="13" width="124" height="40" rx="5"
-                stroke="${strokeCol}" fill="${fillCol}" stroke-width="${sw}" ${dashAttr}/>
+                stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" ${dashAttr}/>
         </svg>
       `;
     }
@@ -1473,7 +1519,7 @@ export class ToolbarComponent {
         <svg class="gn-preview-svg" viewBox="0 0 260 66" fill="none" aria-hidden="true">
           <ellipse class="gn-shape-preview-el" data-preview-shape="ellipse"
                    cx="130" cy="33" rx="60" ry="21"
-                   stroke="${strokeCol}" fill="${fillCol}" stroke-width="${sw}" ${dashAttr}/>
+                   stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" ${dashAttr}/>
         </svg>
       `;
     }
@@ -1502,7 +1548,7 @@ export class ToolbarComponent {
       <svg class="gn-preview-svg" viewBox="0 0 260 66" fill="none" aria-hidden="true">
         <polygon class="gn-shape-preview-el" data-preview-shape="polygon"
                  points="130,10 184,26 164,55 96,55 76,26"
-                 stroke="${strokeCol}" fill="${fillCol}" stroke-width="${sw}" stroke-linejoin="round" ${dashAttr}/>
+                 stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" ${dashAttr}/>
       </svg>
     `;
   }
@@ -1510,7 +1556,8 @@ export class ToolbarComponent {
   private renderShapeHoverCard(s: typeof store.toolSettings, shapeType: string): string {
     const shapeColors = ['#ef4444', '#3b82f6', '#10b981', '#000000', '#ffffff', '#f59e0b', '#8b5cf6'];
     const strokeWidths = [1, 2, 4, 8];
-    const hasClosedArea = shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'polygon';
+    const hasClosedArea = shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'polygon' || shapeType === 'freeform-shape';
+    const fillOpPct = Math.round((s.shapeFillOpacity ?? 1) * 100);
     const isSegment = SEGMENT_TOOLS.includes(shapeType as ToolType);
     const titleLabel = TOOL_SHORT_LABELS[shapeType] || shapeType;
 
@@ -1610,6 +1657,21 @@ export class ToolbarComponent {
             <div class="color-picker-wrapper" title="Custom Fill Color">
               <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
             </div>
+          </div>
+          <div class="gn-section-header" style="margin-top: 10px;">
+            <span class="gn-section-label">Fill Opacity</span>
+            <div class="gn-size-header-controls">
+              <div class="gn-num-badge">
+                <input type="number" class="size-readout size-type-input shape-fill-opacity-input"
+                       min="0" max="100" step="1" value="${fillOpPct}" title="Fill opacity (0-100%)" aria-label="Shape fill opacity percentage">
+                <span class="gn-unit">%</span>
+              </div>
+            </div>
+          </div>
+          <div class="gn-slider-wrap">
+            <input type="range" class="gn-range-slider shape-fill-opacity-slider"
+                   min="0" max="100" step="1" value="${fillOpPct}"
+                   style="--slider-pct:${sliderPercent(fillOpPct, 0, 100)}%" aria-label="Shape fill opacity slider">
           </div>
         </div>
       ` : ''}
@@ -1859,6 +1921,17 @@ export class ToolbarComponent {
       this.updateIndicators();
     });
 
+    this._container.querySelectorAll('[data-eraser-cursor]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cur = el.getAttribute('data-eraser-cursor') as any;
+        if (cur) {
+          store.updateToolSettings({ eraserCursor: cur });
+          this.updateIndicators();
+        }
+      });
+    });
+
     // Free-typed numeric + hex inputs (Enter/blur commits, Escape reverts)
     this._container.querySelectorAll<HTMLElement>('.gn-num-badge').forEach(badge => {
       badge.addEventListener('click', (e) => {
@@ -2065,7 +2138,10 @@ export class ToolbarComponent {
     };
 
     const applyShapeFill = (color: string) => {
-      store.updateToolSettings({ shapeFillColor: color });
+      const nextFillOp = (color !== 'transparent' && (store.toolSettings.shapeFillOpacity ?? 1) === 0)
+        ? 1.0
+        : (store.toolSettings.shapeFillOpacity ?? 1.0);
+      store.updateToolSettings({ shapeFillColor: color, shapeFillOpacity: nextFillOp });
       this.updateIndicators();
 
       const doc = store.activeDocument;
@@ -2074,7 +2150,27 @@ export class ToolbarComponent {
           doc.annotations[pageIdx].forEach(ann => {
             if (store.selectedAnnotationIds.has(ann.id) && 'fillColor' in ann) {
               const prev = { ...ann };
-              const next = { ...ann, fillColor: color };
+              const next = { ...ann, fillColor: color, fillOpacity: nextFillOp };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
+    const applyShapeFillOpacity = (opacity: number) => {
+      const clamped = Math.max(0, Math.min(1, opacity));
+      store.updateToolSettings({ shapeFillOpacity: clamped });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (store.selectedAnnotationIds.has(ann.id) && 'fillColor' in ann) {
+              const prev = { ...ann };
+              const next = { ...ann, fillOpacity: clamped };
               history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
             }
           });
@@ -2165,6 +2261,29 @@ export class ToolbarComponent {
       };
       picker.addEventListener('input', handleFill);
       picker.addEventListener('change', handleFill);
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-fill-opacity-slider').forEach(slider => {
+      slider.addEventListener('input', (e) => {
+        e.stopPropagation();
+        const pct = parseFloat((e.target as HTMLInputElement).value || '100');
+        if (Number.isFinite(pct)) {
+          applyShapeFillOpacity(Math.max(0, Math.min(100, pct)) / 100);
+        }
+      });
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-fill-opacity-input').forEach(input => {
+      const commitPct = (e: Event) => {
+        e.stopPropagation();
+        const raw = parseFloat((e.target as HTMLInputElement).value);
+        if (Number.isFinite(raw)) {
+          const clamped = Math.max(0, Math.min(100, Math.round(raw)));
+          applyShapeFillOpacity(clamped / 100);
+        }
+      };
+      input.addEventListener('input', commitPct);
+      input.addEventListener('change', commitPct);
     });
 
     // Text listeners

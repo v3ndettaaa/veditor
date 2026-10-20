@@ -1378,3 +1378,94 @@ input[type="range"] {
   color: var(--accent-contrast);
 }
 
+.props-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.props-slider-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.props-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 68px;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent, #6366f1) 0%,
+    var(--accent, #6366f1) var(--slider-pct, 100%),
+    rgba(148, 163, 184, 0.28) var(--slider-pct, 100%),
+    rgba(148, 163, 184, 0.28) 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+
+.props-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid var(--accent, #6366f1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.props-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.props-range-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid var(--accent, #6366f1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.props-num-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.14));
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.props-num-input {
+  width: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #f8fafc);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  outline: none;
+  padding: 0;
+  -moz-appearance: textfield;
+}
+
+.props-num-input::-webkit-outer-spin-button,
+.props-num-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.props-num-unit {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted, #94a3b8);
+}

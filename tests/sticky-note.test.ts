@@ -146,4 +146,41 @@ describe('StickyNoteTool & StickyNoteAnnotation', () => {
     expect(colImported.collapsed).toBe(true);
     expect(colImported.box).toEqual(collapsedNote.box);
   });
+
+  it('clamps points strictly inside the Sticky Note card borders and transforms embedded items', () => {
+    const outsidePt = { x: 50, y: 420, pressure: 0.6 };
+    const clamped = stickyNoteTool.clampPointToNote(sampleNote, outsidePt, 4);
+
+    expect(clamped.x).toBeGreaterThanOrEqual(sampleNote.box.x + 4);
+    expect(clamped.x).toBeLessThanOrEqual(sampleNote.box.x + sampleNote.box.width - 4);
+    expect(clamped.y).toBeGreaterThanOrEqual(sampleNote.box.y + 4);
+    expect(clamped.y).toBeLessThanOrEqual(sampleNote.box.y + sampleNote.box.height - 4);
+
+    const noteWithItems: StickyNoteAnnotation = {
+      ...sampleNote,
+      items: [
+        {
+          id: 'shape_1',
+          type: 'rectangle',
+          pageIndex: 0,
+          layerId: 'layer-default',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          box: { x: 120, y: 150, width: 60, height: 40 },
+          strokeColor: '#2563eb',
+          strokeWidth: 2,
+          strokeStyle: 'solid',
+          opacity: 1
+        }
+      ]
+    };
+
+    const shifted = offsetAnnotation(noteWithItems, 25, -15) as StickyNoteAnnotation;
+    expect((shifted.items?.[0] as any).box).toEqual({
+      x: 145,
+      y: 135,
+      width: 60,
+      height: 40
+    });
+  });
 });

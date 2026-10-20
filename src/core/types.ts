@@ -114,6 +114,8 @@ export interface ShapeAnnotation extends BaseAnnotation {
   type: 'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'freeform-shape';
   strokeColor: string;
   fillColor?: string;
+  /** Independent interior fill opacity (0..1). Outline stroke stays at annotation.opacity. */
+  fillOpacity?: number;
   strokeWidth: number;
   /** False = fill-only shape with no outline stroke (ignored by line/arrow). */
   outline?: boolean;
@@ -176,10 +178,19 @@ export interface RedactionAnnotation extends BaseAnnotation {
 
 export interface StickyNoteStroke {
   id: string;
+  tool?: 'pen' | 'highlighter';
   points: StrokePoint[];
   color: string;
   strokeWidth: number;
   opacity?: number;
+  pressureEnabled?: boolean;
+  pressureCurve?: 'linear' | 'soft' | 'firm' | 'exponential';
+  pressureStrength?: 'light' | 'balanced' | 'strong';
+  strokeSmoothing?: 'none' | 'subtle' | 'medium' | 'high' | 'light' | 'heavy';
+  smoothing?: 'none' | 'subtle' | 'medium' | 'high' | 'light' | 'heavy';
+  blendMode?: 'multiply' | 'source-over';
+  tipShape?: 'chisel' | 'round';
+  straightLine?: boolean;
 }
 
 export interface StickyNoteAnnotation extends BaseAnnotation {
@@ -202,8 +213,10 @@ export interface StickyNoteAnnotation extends BaseAnnotation {
   collapsed: boolean;
   /** Preserved full card dimensions while collapsed so expanding restores exact size. */
   expandedBox?: BoundingBox;
-  /** Freehand pen strokes drawn inside the sticky note card (in page coordinates). */
+  /** Freehand pen & highlighter strokes drawn inside the sticky note card (in page coordinates). */
   strokes: StickyNoteStroke[];
+  /** Embedded shapes & text annotations drawn inside the sticky note board (in page coordinates). */
+  items?: Annotation[];
 }
 
 export type Annotation =
@@ -343,6 +356,7 @@ export interface PageClipboard {
 }
 
 export type DrawingCursorType = 'pen' | 'dot' | 'circle' | 'crosshair';
+export type EraserCursorType = 'circle' | 'dot' | 'crosshair' | 'eraser';
 
 export type ToolbarDock = 'top' | 'bottom' | 'left' | 'right';
 
@@ -389,8 +403,10 @@ export interface ToolSettings {
   highlighterCursor: 'rectangle' | 'chisel' | 'circle' | 'crosshair' | 'dot';
   eraserMode: EraserMode;
   eraserWidth: number;
+  eraserCursor?: EraserCursorType;
   shapeColor: string;
   shapeFillColor: string;
+  shapeFillOpacity: number;
   shapeWidth: number;
   shapeOutline: boolean;
   shapeStyle: 'solid' | 'dashed' | 'dotted';

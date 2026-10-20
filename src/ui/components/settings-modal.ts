@@ -460,25 +460,6 @@ export class SettingsModalComponent {
               <span class="setting-slider"></span>
             </label>
           </div>
-
-          <!-- Drawing Cursor Style -->
-          <div class="prop-group">
-            <span class="prop-label">Drawing Cursor Style</span>
-            <div class="settings-grid is-quad">
-              <button class="secondary-btn ${(tools.drawingCursor || 'pen') === 'pen' ? 'is-selected' : ''}" data-set-cursor="pen">
-                Pen
-              </button>
-              <button class="secondary-btn ${tools.drawingCursor === 'dot' ? 'is-selected' : ''}" data-set-cursor="dot">
-                Dot
-              </button>
-              <button class="secondary-btn ${tools.drawingCursor === 'circle' ? 'is-selected' : ''}" data-set-cursor="circle">
-                Circle
-              </button>
-              <button class="secondary-btn ${tools.drawingCursor === 'crosshair' ? 'is-selected' : ''}" data-set-cursor="crosshair">
-                Crosshair
-              </button>
-            </div>
-          </div>
         </div>
       `;
     }
@@ -873,16 +854,6 @@ export class SettingsModalComponent {
     const invertedEraserToggle = this._container.querySelector<HTMLInputElement>('#inverted-eraser-toggle');
     invertedEraserToggle?.addEventListener('change', () => {
       store.updateToolSettings({ stylusInvertedEraserEnabled: invertedEraserToggle.checked });
-    });
-
-    // Drawing cursor style buttons
-    this._container.querySelectorAll('[data-set-cursor]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const cursor = btn.getAttribute('data-set-cursor') as any;
-        if (cursor) {
-          store.updateToolSettings({ drawingCursor: cursor });
-        }
-      });
     });
 
     // View mode select

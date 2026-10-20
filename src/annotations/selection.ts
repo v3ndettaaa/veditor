@@ -64,6 +64,9 @@ export function offsetAnnotation<T extends Annotation>(ann: T, dx: number, dy: n
       points: Array.isArray(s.points) ? s.points.map(shift) : []
     }));
   }
+  if (Array.isArray(value.items)) {
+    value.items = value.items.map((item: Annotation) => offsetAnnotation(item, dx, dy));
+  }
   return next;
 }
 
@@ -189,6 +192,9 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
             : []
         }));
       }
+      if (Array.isArray(a.items)) {
+        next.items = a.items.map((item: Annotation) => offsetAnnotation(item, shiftX, shiftY));
+      }
     } else {
       next.box.width = Math.max(120, next.box.width);
       next.box.height = Math.max(100, next.box.height);
@@ -198,6 +204,9 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
           strokeWidth: Math.max(0.5, (s.strokeWidth || 2) * meanScale),
           points: Array.isArray(s.points) ? s.points.map(mapPt) : []
         }));
+      }
+      if (Array.isArray(a.items)) {
+        next.items = a.items.map((item: Annotation) => transformAnnotation(item, t));
       }
     }
   }

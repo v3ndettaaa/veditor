@@ -109,6 +109,9 @@ export function fillLineRibbon(ctx: CanvasRenderingContext2D, x1: number, y1: nu
   const nx = -dy / len * width / 2;
   const ny = dx / len * width / 2;
 
+  const prevFill = ctx.fillStyle;
+  ctx.fillStyle = ctx.strokeStyle;
+
   ctx.beginPath();
   ctx.moveTo(x1 + nx, y1 + ny);
   ctx.lineTo(x2 + nx, y2 + ny);
@@ -124,6 +127,8 @@ export function fillLineRibbon(ctx: CanvasRenderingContext2D, x1: number, y1: nu
   ctx.beginPath();
   ctx.arc(x2, y2, width / 2, Math.atan2(-ny, -nx), Math.atan2(ny, nx));
   ctx.fill();
+
+  ctx.fillStyle = prevFill;
 }
 
 export function isPointInBox(p: Point, box: BoundingBox): boolean {
