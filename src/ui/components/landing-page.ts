@@ -93,9 +93,11 @@ export class LandingPageComponent {
    * when folders, search queries, or recent files are updated.
    */
   private ensureShellMounted(): void {
-    if (this._container.querySelector('.landing-container')) {
+    const host = this._container as HTMLElement & { __landingInstance?: LandingPageComponent };
+    if (host.__landingInstance === this && this._container.querySelector('.landing-container')) {
       return;
     }
+    host.__landingInstance = this;
 
     this._container.innerHTML = `
       <div class="landing-container">
@@ -366,6 +368,17 @@ export class LandingPageComponent {
       `;
 
       this.bindLibraryChromeEvents(libraryBody);
+    } else {
+      // Keep view toggle buttons and sort dropdown synced with current state
+      libraryBody.querySelectorAll<HTMLButtonElement>('[data-library-view]').forEach(b => {
+        const active = b.getAttribute('data-library-view') === this._viewMode;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-pressed', String(active));
+      });
+      const sortSelect = libraryBody.querySelector<HTMLSelectElement>('#library-sort-select');
+      if (sortSelect && sortSelect.value !== this._sortBy) {
+        sortSelect.value = this._sortBy;
+      }
     }
 
     this.renderFolderTabs(libraryBody);
@@ -757,9 +770,11 @@ export class LandingPageComponent {
     });
 
     libraryBody.querySelectorAll<HTMLButtonElement>('[data-library-view]').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         const mode = btn.getAttribute('data-library-view') as LibraryViewMode;
-        if ((mode === 'grid' || mode === 'list') && mode !== this._viewMode) {
+        if (mode === 'grid' || mode === 'list') {
           this._viewMode = mode;
           this.savePreferences();
           libraryBody.querySelectorAll<HTMLButtonElement>('[data-library-view]').forEach(b => {

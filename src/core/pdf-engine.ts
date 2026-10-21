@@ -650,8 +650,13 @@ export class PDFEngine {
         }
       }
 
-      // PIPE_3 VRAM POOL OOM GUARD: Cap active bitmap cache to 2 pages max.
-      while (this._renderedBitmaps.size >= 2 && !this._renderedBitmaps.has(exactKey)) {
+      // Scale bitmap cache pool with the user's configured Off-screen Page Preload Buffer
+      // so pre-rendered pages stay hot in memory and blit in <1ms when scrolling.
+      const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
+      const maxCachedBitmaps = store.zoom > 2.4
+        ? Math.max(4, bufferPages + 2)
+        : Math.max(6, bufferPages * 2 + 3);
+      while (this._renderedBitmaps.size >= maxCachedBitmaps && !this._renderedBitmaps.has(exactKey)) {
         const oldestKey = this._renderedBitmaps.keys().next().value;
         if (oldestKey === undefined) break;
         const entry = this._renderedBitmaps.get(oldestKey);

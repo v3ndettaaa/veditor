@@ -922,6 +922,7 @@ export class SettingsModalComponent {
     const preloadSelect = this._container.querySelector<HTMLSelectElement>('#preload-select');
     preloadSelect?.addEventListener('change', () => {
       store.updateAppSettings({ maxRenderBufferPages: parseInt(preloadSelect.value, 10) });
+      viewportManager.handleScroll(true);
     });
 
     // Autosave select

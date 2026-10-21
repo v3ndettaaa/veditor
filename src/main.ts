@@ -281,6 +281,8 @@ class VeditorApp {
     this.renderEmptyState();
   }
 
+  private _landingPage: LandingPageComponent | null = null;
+
   private renderEmptyState() {
     if (store.activeDocument) {
       this._emptyStateView.style.display = 'none';
@@ -288,32 +290,34 @@ class VeditorApp {
     }
 
     this._emptyStateView.style.display = 'flex';
-    const landing = new LandingPageComponent(this._emptyStateView, {
-      onOpenFile: () => {
-        void this.requestOpenFile();
-      },
-      onOpenBytes: async (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => {
-        await this.loadPDF(name, bytes, undefined, notebook);
-      },
-      onOpenRecent: async (docId: string) => {
-        if (store.openDocuments.has(docId)) {
-          store.switchDocumentTab(docId);
-          return;
+    if (!this._landingPage) {
+      this._landingPage = new LandingPageComponent(this._emptyStateView, {
+        onOpenFile: () => {
+          void this.requestOpenFile();
+        },
+        onOpenBytes: async (name: string, bytes: Uint8Array, notebook?: NotebookSpec) => {
+          await this.loadPDF(name, bytes, undefined, notebook);
+        },
+        onOpenRecent: async (docId: string) => {
+          if (store.openDocuments.has(docId)) {
+            store.switchDocumentTab(docId);
+            return;
+          }
+          const session = await getDocumentSession(docId);
+          if (session && session.fileData) {
+            // Carry the notebook spec + last-viewed position so reopening
+            // restores where the user left off instead of page 1.
+            await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+              activePageIndex: session.activePageIndex || 0,
+              savedScrollTop: session.savedScrollTop,
+              savedScrollLeft: session.savedScrollLeft,
+              annotations: session.annotations
+            });
+          }
         }
-        const session = await getDocumentSession(docId);
-        if (session && session.fileData) {
-          // Carry the notebook spec + last-viewed position so reopening
-          // restores where the user left off instead of page 1.
-          await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
-            activePageIndex: session.activePageIndex || 0,
-            savedScrollTop: session.savedScrollTop,
-            savedScrollLeft: session.savedScrollLeft,
-            annotations: session.annotations
-          });
-        }
-      }
-    });
-    landing.render();
+      });
+    }
+    void this._landingPage.render();
   }
 
   /**
@@ -1398,8 +1402,8 @@ class VeditorApp {
 
     // Refresh High-DPI Viewport Chunk when panning/scrolling at high zoom:
     // deadzone hysteresis avoids reallocating or repainting chunks while the
-    // visible screen stays inside the padded chunk window, and fast-scroll
-    // detection pauses heavy rasterization for intermediate pages flying by.
+    // visible screen stays inside the padded chunk window, and extreme fast-scroll
+    // detection pauses off-screen chunk rasterization only during rapid scrollbar drags.
     this._scrollContainer.addEventListener('scroll', () => {
       if (!this._isZoomGestureActive && store.activeDocument) {
         const now = performance.now();
@@ -1411,7 +1415,8 @@ class VeditorApp {
         this._lastScrollLeft = sl;
         this._lastScrollTime = now;
 
-        if (dist > 110 || (dt < 80 && dist / dt > 2.2)) {
+        // Only flag extreme velocity (e.g. dragging the scrollbar thumb across many pages)
+        if (dist > 650 || (dt < 50 && dist / dt > 8.5)) {
           this._isFastScrolling = true;
           if (this._fastScrollTimer !== null) {
             window.clearTimeout(this._fastScrollTimer);
@@ -1423,10 +1428,10 @@ class VeditorApp {
               viewportManager.handleScroll(true);
               this.updateVisiblePageChunks(true, false);
             }
-          }, 110);
+          }, 90);
         } else if (!this._isFastScrolling) {
           this.updateVisiblePageChunks(false, false);
-          this.scheduleChunkUpdate(85);
+          this.scheduleChunkUpdate(75);
         }
       }
     }, { passive: true });
@@ -1461,7 +1466,10 @@ class VeditorApp {
   }
 
   /**
-   * Virtualization: Mounts and renders only visible pages into the scroll container.
+   * Virtualization: Mounts and renders visible + preload buffer pages into the scroll container.
+   * On-screen pages are rendered first with immediate priority, followed by preload buffer pages
+   * (`store.appSettings.maxRenderBufferPages`: 1, 3, or 5 pages ahead/behind) so scrolling never
+   * reveals a blank white page.
    */
   private async renderVisiblePages(visibleIndices: number[]) {
     // During a tab-switch rebuild the layout is torn down; mounting now would
@@ -1472,12 +1480,12 @@ class VeditorApp {
     if (!doc) return;
     const docId = doc.id;
 
-    // PIPE_4: Cancel in-flight render tasks for pages outside visible window
+    // PIPE_4: Cancel in-flight render tasks for pages outside the visible + preload window
     pdfEngine.cancelOutdatedRenderTasks(new Set(visibleIndices));
 
-    // PIPE_3: VRAM Pool OOM Guard - Evict pages outside the visible window
-    // At high zoom (> 1.8x), evict immediately (maxKeepDistance = 0) to protect VRAM.
-    const maxKeepDistance = store.zoom > 1.8 ? 0 : 1;
+    // PIPE_3: VRAM Pool Guard - Retain pages within the preload window + 1 warm margin
+    const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
+    const maxKeepDistance = store.zoom > 2.4 ? 1 : Math.max(1, Math.min(3, Math.ceil(bufferPages / 2)));
     for (const [pageIndex, p] of this._renderedPages) {
       if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
       let minDistance = Infinity;
@@ -1512,11 +1520,9 @@ class VeditorApp {
 
     const docStillCurrent = () => store.activeDocument?.id === docId && !store.isDocSwitching;
     const visibleSet = new Set(visibleIndices);
+    const onScreenSet = viewportManager.getOnScreenPages();
 
-    // 2. Mount: create the DOM for visible pages that have no element yet.
-    // Geometry, rasterising and repaints all happen in later passes so that
-    // *every* mounted page — visible or merely retained in the warm window —
-    // is reconciled against the same layout.
+    // 2. Mount: create the DOM for visible + preload pages that have no element yet.
     for (const pageIndex of visibleIndices) {
       if (!docStillCurrent()) return;
       if (!viewportManager.getLayout(pageIndex)) continue;
@@ -1592,15 +1598,11 @@ class VeditorApp {
       }
     }
 
-    // 3. Geometry pass over EVERY mounted page. Retained pages outside the
-    // visible set are still positioned and sized here; leaving them at the
-    // previous zoom's top/size is what painted stale pages on top of the
-    // corrected ones after a zoom ("everything mixes together").
+    // 3. Geometry pass over EVERY mounted page.
     for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
       if (!docStillCurrent()) return;
       const layout = viewportManager.getLayout(pageIndex);
       if (!layout) {
-        // Page no longer exists in the layout (deleted by a page operation).
         pdfEngine.cancelPageRender(pageIndex);
         if (p.container.parentNode === this._pagesWrapper) {
           this._pagesWrapper.removeChild(p.container);
@@ -1617,7 +1619,6 @@ class VeditorApp {
     if (this._isZoomGestureActive) {
       for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
         if (!docStillCurrent()) return;
-        // Only paint newly mounted pages that had no prior bitmap at all
         if (p.needsRepaint) {
           p.needsRepaint = false;
           this.repaintPageAnnotations(pageIndex, p);
@@ -1632,32 +1633,52 @@ class VeditorApp {
     }
 
     // Update High-DPI Viewport Chunks synchronously right in the layout/render pass
-    // (unless fast-scrolling across pages, which settles after 110ms).
     if (!this._isFastScrolling) {
       this.updateVisiblePageChunks(true, false);
     }
 
-    // 4. Render pass: rasterise and repaint. Visible pages always repaint;
-    // pages whose backing stores were just resized repaint exactly once, and
-    // the PDF raster is only regenerated for a page that is on screen.
+    // 4a. Tier 1 Priority Render: Pages currently on-screen ALWAYS rasterize and
+    // repaint immediately on every scroll frame (never blocked by _isFastScrolling).
+    for (const pageIndex of visibleIndices) {
+      if (!docStillCurrent()) return;
+      if (!onScreenSet.has(pageIndex)) continue;
+      const p = this._renderedPages.get(pageIndex);
+      if (!p) continue;
+
+      if (p.needsRaster) {
+        p.needsRaster = false;
+        const rot = store.pageRotations[pageIndex] || 0;
+        void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+      }
+      p.needsRepaint = false;
+      this.repaintPageAnnotations(pageIndex, p);
+    }
+
+    // 4b. Tier 2 Preload Buffer Render: Pages in the preload window (1, 3, or 5 pages
+    // ahead/behind) render right after on-screen pages so they are already painted
+    // before the user scrolls to them.
+    for (const pageIndex of visibleIndices) {
+      if (!docStillCurrent()) return;
+      if (onScreenSet.has(pageIndex)) continue;
+      const p = this._renderedPages.get(pageIndex);
+      if (!p) continue;
+
+      if (p.needsRaster && (!this._isFastScrolling || pdfEngine.hasCachedBitmap(pageIndex))) {
+        p.needsRaster = false;
+        const rot = store.pageRotations[pageIndex] || 0;
+        void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+      }
+      if (p.needsRepaint && !this._isFastScrolling) {
+        p.needsRepaint = false;
+        this.repaintPageAnnotations(pageIndex, p);
+      }
+    }
+
+    // 4c. Any remaining retained warm pages whose backing store was resized
     for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
       if (!docStillCurrent()) return;
-      const isVisible = visibleSet.has(pageIndex);
-
-      if (isVisible) {
-        // During rapid flick-scrolling, skip starting brand-new PDF.js renders
-        // for intermediate pages that aren't already cached; the 110ms settle
-        // timer will render the destination pages as soon as scroll decelerates.
-        if (p.needsRaster && (!this._isFastScrolling || pdfEngine.hasCachedBitmap(pageIndex))) {
-          p.needsRaster = false;
-          const rot = store.pageRotations[pageIndex] || 0;
-          void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
-        }
-        if (!this._isFastScrolling) {
-          p.needsRepaint = false;
-          this.repaintPageAnnotations(pageIndex, p);
-        }
-      } else if (p.needsRepaint && !this._isFastScrolling) {
+      if (visibleSet.has(pageIndex)) continue;
+      if (p.needsRepaint && !this._isFastScrolling) {
         p.needsRepaint = false;
         this.repaintPageAnnotations(pageIndex, p);
       }

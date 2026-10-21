@@ -34,6 +34,7 @@ export class ViewportManager {
   private _scrollContainer: HTMLElement | null = null;
   private _pagesWrapper: HTMLElement | null = null;
   private _visiblePages: Set<number> = new Set();
+  private _onScreenPages: Set<number> = new Set();
   private _pageLayouts: ViewportPageRect[] = [];
   private _onVisiblePagesChange: ((visibleIndices: number[]) => void) | null = null;
   private _previewScale: number = 1;
@@ -97,7 +98,13 @@ export class ViewportManager {
   /** Drops visible-set tracking (tab switch / mode change needs a clean pass). */
   public clearVisible(): void {
     this._visiblePages.clear();
+    this._onScreenPages.clear();
     this._zoomAnchor = null;
+  }
+
+  /** Pages directly intersecting the user's visible viewport (highest render priority). */
+  public getOnScreenPages(): ReadonlySet<number> {
+    return this._onScreenPages;
   }
 
   /**
@@ -113,6 +120,7 @@ export class ViewportManager {
       }
       this._pageLayouts = [];
       this._visiblePages.clear();
+      this._onScreenPages.clear();
       this._previewScale = 1;
       this._zoomAnchor = null;
       this._pagesWrapper.style.width = '';
@@ -233,7 +241,9 @@ export class ViewportManager {
   }
 
   /**
-   * Virtualization check on scroll: renders only pages intersecting the viewport + 1 buffer page.
+   * Virtualization check on scroll: identifies pages currently on-screen
+   * plus `store.appSettings.maxRenderBufferPages` (1, 3, or 5) preload pages
+   * ahead and behind so scrolling into adjacent pages is instantaneous.
    */
   public handleScroll(force = false) {
     if (!this._scrollContainer || this._pageLayouts.length === 0) return;
@@ -242,18 +252,33 @@ export class ViewportManager {
     const rawTop = this._scrollContainer.scrollTop;
     const scrollTop = rawTop / this._previewScale;
     const viewH = this._scrollContainer.clientHeight / this._previewScale;
-    const buffer = store.zoom > 1.8
-      ? Math.min(viewH * 0.25, 220)
-      : Math.min(viewH * 0.55, 480); // Tight preload buffer ahead and behind to protect VRAM
+    const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
 
+    // Immediate on-screen window (plus 140px lead-in so a page edge entering view is already hot)
+    const onScreenMargin = 140;
+    const newOnScreen = new Set<number>();
     const newVisible = new Set<number>();
     let centerPage = 0;
     let minDistanceToCenter = Infinity;
     const viewportCenterY = scrollTop + viewH / 2;
 
+    // Pixel lookahead proportional to configured preload buffer pages
+    const firstPageH = this._pageLayouts[0]?.height || viewH || 800;
+    const preloadPx = store.zoom > 2.4
+      ? Math.max(viewH * 0.65, firstPageH * Math.min(2, bufferPages * 0.65))
+      : Math.max(viewH * bufferPages * 0.85, firstPageH * bufferPages);
+
+    let minOnScreenIdx = Infinity;
+    let maxOnScreenIdx = -Infinity;
+
     for (const layout of this._pageLayouts) {
       const pageBottom = layout.top + layout.height;
-      if (pageBottom >= scrollTop - buffer && layout.top <= scrollTop + viewH + buffer) {
+      if (pageBottom >= scrollTop - onScreenMargin && layout.top <= scrollTop + viewH + onScreenMargin) {
+        newOnScreen.add(layout.pageIndex);
+        newVisible.add(layout.pageIndex);
+        if (layout.pageIndex < minOnScreenIdx) minOnScreenIdx = layout.pageIndex;
+        if (layout.pageIndex > maxOnScreenIdx) maxOnScreenIdx = layout.pageIndex;
+      } else if (pageBottom >= scrollTop - preloadPx && layout.top <= scrollTop + viewH + preloadPx) {
         newVisible.add(layout.pageIndex);
       }
 
@@ -264,6 +289,35 @@ export class ViewportManager {
         centerPage = layout.pageIndex;
       }
     }
+
+    if (newOnScreen.size === 0) {
+      newOnScreen.add(centerPage);
+      newVisible.add(centerPage);
+      minOnScreenIdx = centerPage;
+      maxOnScreenIdx = centerPage;
+    }
+
+    // Guarantee exact N-page count preload ahead and behind in continuous / two-page layouts
+    if (store.viewMode !== 'single' && Number.isFinite(minOnScreenIdx) && Number.isFinite(maxOnScreenIdx)) {
+      const maxExistingPage = this._pageLayouts[this._pageLayouts.length - 1]?.pageIndex ?? 0;
+      const maxIndexRadius = store.zoom > 2.4 ? Math.min(2, bufferPages) : bufferPages;
+      const startPreload = Math.max(0, minOnScreenIdx - maxIndexRadius);
+      const endPreload = Math.min(maxExistingPage, maxOnScreenIdx + maxIndexRadius);
+      for (const layout of this._pageLayouts) {
+        if (layout.pageIndex >= startPreload && layout.pageIndex <= endPreload) {
+          newVisible.add(layout.pageIndex);
+        }
+      }
+    }
+
+    // Order visibleIndices so on-screen pages come FIRST (sorted by distance to viewport center),
+    // followed by preload buffer pages sorted by proximity to the viewport center.
+    const sortedVisible = Array.from(newVisible).sort((a, b) => {
+      const aOn = newOnScreen.has(a) ? 0 : 1;
+      const bOn = newOnScreen.has(b) ? 0 : 1;
+      if (aOn !== bOn) return aOn - bOn;
+      return Math.abs(a - centerPage) - Math.abs(b - centerPage);
+    });
 
     // During a focal-anchored zoom step the scroll correction lands after the
     // layout pass; the intermediate pass must not mount, persist, or page-flip.
@@ -284,8 +338,8 @@ export class ViewportManager {
       store.setActivePageIndex(centerPage);
     }
 
-    // Check if visible set changed
-    let changed = newVisible.size !== this._visiblePages.size;
+    // Check if visible or on-screen set changed
+    let changed = newVisible.size !== this._visiblePages.size || newOnScreen.size !== this._onScreenPages.size;
     if (!changed) {
       for (const idx of newVisible) {
         if (!this._visiblePages.has(idx)) {
@@ -294,10 +348,19 @@ export class ViewportManager {
         }
       }
     }
+    if (!changed) {
+      for (const idx of newOnScreen) {
+        if (!this._onScreenPages.has(idx)) {
+          changed = true;
+          break;
+        }
+      }
+    }
 
+    this._onScreenPages = newOnScreen;
     if (changed || force) {
-      this._visiblePages = newVisible;
-      this._onVisiblePagesChange?.(Array.from(newVisible));
+      this._visiblePages = new Set(sortedVisible);
+      this._onVisiblePagesChange?.(sortedVisible);
     }
   }
 
