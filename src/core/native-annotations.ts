@@ -96,7 +96,7 @@ function validModel(value: unknown): value is NativeAnnotation {
     const specific = value.type === 'text'
       ? ['text', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'color', 'backgroundColor', 'borderColor', 'textAlign', 'padding']
       : value.type === 'sticky-note'
-        ? ['text', 'author', 'color', 'textColor', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'listStyle', 'textAlign', 'collapsed', 'expandedBox', 'strokes', 'items']
+        ? ['text', 'author', 'color', 'textColor', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'listStyle', 'textAlign', 'collapsed', 'iconWidth', 'iconHeight', 'anchorX', 'anchorY', 'expandedBox', 'strokes', 'items']
         : value.type === 'highlighter'
           ? ['points', 'quadPoints', 'color', 'strokeWidth', 'straightLine', 'tipShape']
           : value.type === 'stamp'

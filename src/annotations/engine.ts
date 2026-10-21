@@ -312,6 +312,8 @@ export class AnnotationEngine {
         b.width / 2,
         b.height / 2
       ));
+      ctx.lineJoin = radius === 0 ? 'miter' : 'round';
+      ctx.miterLimit = 4;
       ctx.beginPath();
       if (radius > 0) {
         // `roundRect` is not available in older extension WebViews.
@@ -383,10 +385,12 @@ export class AnnotationEngine {
       }
     } else if (ann.points && ann.points.length > 1) {
       // Polygons and recognized freeform shapes get filleted corners so they
-      // match the rounded look of rectangles; legacy square corners stay
-      // available through cornerRadius: 0.
+      // match the rounded look of rectangles; square corners stay available
+      // through cornerRadius: 0.
       const closed = ann.type === 'freeform-shape' || ann.type === 'polygon';
-      const radius = Number.isFinite(ann.cornerRadius) ? ann.cornerRadius : SHAPE_CORNER_RADIUS;
+      const radius = Math.max(0, Number.isFinite(ann.cornerRadius) ? ann.cornerRadius : SHAPE_CORNER_RADIUS);
+      ctx.lineJoin = radius === 0 ? 'miter' : 'round';
+      ctx.miterLimit = 4;
       ctx.beginPath();
       traceRoundedPolygon(ctx, ann.points, radius, closed);
       fillInterior();

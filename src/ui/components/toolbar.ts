@@ -808,10 +808,6 @@ export class ToolbarComponent {
                      style="width:168px; height:60px; border-radius:8px; background:${s.noteColor || '#ebd09e'}; border:1.5px solid rgba(59,47,30,0.22); padding:6px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 3px 10px rgba(0,0,0,0.16);">
                   <span class="gn-note-preview-text"
                         style="color:${s.noteTextColor || '#3b2f1e'}; font-family:${s.fontFamily || 'Inter'}; font-size:${Math.min(18, Math.max(11, Math.round((s.noteFontSize || 24) * 0.65)))}px; font-weight:500; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
-                  <span class="gn-note-preview-author"
-                        style="color:${s.noteTextColor || '#3b2f1e'}; opacity:0.65; font-size:10px; font-weight:500;">
-                    ${(s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh') || ' '}
-                  </span>
                 </div>
               </div>
 
@@ -866,19 +862,6 @@ export class ToolbarComponent {
                   <input type="range" id="hover-note-fontsize-slider" class="gn-range-slider"
                          min="10" max="72" step="1" value="${s.noteFontSize || 24}"
                          style="--slider-pct:${sliderPercent(s.noteFontSize || 24, 10, 72)}%" aria-label="Note font size slider">
-                </div>
-              </div>
-
-              <div class="gn-divider"></div>
-
-              <!-- Author Signature Label -->
-              <div class="gn-section">
-                <div class="gn-section-header" style="gap:8px;">
-                  <span class="gn-section-label">Author Signature</span>
-                  <input type="text" id="hover-note-author-input" class="hex-type-input"
-                         style="width:118px; text-align:left; font-family:var(--font-en);"
-                         value="${s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh'}"
-                         placeholder="Author name" maxlength="40" aria-label="Note author signature">
                 </div>
               </div>
             </div>
@@ -1240,6 +1223,7 @@ export class ToolbarComponent {
     const fillCol = s.shapeFillColor === 'transparent' ? 'none' : s.shapeFillColor;
     const previewSw = shapePreviewStrokeWidth(s.shapeWidth);
 
+    const cornerRad = Math.max(0, Math.round(s.shapeCornerRadius ?? 0));
     this._container.querySelectorAll<SVGElement>('.gn-shape-preview-el').forEach(el => {
       const kind = el.getAttribute('data-preview-shape');
       if (kind === 'line' || kind === 'arrow') {
@@ -1249,9 +1233,12 @@ export class ToolbarComponent {
         el.setAttribute('fill', fillCol);
         el.setAttribute('fill-opacity', String(s.shapeFillOpacity ?? 1));
       }
+      if (kind === 'rectangle') {
+        el.setAttribute('rx', String(Math.min(20, cornerRad)));
+      }
       el.setAttribute('stroke-width', String(previewSw));
       el.setAttribute('stroke-linecap', 'round');
-      el.setAttribute('stroke-linejoin', 'round');
+      el.setAttribute('stroke-linejoin', (kind === 'rectangle' || kind === 'polygon') && cornerRad === 0 ? 'miter' : 'round');
       if (dashArr === 'none') el.removeAttribute('stroke-dasharray');
       else el.setAttribute('stroke-dasharray', dashArr);
     });
@@ -1339,6 +1326,15 @@ export class ToolbarComponent {
       if (document.activeElement !== el && el.value !== String(fillOpPct)) el.value = String(fillOpPct);
     });
 
+    this._container.querySelectorAll<HTMLInputElement>('.shape-corner-radius-slider').forEach(slider => {
+      if (document.activeElement !== slider) slider.value = String(cornerRad);
+      slider.style.setProperty('--slider-pct', `${sliderPercent(cornerRad, 0, 48)}%`);
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-corner-radius-input').forEach(el => {
+      if (document.activeElement !== el && el.value !== String(cornerRad)) el.value = String(cornerRad);
+    });
+
     // 5. Text Indicators + Live Typography Preview
     const textDot = this._container.querySelector<HTMLElement>('.text-dot');
     if (textDot) textDot.style.backgroundColor = s.textColor;
@@ -1390,7 +1386,7 @@ export class ToolbarComponent {
     const noteCol = s.noteColor || '#ebd09e';
     const noteTxtCol = s.noteTextColor || '#3b2f1e';
     const noteFs = s.noteFontSize || 24;
-    const noteAuth = s.noteAuthor !== undefined ? s.noteAuthor : 'Kia Gh';
+    const noteAuth = s.noteAuthor || '';
 
     const noteDot = this._container.querySelector<HTMLElement>('.note-dot');
     if (noteDot) noteDot.style.backgroundColor = noteCol;
@@ -1505,12 +1501,15 @@ export class ToolbarComponent {
     const dash = shapeDashArray(s.shapeStyle || 'solid', s.shapeWidth);
     const dashAttr = dash === 'none' ? '' : `stroke-dasharray="${dash}"`;
 
+    const cornerRad = Math.max(0, Math.round(s.shapeCornerRadius ?? 0));
+    const joinAttr = cornerRad === 0 ? 'miter' : 'round';
+
     if (shapeType === 'rectangle') {
       return `
         <svg class="gn-preview-svg" viewBox="0 0 260 66" fill="none" aria-hidden="true">
           <rect class="gn-shape-preview-el" data-preview-shape="rectangle"
-                x="68" y="13" width="124" height="40" rx="5"
-                stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" ${dashAttr}/>
+                x="68" y="13" width="124" height="40" rx="${Math.min(20, cornerRad)}"
+                stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="${joinAttr}" ${dashAttr}/>
         </svg>
       `;
     }
@@ -1548,7 +1547,7 @@ export class ToolbarComponent {
       <svg class="gn-preview-svg" viewBox="0 0 260 66" fill="none" aria-hidden="true">
         <polygon class="gn-shape-preview-el" data-preview-shape="polygon"
                  points="130,10 184,26 164,55 96,55 76,26"
-                 stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" ${dashAttr}/>
+                 stroke="${strokeCol}" fill="${fillCol}" fill-opacity="${fillOp}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="${joinAttr}" ${dashAttr}/>
       </svg>
     `;
   }
@@ -1557,6 +1556,8 @@ export class ToolbarComponent {
     const shapeColors = ['#ef4444', '#3b82f6', '#10b981', '#000000', '#ffffff', '#f59e0b', '#8b5cf6'];
     const strokeWidths = [1, 2, 4, 8];
     const hasClosedArea = shapeType === 'rectangle' || shapeType === 'ellipse' || shapeType === 'polygon' || shapeType === 'freeform-shape';
+    const hasCorners = shapeType === 'rectangle' || shapeType === 'polygon' || shapeType === 'freeform-shape';
+    const cornerRad = Math.max(0, Math.round(s.shapeCornerRadius ?? 0));
     const fillOpPct = Math.round((s.shapeFillOpacity ?? 1) * 100);
     const isSegment = SEGMENT_TOOLS.includes(shapeType as ToolType);
     const titleLabel = TOOL_SHORT_LABELS[shapeType] || shapeType;
@@ -1619,6 +1620,27 @@ export class ToolbarComponent {
                  style="--slider-pct:${sliderPercent(s.shapeWidth, 0.5, 40)}%" aria-label="Shape stroke width slider">
         </div>
       </div>
+
+      ${hasCorners ? `
+        <div class="gn-divider"></div>
+        <div class="gn-section">
+          <div class="gn-section-header">
+            <span class="gn-section-label">Corner Radius</span>
+            <div class="gn-size-header-controls">
+              <div class="gn-num-badge">
+                <input type="number" class="size-readout size-type-input shape-corner-radius-input"
+                       min="0" max="48" step="1" value="${cornerRad}" title="Corner radius (0 = sharp, up to 48px)" aria-label="Shape corner radius">
+                <span class="gn-unit">px</span>
+              </div>
+            </div>
+          </div>
+          <div class="gn-slider-wrap">
+            <input type="range" class="gn-range-slider shape-corner-radius-slider"
+                   min="0" max="48" step="1" value="${cornerRad}"
+                   style="--slider-pct:${sliderPercent(cornerRad, 0, 48)}%" aria-label="Shape corner radius slider">
+          </div>
+        </div>
+      ` : ''}
 
       <div class="gn-divider"></div>
 
@@ -2014,6 +2036,15 @@ export class ToolbarComponent {
       }
     });
 
+    bindTyped('.shape-corner-radius-input', (el) => {
+      const r = Math.round(clampTypedNumber(el.value, 0, 48, store.toolSettings.shapeCornerRadius ?? 0));
+      if (r !== (store.toolSettings.shapeCornerRadius ?? 0)) {
+        applyShapeCornerRadius(r);
+      } else {
+        el.value = String(r);
+      }
+    });
+
     bindTyped('#hover-font-size-input', (el) => {
       const sz = Math.round(clampTypedNumber(el.value, 6, 144, store.toolSettings.fontSize));
       if (sz !== store.toolSettings.fontSize) {
@@ -2179,6 +2210,29 @@ export class ToolbarComponent {
       }
     };
 
+    const applyShapeCornerRadius = (radius: number) => {
+      const clamped = Math.max(0, Math.min(48, Math.round(radius)));
+      store.updateToolSettings({ shapeCornerRadius: clamped });
+      this.updateIndicators();
+
+      const doc = store.activeDocument;
+      if (doc && store.selectedAnnotationIds.size > 0) {
+        for (const pageIdx in doc.annotations) {
+          doc.annotations[pageIdx].forEach(ann => {
+            if (
+              store.selectedAnnotationIds.has(ann.id) &&
+              (ann.type === 'rectangle' || ann.type === 'polygon' || ann.type === 'freeform-shape')
+            ) {
+              const prev = { ...ann };
+              const next = { ...ann, cornerRadius: clamped };
+              history.execute(new ModifyAnnotationCommand(parseInt(pageIdx, 10), prev, next));
+            }
+          });
+        }
+        store.setActivePageIndex(store.activePageIndex);
+      }
+    };
+
     this._container.querySelectorAll('[data-shape-color]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2209,6 +2263,16 @@ export class ToolbarComponent {
         e.stopPropagation();
         const w = parseFloat((e.target as HTMLInputElement).value || '2');
         applyShapeWidth(w);
+      });
+    });
+
+    this._container.querySelectorAll<HTMLInputElement>('.shape-corner-radius-slider').forEach(slider => {
+      slider.addEventListener('input', (e) => {
+        e.stopPropagation();
+        const r = parseFloat((e.target as HTMLInputElement).value || '0');
+        if (Number.isFinite(r)) {
+          applyShapeCornerRadius(r);
+        }
       });
     });
 

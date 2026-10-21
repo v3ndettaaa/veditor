@@ -67,6 +67,8 @@ export function offsetAnnotation<T extends Annotation>(ann: T, dx: number, dy: n
   if (Array.isArray(value.items)) {
     value.items = value.items.map((item: Annotation) => offsetAnnotation(item, dx, dy));
   }
+  if (typeof value.anchorX === 'number') value.anchorX += dx;
+  if (typeof value.anchorY === 'number') value.anchorY += dy;
   return next;
 }
 
@@ -175,8 +177,15 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   }
   if (ann.type === 'sticky-note') {
     if (ann.collapsed) {
-      const shiftX = c1.x - b.x;
-      const shiftY = c1.y - b.y;
+      const iconBox = stickyNoteTool.getCollapsedIconBox(ann);
+      const ic1 = mapPt({ x: iconBox.x, y: iconBox.y });
+      const ic2 = mapPt({ x: iconBox.x + iconBox.width, y: iconBox.y + iconBox.height });
+      const nextIconX = Math.min(ic1.x, ic2.x);
+      const nextIconY = Math.min(ic1.y, ic2.y);
+      const nextIconW = Math.max(20, Math.abs(ic2.x - ic1.x));
+      const nextIconH = Math.max(20, Math.abs(ic2.y - ic1.y));
+      const shiftX = nextIconX - b.x;
+      const shiftY = nextIconY - b.y;
       next.box = {
         x: b.x + shiftX,
         y: b.y + shiftY,
@@ -184,6 +193,10 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
         height: b.height,
         ...(b.rotation !== undefined ? { rotation: b.rotation } : {})
       };
+      next.iconWidth = nextIconW;
+      next.iconHeight = nextIconH;
+      if (typeof a.anchorX === 'number') next.anchorX = a.anchorX + shiftX;
+      if (typeof a.anchorY === 'number') next.anchorY = a.anchorY + shiftY;
       if (Array.isArray(a.strokes)) {
         next.strokes = a.strokes.map((s: any) => ({
           ...s,
@@ -198,6 +211,8 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
     } else {
       next.box.width = Math.max(120, next.box.width);
       next.box.height = Math.max(100, next.box.height);
+      if (typeof a.anchorX === 'number') next.anchorX = next.box.x;
+      if (typeof a.anchorY === 'number') next.anchorY = next.box.y;
       if (Array.isArray(a.strokes)) {
         next.strokes = a.strokes.map((s: any) => ({
           ...s,

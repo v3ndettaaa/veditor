@@ -80,6 +80,7 @@ class StateStore {
     shapeWidth: 2,
     shapeOutline: true,
     shapeStyle: 'solid',
+    shapeCornerRadius: 0,
     textColor: '#111827',
     textBgColor: 'transparent',
     fontSize: 16,
@@ -100,7 +101,7 @@ class StateStore {
     noteColor: '#ebd09e',
     noteTextColor: '#3b2f1e',
     noteFontSize: 24,
-    noteAuthor: 'Kia Gh',
+    noteAuthor: '',
     snapAngle15: {},
     connectLines: {}
   };
@@ -199,6 +200,9 @@ class StateStore {
         const savedTools = localStorage.getItem('veditor_tool_settings');
         if (savedTools) {
           this._toolSettings = { ...this._toolSettings, ...JSON.parse(savedTools) };
+          if (this._toolSettings.noteAuthor === 'Kia Gh') {
+            this._toolSettings.noteAuthor = '';
+          }
         }
         const savedApp = localStorage.getItem('veditor_app_settings');
         if (savedApp) {
@@ -516,9 +520,11 @@ class StateStore {
       eraserCursor: 'circle',
       shapeColor: '#ef4444',
       shapeFillColor: 'transparent',
+      shapeFillOpacity: 1.0,
       shapeWidth: 2,
       shapeOutline: true,
       shapeStyle: 'solid',
+      shapeCornerRadius: 0,
       textColor: '#111827',
       textBgColor: 'transparent',
       fontSize: 16,
@@ -543,7 +549,7 @@ class StateStore {
       noteColor: '#ebd09e',
       noteTextColor: '#3b2f1e',
       noteFontSize: 24,
-      noteAuthor: 'Kia Gh',
+      noteAuthor: '',
       snapAngle15: {},
       connectLines: {}
     };

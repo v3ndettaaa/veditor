@@ -191,6 +191,8 @@ export interface StickyNoteStroke {
   blendMode?: 'multiply' | 'source-over';
   tipShape?: 'chisel' | 'round';
   straightLine?: boolean;
+  /** Creation timestamp so strokes and embedded items render in chronological order. */
+  createdAt?: number;
 }
 
 export interface StickyNoteAnnotation extends BaseAnnotation {
@@ -211,6 +213,14 @@ export interface StickyNoteAnnotation extends BaseAnnotation {
   author: string;
   /** True when minimized into a compact folded-corner sticky note icon. */
   collapsed: boolean;
+  /** Independent width of the collapsed icon (defaults to 38). */
+  iconWidth?: number;
+  /** Independent height of the collapsed icon (defaults to 38). */
+  iconHeight?: number;
+  /** Preserved collapsed icon X anchor when smart-expanded near right page edge. */
+  anchorX?: number;
+  /** Preserved collapsed icon Y anchor when smart-expanded near bottom page edge. */
+  anchorY?: number;
   /** Preserved full card dimensions while collapsed so expanding restores exact size. */
   expandedBox?: BoundingBox;
   /** Freehand pen & highlighter strokes drawn inside the sticky note card (in page coordinates). */
@@ -410,6 +420,7 @@ export interface ToolSettings {
   shapeWidth: number;
   shapeOutline: boolean;
   shapeStyle: 'solid' | 'dashed' | 'dotted';
+  shapeCornerRadius: number;
   textColor: string;
   textBgColor: string;
   fontSize: number;

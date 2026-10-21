@@ -12,6 +12,7 @@ import { getIconSvg } from '../../utils/icons';
 import { t } from '../i18n';
 import { Annotation } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
+import { stickyNoteTool } from '../../annotations/tools/sticky-note';
 
 /** Validates free-typed hex colors (`#rrggbb`, `#rgb`, with/without `#`). */
 function parseHexInput(raw: string): string | null {
@@ -89,6 +90,10 @@ export class PropertiesPanelComponent {
       ann.type === 'rectangle' || ann.type === 'ellipse' ||
       ann.type === 'polygon' || ann.type === 'freeform-shape'
     );
+    const hasCornerRadius = selectedAnnotations.some(ann =>
+      ann.type === 'rectangle' || ann.type === 'polygon' || ann.type === 'freeform-shape'
+    );
+    const cornerRadiusVal = Math.max(0, Math.min(48, Math.round(Number.isFinite((firstAnn as any).cornerRadius) ? (firstAnn as any).cornerRadius : 0)));
     const firstOutline = (firstAnn as any).outline !== false;
     const strokeCol = (firstAnn as any).color || (firstAnn as any).strokeColor || '#4f46e5';
     const isTextAnn = 'fontSize' in firstAnn;
@@ -199,6 +204,26 @@ export class PropertiesPanelComponent {
           </div>
         </div>
 
+        ${hasCornerRadius ? `
+          <div class="prop-group">
+            <div class="prop-label-row">
+              <span class="prop-label">Corner Radius</span>
+              <div class="gn-num-badge">
+                <input type="number" class="prop-value prop-num-input" id="prop-corner-radius-val"
+                       min="0" max="48" step="1" value="${cornerRadiusVal}"
+                       title="Corner radius (0 = sharp, up to 48px)" aria-label="Corner radius">
+                <span class="gn-unit">px</span>
+              </div>
+            </div>
+            <div class="gn-slider-wrap">
+              <input type="range" id="prop-corner-radius-slider" class="gn-range-slider"
+                     min="0" max="48" step="1" value="${cornerRadiusVal}"
+                     style="--slider-pct:${sliderPercent(cornerRadiusVal, 0, 48)}%"
+                     aria-label="Corner radius slider">
+            </div>
+          </div>
+        ` : ''}
+
         <!-- Opacity Slider + Input -->
         <div class="prop-group">
           <div class="prop-label-row">
@@ -262,15 +287,6 @@ export class PropertiesPanelComponent {
                      style="width:28px; height:28px; border-radius:6px; cursor:pointer;"
                      value="${(firstAnn as any).textColor || '#3b2f1e'}">
             </div>
-          </div>
-          <div class="prop-group">
-            <div class="prop-label-row">
-              <span class="prop-label">Author Signature</span>
-            </div>
-            <input type="text" id="prop-note-author" class="prop-hex-input"
-                   style="width:100%; text-align:left; padding:6px 10px; font-family:var(--font-en);"
-                   value="${(firstAnn as any).author !== undefined ? (firstAnn as any).author : 'Kia Gh'}"
-                   placeholder="Author signature (e.g. Kia Gh)" maxlength="40">
           </div>
           <div class="prop-group" style="display:flex; gap:8px;">
             <button type="button" id="prop-note-collapse-btn" class="gn-setting-row" style="flex:1; justify-content:center;">
@@ -549,6 +565,37 @@ export class PropertiesPanelComponent {
     widthNum?.addEventListener('change', () => commitWidthNum());
     widthNum?.addEventListener('blur', () => commitWidthNum());
 
+    // Corner Radius slider & input sync
+    const cornerRadNum = this._container.querySelector<HTMLInputElement>('#prop-corner-radius-val');
+    const cornerRadSlider = this._container.querySelector<HTMLInputElement>('#prop-corner-radius-slider');
+    const applyCornerRadius = (rawVal: number) => {
+      const r = Math.max(0, Math.min(48, Math.round(rawVal)));
+      if (cornerRadSlider && document.activeElement !== cornerRadSlider) cornerRadSlider.value = String(r);
+      if (cornerRadSlider) cornerRadSlider.style.setProperty('--slider-pct', `${sliderPercent(r, 0, 48)}%`);
+      if (cornerRadNum && document.activeElement !== cornerRadNum) cornerRadNum.value = String(r);
+      selectedAnnotations.forEach(ann => {
+        if (ann.type === 'rectangle' || ann.type === 'polygon' || ann.type === 'freeform-shape') {
+          const prev = { ...ann };
+          const next = { ...ann, cornerRadius: r };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+        }
+      });
+      store.updateToolSettings({ shapeCornerRadius: r });
+      store.setActivePageIndex(store.activePageIndex);
+    };
+    cornerRadSlider?.addEventListener('input', () => {
+      const val = parseFloat(cornerRadSlider.value || '0');
+      if (Number.isFinite(val)) applyCornerRadius(val);
+    });
+    cornerRadNum?.addEventListener('input', () => {
+      const val = parseFloat(cornerRadNum.value);
+      if (Number.isFinite(val)) applyCornerRadius(val);
+    });
+    cornerRadNum?.addEventListener('change', () => {
+      const val = parseFloat(cornerRadNum.value);
+      if (Number.isFinite(val)) applyCornerRadius(val);
+    });
+
     // Opacity slider & input sync
     const opacityNum = this._container.querySelector<HTMLInputElement>('#prop-opacity-val');
     const opacitySlider = this._container.querySelector<HTMLInputElement>('#prop-opacity-slider');
@@ -647,12 +694,24 @@ export class PropertiesPanelComponent {
     });
 
     this._container.querySelector('#prop-note-collapse-btn')?.addEventListener('click', () => {
+      let anyCollapsed = false;
       selectedAnnotations.forEach(ann => {
         if (ann.type === 'sticky-note') {
-          const next = { ...ann, collapsed: !ann.collapsed, updatedAt: Date.now() };
+          const pageMeta = store.activeDocument?.pages?.[ann.pageIndex];
+          const rot = (((store.pageRotations?.[ann.pageIndex] ?? pageMeta?.rotation ?? 0) % 360) + 360) % 360;
+          const swapped = rot === 90 || rot === 270;
+          const pageW = pageMeta ? (swapped ? pageMeta.height : pageMeta.width) : 0;
+          const pageH = pageMeta ? (swapped ? pageMeta.width : pageMeta.height) : 0;
+          const next = ann.collapsed
+            ? stickyNoteTool.expandStickyNoteForPage(ann, pageW, pageH)
+            : stickyNoteTool.collapseStickyNote(ann);
+          if (next.collapsed) anyCollapsed = true;
           history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
         }
       });
+      if (anyCollapsed) {
+        store.setActiveTool('select');
+      }
       store.setActivePageIndex(store.activePageIndex);
     });
 

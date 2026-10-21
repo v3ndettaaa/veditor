@@ -12,7 +12,7 @@ import { viewportManager } from '../../core/viewport';
 import { getIconSvg } from '../../utils/icons';
 import { Annotation, TextAnnotation, StickyNoteAnnotation } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
-import { STICKY_NOTE_COLORS } from '../../annotations/tools/sticky-note';
+import { STICKY_NOTE_COLORS, stickyNoteTool } from '../../annotations/tools/sticky-note';
 import { pointerHandler } from '../../input/pointer-handler';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
@@ -192,6 +192,8 @@ export class FloatingPropsBarComponent {
 
     const first = selected[0] as any;
     const isShape = selected.some(a => ['rectangle', 'ellipse', 'polygon', 'freeform-shape'].includes(a.type));
+    const hasCornerShape = selected.some(a => ['rectangle', 'polygon', 'freeform-shape'].includes(a.type));
+    const currentCornerRadius = Math.max(0, Math.min(48, Math.round(Number.isFinite(first.cornerRadius) ? first.cornerRadius : 0)));
     const isSingleText = selected.length === 1 && first.type === 'text';
     const isSingleSticky = selected.length === 1 && first.type === 'sticky-note';
     const isAllSticky = selected.every(a => a.type === 'sticky-note');
@@ -266,6 +268,22 @@ export class FloatingPropsBarComponent {
               <span class="props-num-unit">%</span>
             </div>
           </div>
+          ${hasCornerShape ? `
+            <div class="props-bar-divider"></div>
+            <div class="props-bar-group props-slider-group">
+              <span class="props-slider-label" title="Corner radius (0 = sharp, up to 48px)">Corner</span>
+              <input type="range" class="props-range-slider fp-live-input" id="fp-corner-radius-slider"
+                     min="0" max="48" step="1" value="${currentCornerRadius}"
+                     style="--slider-pct:${Math.round((currentCornerRadius / 48) * 100)}%"
+                     title="Corner radius (0 = sharp, up to 48px)" aria-label="Shape corner radius slider">
+              <div class="props-num-badge" title="Type corner radius in px (0-48)">
+                <input type="number" class="props-num-input fp-live-input" id="fp-corner-radius-input"
+                       min="0" max="48" step="1" value="${currentCornerRadius}"
+                       aria-label="Shape corner radius">
+                <span class="props-num-unit">px</span>
+              </div>
+            </div>
+          ` : ''}
         ` : `
           <div class="props-bar-divider"></div>
           <div class="props-bar-group props-slider-group">
@@ -500,6 +518,40 @@ export class FloatingPropsBarComponent {
       if (Number.isFinite(val)) applyShapeFillOpacityLive(val);
     });
 
+    // Shape Corner Radius Slider + Number Input
+    const cornerRadSlider = this._container.querySelector<HTMLInputElement>('#fp-corner-radius-slider');
+    const cornerRadInput = this._container.querySelector<HTMLInputElement>('#fp-corner-radius-input');
+    const applyCornerRadiusLive = (rawRad: number) => {
+      const r = Math.max(0, Math.min(48, Math.round(rawRad)));
+      if (cornerRadSlider && document.activeElement !== cornerRadSlider) cornerRadSlider.value = String(r);
+      if (cornerRadSlider) cornerRadSlider.style.setProperty('--slider-pct', `${Math.round((r / 48) * 100)}%`);
+      if (cornerRadInput && document.activeElement !== cornerRadInput) cornerRadInput.value = String(r);
+      const currentSelected = this.getSelectedAnnotations();
+      currentSelected.forEach(ann => {
+        if (ann.type === 'rectangle' || ann.type === 'polygon' || ann.type === 'freeform-shape') {
+          const next = { ...ann, cornerRadius: r, updatedAt: Date.now() };
+          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+        }
+      });
+      store.updateToolSettings({ shapeCornerRadius: r });
+      store.setActivePageIndex(pageIndex);
+    };
+    cornerRadSlider?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyCornerRadiusLive(val);
+    });
+    cornerRadInput?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyCornerRadiusLive(val);
+    });
+    cornerRadInput?.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const val = parseFloat((e.target as HTMLInputElement).value);
+      if (Number.isFinite(val)) applyCornerRadiusLive(val);
+    });
+
     // Edit Text button
     this._container.querySelector('#fp-edit-text-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -547,12 +599,18 @@ export class FloatingPropsBarComponent {
       e.stopPropagation();
       const first = selected[0];
       if (!first || first.type !== 'sticky-note') return;
-      const next: StickyNoteAnnotation = {
-        ...first,
-        collapsed: !first.collapsed,
-        updatedAt: Date.now()
-      };
+      const pageMeta = store.activeDocument?.pages?.[first.pageIndex];
+      const rot = (((store.pageRotations?.[first.pageIndex] ?? pageMeta?.rotation ?? 0) % 360) + 360) % 360;
+      const swapped = rot === 90 || rot === 270;
+      const pageW = pageMeta ? (swapped ? pageMeta.height : pageMeta.width) : 0;
+      const pageH = pageMeta ? (swapped ? pageMeta.width : pageMeta.height) : 0;
+      const next: StickyNoteAnnotation = first.collapsed
+        ? stickyNoteTool.expandStickyNoteForPage(first, pageW, pageH)
+        : stickyNoteTool.collapseStickyNote(first);
       history.execute(new ModifyAnnotationCommand(first.pageIndex, first, next));
+      if (next.collapsed) {
+        store.setActiveTool('select');
+      }
       window.app?.repaintAllRenderedAnnotations();
       this.renderContent();
       this.updatePosition();

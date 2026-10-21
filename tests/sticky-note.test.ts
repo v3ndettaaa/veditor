@@ -54,7 +54,7 @@ describe('StickyNoteTool & StickyNoteAnnotation', () => {
     expect(small.type).toBe('sticky-note');
     expect(small.box.width).toBeGreaterThanOrEqual(150);
     expect(small.box.height).toBeGreaterThanOrEqual(140);
-    expect(small.author).toBe('Kia Gh');
+    expect(small.author).toBe('');
     expect(small.collapsed).toBe(false);
     expect(Array.isArray(small.strokes)).toBe(true);
   });
@@ -183,4 +183,134 @@ describe('StickyNoteTool & StickyNoteAnnotation', () => {
       height: 40
     });
   });
+
+  it('resizes a collapsed Sticky Note icon independently without altering the expanded card dimensions', () => {
+    const note = stickyNoteTool.createStickyNote(0, { x: 100, y: 120 }, {
+      box: { x: 100, y: 120, width: 220, height: 180 },
+      collapsed: true
+    });
+
+    const resized = transformAnnotation(note, {
+      dx: 0,
+      dy: 0,
+      scaleX: 2.0,
+      scaleY: 1.5,
+      originX: 100,
+      originY: 120
+    }) as StickyNoteAnnotation;
+
+    // Collapsed icon dimensions scale independently (default pin size is 38x38)
+    const iconBox = stickyNoteTool.getCollapsedIconBox(resized);
+    expect(iconBox.width).toBe(76);
+    expect(iconBox.height).toBe(57);
+    expect(getAnnotationSelectionBox(resized)).toEqual({ x: 100, y: 120, width: 76, height: 57, rotation: 0 });
+
+    // Expanded note dimensions remain 220x180
+    expect(resized.box.width).toBe(220);
+    expect(resized.box.height).toBe(180);
+  });
+
+  it('expands a Sticky Note leftward/upward when near the right or bottom page edge and restores anchor on collapse', () => {
+    const pageWidth = 600;
+    const pageHeight = 800;
+    const nearEdgeCollapsed = stickyNoteTool.createStickyNote(0, { x: 540, y: 720 }, {
+      box: { x: 540, y: 720, width: 220, height: 190 },
+      collapsed: true
+    });
+
+    const expanded = stickyNoteTool.expandStickyNoteForPage(nearEdgeCollapsed, pageWidth, pageHeight);
+    expect(expanded.collapsed).toBe(false);
+    // Must fit within [8 .. pageWidth - 8] and [8 .. pageHeight - 8]
+    expect(expanded.box.x + expanded.box.width).toBeLessThanOrEqual(pageWidth - 8);
+    expect(expanded.box.y + expanded.box.height).toBeLessThanOrEqual(pageHeight - 8);
+    expect(expanded.anchorX).toBe(540);
+    expect(expanded.anchorY).toBe(720);
+
+    // Collapsing returns the pin icon back to its original anchor near the right/bottom edge
+    const recollapsed = stickyNoteTool.collapseStickyNote(expanded);
+    expect(recollapsed.collapsed).toBe(true);
+    expect(recollapsed.box.x).toBe(540);
+    expect(recollapsed.box.y).toBe(720);
+  });
+
+  it('assigns strictly monotonic timestamps to in-note strokes and shapes so newer strokes render above older shapes', () => {
+    const note = stickyNoteTool.createStickyNote(0, { x: 80, y: 80 }, {});
+    const tShape = stickyNoteTool.nextContentTimestamp(note);
+    note.items = [
+      {
+        id: 'shape_1',
+        pageIndex: 0,
+        layerId: 'layer-default',
+        type: 'rectangle',
+        box: { x: 100, y: 130, width: 120, height: 80 },
+        strokeColor: '#ef4444',
+        fillColor: '#3b82f6',
+        fillOpacity: 1,
+        strokeWidth: 2,
+        outline: true,
+        strokeStyle: 'solid',
+        cornerRadius: 0,
+        opacity: 1,
+        createdAt: tShape,
+        updatedAt: tShape
+      }
+    ];
+
+    const tStroke = stickyNoteTool.nextContentTimestamp(note);
+    expect(tStroke).toBeGreaterThan(tShape);
+    note.strokes = [
+      {
+        id: 'stroke_1',
+        tool: 'pen',
+        points: [
+          { x: 110, y: 140, pressure: 0.5 },
+          { x: 180, y: 180, pressure: 0.5 }
+        ],
+        color: '#10b981',
+        strokeWidth: 3,
+        opacity: 1,
+        createdAt: tStroke
+      }
+    ];
+
+    const fillStylesUsed: string[] = [];
+    const ctx: any = {
+      save: () => {},
+      restore: () => {},
+      scale: () => {},
+      translate: () => {},
+      rotate: () => {},
+      beginPath: () => {},
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      arcTo: () => {},
+      arc: () => {},
+      rect: () => {},
+      roundRect: () => {},
+      quadraticCurveTo: () => {},
+      bezierCurveTo: () => {},
+      clip: () => {},
+      fill: function () {
+        fillStylesUsed.push(String(this.fillStyle));
+      },
+      stroke: () => {},
+      fillText: () => {},
+      setLineDash: () => {},
+      measureText: (txt: string) => ({ width: txt.length * 7 }),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      globalAlpha: 1,
+      font: ''
+    };
+
+    stickyNoteTool.renderToCanvas(ctx, note, 1, false);
+    // Shape interior fill (#3b82f6) must be painted BEFORE the newer pen stroke (#10b981)
+    const shapeFillIdx = fillStylesUsed.indexOf('#3b82f6');
+    const penStrokeIdx = fillStylesUsed.lastIndexOf('#10b981');
+    expect(shapeFillIdx).toBeGreaterThanOrEqual(0);
+    expect(penStrokeIdx).toBeGreaterThan(shapeFillIdx);
+  });
 });
+

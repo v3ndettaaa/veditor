@@ -502,7 +502,7 @@ export class PointerHandler {
       };
     }
     if (fit.kind === 'rectangle') {
-      return { ...base, type: 'rectangle', box: { ...fit.box } };
+      return { ...base, type: 'rectangle', box: { ...fit.box }, cornerRadius: s.shapeCornerRadius ?? 0 };
     }
     if (fit.kind === 'ellipse') {
       const w = Math.max(4, fit.rx * 2);
@@ -514,8 +514,32 @@ export class PointerHandler {
       ...base,
       type: 'polygon',
       points: fit.points.map(p => ({ ...p })),
-      box: computePointsBoundingBox(fit.points, strokeWidth)
+      box: computePointsBoundingBox(fit.points, strokeWidth),
+      cornerRadius: s.shapeCornerRadius ?? 0
     };
+  }
+
+  /**
+   * Resolves the page dimensions (in page points) for boundary-aware Sticky Note expansion.
+   */
+  private getPageBounds(pageIndex: number, canvas?: HTMLCanvasElement): { width: number; height: number } {
+    const pageMeta = store.activeDocument?.pages?.[pageIndex];
+    if (pageMeta && pageMeta.width > 0 && pageMeta.height > 0) {
+      const rot = (((store.pageRotations?.[pageIndex] ?? pageMeta.rotation ?? 0) % 360) + 360) % 360;
+      const swapped = rot === 90 || rot === 270;
+      return {
+        width: swapped ? pageMeta.height : pageMeta.width,
+        height: swapped ? pageMeta.width : pageMeta.height
+      };
+    }
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const zoom = store.zoom || 1;
+      if (rect.width > 0 && rect.height > 0) {
+        return { width: rect.width / zoom, height: rect.height / zoom };
+      }
+    }
+    return { width: 0, height: 0 };
   }
 
   public handlePointerDown(
@@ -569,12 +593,9 @@ export class PointerHandler {
           this._pageScratchCtx = null;
           this._activeCanvasRect = null;
           this._activeStickyPolygonNoteId = null;
-          const nextNote: StickyNoteAnnotation = {
-            ...cand,
-            collapsed: true,
-            updatedAt: Date.now()
-          };
+          const nextNote = stickyNoteTool.collapseStickyNote(cand);
           history.execute(new ModifyAnnotationCommand(pageIndex, cand, nextNote));
+          store.setActiveTool('select');
           store.selectAnnotation(cand.id);
           onNeedRepaint();
           return;
@@ -616,6 +637,7 @@ export class PointerHandler {
             if (closed) {
               const polyAnn = shapesTool.finish(defaultLayerId);
               if (polyAnn) {
+                polyAnn.createdAt = stickyNoteTool.nextContentTimestamp(note);
                 const updatedNote: StickyNoteAnnotation = {
                   ...note,
                   items: [...(note.items || []), polyAnn],
@@ -656,7 +678,8 @@ export class PointerHandler {
             shapeW,
             tSettings.shapeStyle,
             tSettings.shapeOutline !== false,
-            tSettings.shapeFillOpacity ?? 1.0
+            tSettings.shapeFillOpacity ?? 1.0,
+            tSettings.shapeCornerRadius ?? 0
           );
           this._activeStickyStroke = {
             pageIndex,
@@ -680,7 +703,8 @@ export class PointerHandler {
           shapeW,
           tSettings.shapeStyle,
           tSettings.shapeOutline !== false,
-          tSettings.shapeFillOpacity ?? 1.0
+          tSettings.shapeFillOpacity ?? 1.0,
+          tSettings.shapeCornerRadius ?? 0
         );
         this._activeStickyStroke = {
           pageIndex,
@@ -845,7 +869,8 @@ export class PointerHandler {
         this.lensWidth(tSettings.shapeWidth),
         tSettings.shapeStyle,
         tSettings.shapeOutline !== false,
-        tSettings.shapeFillOpacity ?? 1.0
+        tSettings.shapeFillOpacity ?? 1.0,
+        tSettings.shapeCornerRadius ?? 0
       );
       break;
     }
@@ -866,7 +891,8 @@ export class PointerHandler {
           this.lensWidth(tSettings.shapeWidth),
           tSettings.shapeStyle,
           tSettings.shapeOutline !== false,
-          tSettings.shapeFillOpacity ?? 1.0
+          tSettings.shapeFillOpacity ?? 1.0,
+          tSettings.shapeCornerRadius ?? 0
         );
         break;
       }
@@ -905,7 +931,8 @@ export class PointerHandler {
           this._pageScratchCtx = null;
           this._activeCanvasRect = null;
           if (hit.collapsed) {
-            const expanded: StickyNoteAnnotation = { ...hit, collapsed: false, updatedAt: Date.now() };
+            const pageBounds = this.getPageBounds(pageIndex, scratchCanvas);
+            const expanded = stickyNoteTool.expandStickyNoteForPage(hit, pageBounds.width, pageBounds.height);
             history.execute(new ModifyAnnotationCommand(pageIndex, hit, expanded));
             store.setActiveTool('select');
             store.selectAnnotation(hit.id);
@@ -1401,7 +1428,7 @@ export class PointerHandler {
                 previewBox,
                 renderScale,
                 ts.noteColor || '#ebd09e',
-                ts.noteAuthor !== undefined ? ts.noteAuthor : 'Kia Gh',
+                '',
                 ts.noteTextColor || '#3b2f1e'
               );
             });
@@ -1480,6 +1507,7 @@ export class PointerHandler {
         } else if (s.mode === 'shape') {
           const shapeAnn = shapesTool.finish(defaultLayerId);
           if (shapeAnn) {
+            shapeAnn.createdAt = stickyNoteTool.nextContentTimestamp(currentNote);
             const updatedNote: StickyNoteAnnotation = {
               ...currentNote,
               items: [...(currentNote.items || []), shapeAnn],
@@ -1502,7 +1530,8 @@ export class PointerHandler {
             pressureStrength: s.pressureStrength,
             smoothing: s.smoothing,
             blendMode: s.blendMode,
-            tipShape: s.tipShape
+            tipShape: s.tipShape,
+            createdAt: stickyNoteTool.nextContentTimestamp(currentNote)
           };
           const updatedNote: StickyNoteAnnotation = {
             ...currentNote,
@@ -1538,11 +1567,8 @@ export class PointerHandler {
           );
           this._wasCollapsedNoteSelectedOnDown = null;
           if (collapsedNote && !collapsedNote.locked) {
-            const expanded: StickyNoteAnnotation = {
-              ...collapsedNote,
-              collapsed: false,
-              updatedAt: Date.now()
-            };
+            const pageBounds = this.getPageBounds(pageIndex, scratchCanvas);
+            const expanded = stickyNoteTool.expandStickyNoteForPage(collapsedNote, pageBounds.width, pageBounds.height);
             history.execute(new ModifyAnnotationCommand(pageIndex, collapsedNote, expanded));
             onNeedRepaint();
             break;
@@ -1693,7 +1719,7 @@ export class PointerHandler {
             height: Math.max(150, raw.height)
           };
         }
-        const noteAnn = stickyNoteTool.createStickyNote(pageIndex, startPt, {
+        const rawNote = stickyNoteTool.createStickyNote(pageIndex, startPt, {
           layerId: defaultLayerId,
           box: customBox,
           color: ts.noteColor || '#ebd09e',
@@ -1701,8 +1727,12 @@ export class PointerHandler {
           fontSize: ts.noteFontSize || 24,
           fontFamily: ts.fontFamily || 'Inter',
           textAlign: ts.textAlign || 'left',
-          author: ts.noteAuthor !== undefined ? ts.noteAuthor : 'Kia Gh'
+          author: ''
         });
+        const pageBounds = this.getPageBounds(pageIndex, scratchCanvas);
+        const noteAnn = (!customBox && (pageBounds.width > 0 || pageBounds.height > 0))
+          ? stickyNoteTool.expandStickyNoteForPage(rawNote, pageBounds.width, pageBounds.height)
+          : rawNote;
         history.execute(new AddAnnotationCommand(pageIndex, noteAnn));
         store.setActiveTool('select');
         this.selectCreatedAnnotation(noteAnn.id);
@@ -1736,6 +1766,7 @@ export class PointerHandler {
             )
           : undefined;
         if (targetNote) {
+          polyAnn.createdAt = stickyNoteTool.nextContentTimestamp(targetNote);
           const updatedNote: StickyNoteAnnotation = {
             ...targetNote,
             items: [...(targetNote.items || []), polyAnn],
@@ -2334,7 +2365,7 @@ export class PointerHandler {
     const cRect = canvas.getBoundingClientRect();
     const padX = 16;
     const headerH = 36;
-    const footerH = 34;
+    const footerH = 14;
 
     const screenRect = {
       left: cRect.left + (ann.box.x + padX) * zoom,
@@ -2445,6 +2476,7 @@ export class PointerHandler {
         const latestNote = latestDoc?.annotations[pageIndex]?.find(
           (a): a is StickyNoteAnnotation => a.id === note.id && a.type === 'sticky-note'
         ) || note;
+        textAnn.createdAt = stickyNoteTool.nextContentTimestamp(latestNote);
         const updatedNote: StickyNoteAnnotation = {
           ...latestNote,
           items: [...(latestNote.items || []), textAnn],
@@ -2513,6 +2545,21 @@ export class PointerHandler {
           }
         }
         break;
+      }
+      // If a page-level annotation sits ABOVE the sticky note at `pt`, do not trap
+      // new pen/highlighter/shape/text annotations inside the lower sticky note
+      // (which would force them to render underneath `cand`).
+      if (activeTool !== 'eraser' && !cand.locked) {
+        const pad = Math.max(4, ((cand as any).strokeWidth || 2) / 2);
+        const b = cand.box;
+        const inCandBox =
+          pt.x >= b.x - pad &&
+          pt.x <= b.x + b.width + pad &&
+          pt.y >= b.y - pad &&
+          pt.y <= b.y + b.height + pad;
+        if (inCandBox && selectionManager.findAnnotationAtPoint(pt, [cand]) !== null) {
+          return null;
+        }
       }
     }
     return null;

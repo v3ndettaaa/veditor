@@ -32,6 +32,7 @@ import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
 import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, BulkModifyCommand } from './core/history';
 import { stampTool } from './annotations/tools/stamp';
+import { stickyNoteTool } from './annotations/tools/sticky-note';
 import { duplicateSelectedAnnotations } from './annotations/duplicate';
 import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
@@ -2038,20 +2039,19 @@ class VeditorApp {
           store.setActiveTool('select');
           store.selectAnnotation(hit.id);
           if (hit.collapsed) {
-            history.execute(new ModifyAnnotationCommand(pageIndex, hit, {
-              ...hit,
-              collapsed: false,
-              updatedAt: Date.now()
-            }));
+            const pageMeta = store.activeDocument?.pages?.[pageIndex];
+            const rot = (((store.pageRotations?.[pageIndex] ?? pageMeta?.rotation ?? 0) % 360) + 360) % 360;
+            const swapped = rot === 90 || rot === 270;
+            const pageW = pageMeta ? (swapped ? pageMeta.height : pageMeta.width) : (canvas.clientWidth / (store.zoom || 1));
+            const pageH = pageMeta ? (swapped ? pageMeta.width : pageMeta.height) : (canvas.clientHeight / (store.zoom || 1));
+            const expanded = stickyNoteTool.expandStickyNoteForPage(hit, pageW, pageH);
+            history.execute(new ModifyAnnotationCommand(pageIndex, hit, expanded));
             onRepaint();
           } else {
             const localY = point.y - hit.box.y;
             if (localY <= 40 || localY >= hit.box.height - 34) {
-              history.execute(new ModifyAnnotationCommand(pageIndex, hit, {
-                ...hit,
-                collapsed: true,
-                updatedAt: Date.now()
-              }));
+              const collapsed = stickyNoteTool.collapseStickyNote(hit);
+              history.execute(new ModifyAnnotationCommand(pageIndex, hit, collapsed));
               onRepaint();
             } else {
               pointerHandler.editExistingStickyNote(hit, pageIndex, canvas, onRepaint);

@@ -68,6 +68,7 @@ export class ShapesTool {
   private _strokeWidth: number = 2;
   private _outline: boolean = true;
   private _strokeStyle: 'solid' | 'dashed' | 'dotted' = 'solid';
+  private _cornerRadius: number = SHAPE_CORNER_RADIUS;
   /** True while Shift is held: preview and finish a regular shape. */
   private _constrain: boolean = false;
   /** True while 15° angle snapping is active (Shift or the tool's Snap-15° option). */
@@ -82,7 +83,8 @@ export class ShapesTool {
     strokeWidth: number,
     strokeStyle: 'solid' | 'dashed' | 'dotted',
     outline: boolean = true,
-    fillOpacity: number = 1.0
+    fillOpacity: number = 1.0,
+    cornerRadius: number = SHAPE_CORNER_RADIUS
   ) {
     this._startPoint = point;
     this._currentPoint = point;
@@ -94,6 +96,7 @@ export class ShapesTool {
     this._strokeWidth = strokeWidth;
     this._outline = outline;
     this._strokeStyle = strokeStyle;
+    this._cornerRadius = Math.max(0, Number.isFinite(cornerRadius) ? cornerRadius : SHAPE_CORNER_RADIUS);
     this._constrain = false;
     this._snapAngle = false;
 
@@ -200,8 +203,9 @@ export class ShapesTool {
       const y = Math.min(sp.y, cp.y);
       const w = Math.abs(cp.x - sp.x);
       const h = Math.abs(cp.y - sp.y);
-      // Preview with the same rounded corners the committed shape will have.
-      const r = Math.min(SHAPE_CORNER_RADIUS, w / 2, h / 2);
+      // Preview with the same rounded/sharp corners the committed shape will have.
+      const r = Math.max(0, Math.min(this._cornerRadius, w / 2, h / 2));
+      ctx.lineJoin = r === 0 ? 'miter' : 'round';
       ctx.beginPath();
       traceRoundedPolygon(ctx, [
         { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }
@@ -262,8 +266,9 @@ export class ShapesTool {
     } else if (this._type === 'polygon') {
       if (this._polygonPoints.length > 0) {
         const previewPts = cp ? [...this._polygonPoints, cp] : [...this._polygonPoints];
+        ctx.lineJoin = this._cornerRadius === 0 ? 'miter' : 'round';
         ctx.beginPath();
-        traceRoundedPolygon(ctx, previewPts, SHAPE_CORNER_RADIUS, false);
+        traceRoundedPolygon(ctx, previewPts, this._cornerRadius, false);
         fillInterior();
         if (outline) ctx.stroke();
 
@@ -284,8 +289,9 @@ export class ShapesTool {
       }
     } else if (this._type === 'freeform-shape') {
       if (this._polygonPoints.length > 1) {
+        ctx.lineJoin = this._cornerRadius === 0 ? 'miter' : 'round';
         ctx.beginPath();
-        traceRoundedPolygon(ctx, this._polygonPoints, SHAPE_CORNER_RADIUS, true);
+        traceRoundedPolygon(ctx, this._polygonPoints, this._cornerRadius, true);
         fillInterior();
         if (outline) ctx.stroke();
       }
@@ -336,6 +342,9 @@ export class ShapesTool {
       strokeWidth: this._strokeWidth,
       outline: this._outline,
       strokeStyle: this._strokeStyle,
+      ...(this._type === 'rectangle' || this._type === 'polygon' || this._type === 'freeform-shape'
+        ? { cornerRadius: this._cornerRadius }
+        : {}),
       points,
       arrowEnd: this._type === 'arrow',
       opacity: 1.0,
