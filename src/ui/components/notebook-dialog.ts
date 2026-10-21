@@ -57,6 +57,12 @@ export class NotebookDialogComponent {
   }
 
   public render(): void {
+    if (this._container.querySelector('#notebook-overlay')) {
+      this.syncControls();
+      this.paint();
+      return;
+    }
+
     const isEdit = this._opts.mode === 'edit';
     const p = this._paper;
 
@@ -77,7 +83,7 @@ export class NotebookDialogComponent {
           <div class="notebook-body">
             <div class="notebook-preview">
               <canvas id="nb-preview" class="paper-preview"></canvas>
-              <span class="notebook-preview-caption">
+              <span class="notebook-preview-caption" id="nb-preview-caption">
                 ${PAGE_SIZES[this._pageSize].label} &middot; ${PAGE_SIZES[this._pageSize].width}&times;${PAGE_SIZES[this._pageSize].height} pt
               </span>
             </div>
@@ -106,7 +112,7 @@ export class NotebookDialogComponent {
                 </div>
               </div>
 
-              <div class="form-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
+              <div class="form-field" id="nb-spacing-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
                 <div class="prop-label-row">
                   <span class="form-label">${t('notebook.spacing')}</span>
                   <span class="prop-value" id="nb-spacing-out">${p.spacing}pt</span>
@@ -125,7 +131,7 @@ export class NotebookDialogComponent {
                     <code class="prop-color-value" id="nb-paper-out">${p.paperColor}</code>
                   </div>
                 </div>
-                <div class="form-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
+                <div class="form-field" id="nb-rule-color-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
                   <span class="form-label">${t('notebook.ruleColor')}</span>
                   <div class="chip-row">
                     <input type="color" id="nb-line-color" class="swatch-input"
@@ -146,7 +152,7 @@ export class NotebookDialogComponent {
                 </select>
               </div>
 
-              <label class="notebook-check" ${p.pattern === 'lined' ? '' : 'hidden'}>
+              <label class="notebook-check" id="nb-margin-field" ${p.pattern === 'lined' ? '' : 'hidden'}>
                 <input type="checkbox" id="nb-margin" ${p.margin ? 'checked' : ''}>
                 <span>${t('notebook.marginRule')}</span>
               </label>
@@ -179,6 +185,7 @@ export class NotebookDialogComponent {
     `;
 
     this.bind();
+    this.syncControls();
     this.paint();
   }
 
@@ -191,11 +198,85 @@ export class NotebookDialogComponent {
     if (canvas) drawPaperPreview(canvas, this._paper, this._pageSize);
   }
 
-  /** Applies a change, then re-renders only if it changes which controls show. */
-  private update(patch: Partial<PaperStyle>, structural = false): void {
+  /**
+   * Synchronizes all button states, conditional field visibility, and input
+   * values in place so the modal overlay/dialog never rebuilds or flashes.
+   */
+  private syncControls(): void {
+    const p = this._paper;
+    const q = <T extends HTMLElement>(sel: string) => this._container.querySelector<T>(sel);
+
+    this._container.querySelectorAll<HTMLElement>('[data-nb-pattern]').forEach(btn => {
+      const active = btn.dataset.nbPattern === p.pattern;
+      btn.classList.toggle('is-selected', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+
+    this._container.querySelectorAll<HTMLElement>('[data-nb-preset]').forEach(btn => {
+      const preset = PAPER_PRESETS.find(pr => pr.id === btn.dataset.nbPreset);
+      const matches = !!preset &&
+        preset.paper.pattern === p.pattern &&
+        preset.paper.paperColor.toLowerCase() === p.paperColor.toLowerCase() &&
+        (p.pattern === 'blank' || (
+          preset.paper.lineColor.toLowerCase() === p.lineColor.toLowerCase() &&
+          preset.paper.spacing === p.spacing
+        )) &&
+        (p.pattern !== 'lined' || Boolean(preset.paper.margin) === Boolean(p.margin));
+      btn.classList.toggle('is-selected', matches);
+      btn.setAttribute('aria-pressed', String(matches));
+    });
+
+    const isBlank = p.pattern === 'blank';
+    const spacingField = q('#nb-spacing-field');
+    if (spacingField) spacingField.hidden = isBlank;
+
+    const ruleColorField = q('#nb-rule-color-field');
+    if (ruleColorField) ruleColorField.hidden = isBlank;
+
+    const marginField = q('#nb-margin-field');
+    if (marginField) marginField.hidden = p.pattern !== 'lined';
+
+    const spacingInput = q<HTMLInputElement>('#nb-spacing');
+    if (spacingInput && document.activeElement !== spacingInput) {
+      spacingInput.value = String(p.spacing);
+    }
+    const spacingOut = q('#nb-spacing-out');
+    if (spacingOut) spacingOut.textContent = `${p.spacing}pt`;
+
+    const paperColorInput = q<HTMLInputElement>('#nb-paper-color');
+    if (paperColorInput && document.activeElement !== paperColorInput) {
+      paperColorInput.value = p.paperColor;
+    }
+    const paperOut = q('#nb-paper-out');
+    if (paperOut) paperOut.textContent = p.paperColor;
+
+    const lineColorInput = q<HTMLInputElement>('#nb-line-color');
+    if (lineColorInput && document.activeElement !== lineColorInput) {
+      lineColorInput.value = p.lineColor;
+    }
+    const lineOut = q('#nb-line-out');
+    if (lineOut) lineOut.textContent = p.lineColor;
+
+    const marginInput = q<HTMLInputElement>('#nb-margin');
+    if (marginInput) marginInput.checked = Boolean(p.margin);
+
+    const pageSizeSelect = q<HTMLSelectElement>('#nb-page-size');
+    if (pageSizeSelect && pageSizeSelect.value !== this._pageSize) {
+      pageSizeSelect.value = this._pageSize;
+    }
+
+    const caption = q('#nb-preview-caption');
+    if (caption) {
+      const sz = PAGE_SIZES[this._pageSize];
+      caption.innerHTML = `${sz.label} &middot; ${sz.width}&times;${sz.height} pt`;
+    }
+  }
+
+  /** Applies a change in place without rebuilding the modal DOM. */
+  private update(patch: Partial<PaperStyle>, _structural = false): void {
     this._paper = { ...this._paper, ...patch };
-    if (structural) this.render();
-    else this.paint();
+    this.syncControls();
+    this.paint();
   }
 
   private close(): void {
@@ -252,7 +333,8 @@ export class NotebookDialogComponent {
 
     q<HTMLSelectElement>('#nb-page-size')?.addEventListener('change', (e) => {
       this._pageSize = (e.target as HTMLSelectElement).value as PageSizeName;
-      this.render();
+      this.syncControls();
+      this.paint();
     });
 
     const pages = q<HTMLInputElement>('#nb-pages');

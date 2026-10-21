@@ -26,6 +26,7 @@ export class CommandPaletteComponent {
   private _container: HTMLElement;
   private _selectedIndex: number = 0;
   private _filteredCommands: PaletteCommand[] = [];
+  private _wasOpen: boolean = false;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -141,9 +142,16 @@ export class CommandPaletteComponent {
 
   public render(): void {
     if (!store.commandPaletteOpen) {
-      this._container.innerHTML = '';
+      if (this._wasOpen) {
+        this._wasOpen = false;
+        this._container.innerHTML = '';
+      }
       return;
     }
+    if (this._wasOpen && this._container.querySelector('#palette-overlay')) {
+      return;
+    }
+    this._wasOpen = true;
 
     const all = this.getAllCommands();
     this._filteredCommands = all;

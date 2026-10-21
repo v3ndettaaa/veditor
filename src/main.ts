@@ -21,7 +21,7 @@ import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
-import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession } from './io/storage';
+import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
 import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
@@ -586,12 +586,8 @@ class VeditorApp {
         notebook,
         nativeFilePath
       };
-      if (nativeFilePath) {
-        // Cheap metadata-only write so a second open-by-path (or the
-        // single-instance handoff) can find this session immediately,
-        // without waiting for the first edit/autosave.
-        void saveDocumentSession(session, { includeBytes: false }).catch(() => {});
-      }
+      // Persist metadata (pageCount, notebook spec) to recent store without rewriting full bytes.
+      void saveDocumentSession(session, { includeBytes: false }).catch(() => {});
 
       this._lastDocId = docId;
       history.switchDocument(docId);
@@ -618,6 +614,19 @@ class VeditorApp {
         store.endDocSwitch();
         viewportManager.handleScroll(true);
       }
+
+      // Capture first-page cover thumbnail off the critical path for the Library gallery.
+      window.setTimeout(async () => {
+        try {
+          if (store.activeDocument?.id !== docId) return;
+          const thumbCanvas = pdfEngine.thumbnailFromCache(0) ?? await pdfEngine.renderThumbnail(0);
+          if (thumbCanvas) {
+            const dataUrl = thumbCanvas.toDataURL('image/jpeg', 0.82);
+            await updateRecentThumbnail(docId, dataUrl);
+          }
+        } catch (_) {}
+      }, 280);
+
       showToast(`${name} loaded (${pageCount} pages)`, 'success');
       return docId;
     } catch (err: any) {

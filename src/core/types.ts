@@ -506,4 +506,7 @@ export interface RecentDocItem {
   pageCount: number;
   lastOpenedAt: number;
   folderId?: string | null;
+  thumbnailDataUrl?: string;
+  notebook?: NotebookSpec;
 }
+

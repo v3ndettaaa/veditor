@@ -4,7 +4,7 @@
  */
 
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import { DocumentSession, PDFFolder, RecentDocItem } from '../core/types';
+import { DocumentSession, PDFFolder, RecentDocItem, NotebookSpec } from '../core/types';
 import { store } from '../core/store';
 
 interface VeditorDB extends DBSchema {
@@ -21,6 +21,7 @@ interface VeditorDB extends DBSchema {
       lastOpenedAt: number;
       folderId?: string | null;
       thumbnailDataUrl?: string;
+      notebook?: NotebookSpec;
     };
   };
   signatures: {
@@ -195,10 +196,50 @@ export async function saveDocumentSession(session: DocumentSession, opts?: { inc
       name: session.name,
       pageCount: session.pageCount,
       lastOpenedAt: Date.now(),
-      folderId: existingRecent?.folderId || null
+      folderId: existingRecent?.folderId || null,
+      thumbnailDataUrl: existingRecent?.thumbnailDataUrl,
+      notebook: session.notebook ?? existingRecent?.notebook
     });
   } catch (err) {
     console.warn('Could not auto-save document to IndexedDB:', err);
+  }
+}
+
+export async function updateRecentThumbnail(docId: string, thumbnailDataUrl: string): Promise<void> {
+  try {
+    const db = await getDB();
+    const existing = await db.get('recent', docId);
+    if (existing) {
+      existing.thumbnailDataUrl = thumbnailDataUrl;
+      await db.put('recent', existing);
+    }
+  } catch (err) {
+    console.warn('Could not update recent thumbnail:', err);
+  }
+}
+
+export async function renameRecentDocument(docId: string, newName: string): Promise<void> {
+  const trimmed = newName.trim();
+  if (!trimmed) return;
+  try {
+    const db = await getDB();
+    const recent = await db.get('recent', docId);
+    if (recent) {
+      recent.name = trimmed;
+      await db.put('recent', recent);
+    }
+    const doc = await db.get('documents', docId);
+    if (doc) {
+      doc.name = trimmed;
+      await db.put('documents', doc);
+    }
+    const openDoc = store.openDocuments.get(docId);
+    if (openDoc) {
+      openDoc.name = trimmed;
+      store.notify();
+    }
+  } catch (err) {
+    console.warn('Could not rename document:', err);
   }
 }
 
