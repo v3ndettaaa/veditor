@@ -1,6 +1,6 @@
 {
   "name": "veditor",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "a simple extention for pdf annotation!",
   "main": "index.js",
   "scripts": {
