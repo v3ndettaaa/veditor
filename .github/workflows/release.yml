@@ -24,9 +24,10 @@ jobs:
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
-            args: ''
+            args: '--bundles deb'
           - platform: 'windows-latest'
-            args: ''
+            args: '--bundles nsis'
+
 
     runs-on: ${{ matrix.platform }}
 
