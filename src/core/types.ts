@@ -22,7 +22,6 @@ export type ToolType =
   | 'measure-angle'
   | 'measure-area'
   | 'signature'
-  | 'redaction'
   | 'scratchpad';
 
 export type EraserMode = 'stroke' | 'object' | 'pixel';
@@ -169,13 +168,6 @@ export interface SignatureAnnotation extends BaseAnnotation {
   color: string;
 }
 
-export interface RedactionAnnotation extends BaseAnnotation {
-  type: 'redaction';
-  color: string; // usually #000000 or #FFFFFF
-  overlayText?: string;
-  applied?: boolean; // false = pending redaction mark, true = applied/scrubbed
-}
-
 export interface StickyNoteStroke {
   id: string;
   tool?: 'pen' | 'highlighter';
@@ -237,8 +229,7 @@ export type Annotation =
   | StickyNoteAnnotation
   | StampAnnotation
   | MeasurementAnnotation
-  | SignatureAnnotation
-  | RedactionAnnotation;
+  | SignatureAnnotation;
 
 export interface PageInfo {
   pageIndex: number;
@@ -255,6 +246,13 @@ export interface PDFBookmarkItem {
   dest?: any;
   pageIndex?: number;
   items?: PDFBookmarkItem[];
+}
+
+export interface UserBookmarkItem {
+  id: string;
+  title: string;
+  pageIndex: number;
+  createdAt: number;
 }
 
 export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots' | 'isometric';
@@ -281,7 +279,7 @@ export const DEFAULT_TOOLBAR_ORDER: ToolType[] = [
   'select', 'lasso', 'hand',
   'pen', 'highlighter', 'eraser',
   'rectangle', 'ellipse', 'line', 'arrow', 'polygon',
-  'text', 'sticky-note', 'stamp', 'measure-distance', 'signature', 'redaction', 'scratchpad'
+  'text', 'sticky-note', 'stamp', 'measure-distance', 'signature', 'scratchpad'
 ];
 
 /** Visual family per toolbar tool; separators render between families. */
@@ -329,6 +327,7 @@ export interface DocumentSession {
   pageCount: number;
   pages: PageInfo[];
   bookmarks: PDFBookmarkItem[];
+  userBookmarks?: UserBookmarkItem[];
   annotations: Record<number, Annotation[]>; // pageIndex -> annotations
   layers: Record<number, Layer[]>;           // pageIndex -> layers
   activePageIndex: number;
@@ -437,7 +436,6 @@ export interface ToolSettings {
   stylusInvertedEraserEnabled: boolean;
   drawingCursor: DrawingCursorType;
   stampPreset: string;
-  redactionColor: string;
   noteColor: string;
   noteTextColor: string;
   noteFontSize: number;

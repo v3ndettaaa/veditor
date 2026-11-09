@@ -476,7 +476,60 @@ function n(value: number): string {
 
 function list(values: number[]): string { return values.map(n).join(' '); }
 
-function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, original: Entry | undefined, font?: PDFFont): PDFDict {
+function encodeMixedLine(
+  line: string,
+  primaryFont: PDFFont,
+  fallbackFont: PDFFont | undefined,
+  fontSize: number
+): { ops: string[]; width: number; usesFallback: boolean } {
+  try {
+    const encoded = primaryFont.encodeText(line);
+    const width = primaryFont.widthOfTextAtSize(line, fontSize);
+    return { ops: [`/F0 ${n(fontSize)} Tf`, `${encoded.toString()} Tj`], width, usesFallback: false };
+  } catch {
+    if (!fallbackFont) throw new Error('Cannot encode line without fallback font');
+  }
+
+  const primarySet = new Set(primaryFont.getCharacterSet());
+  const segments: Array<{ useFallback: boolean; text: string }> = [];
+  for (const ch of line) {
+    const cp = ch.codePointAt(0)!;
+    let useFallback = false;
+    if (!primarySet.has(cp)) {
+      try {
+        fallbackFont.encodeText(ch);
+        useFallback = true;
+      } catch {
+        continue;
+      }
+    }
+    const last = segments[segments.length - 1];
+    if (last && last.useFallback === useFallback) {
+      last.text += ch;
+    } else {
+      segments.push({ useFallback, text: ch });
+    }
+  }
+
+  if (segments.length === 0) {
+    return { ops: [], width: 0, usesFallback: false };
+  }
+
+  const ops: string[] = [];
+  let totalWidth = 0;
+  let usesFallback = false;
+  for (const seg of segments) {
+    const activeFont = seg.useFallback ? fallbackFont : primaryFont;
+    const tag = seg.useFallback ? '/F1' : '/F0';
+    if (seg.useFallback) usesFallback = true;
+    const encoded = activeFont.encodeText(seg.text);
+    totalWidth += activeFont.widthOfTextAtSize(seg.text, fontSize);
+    ops.push(`${tag} ${n(fontSize)} Tf`, `${encoded.toString()} Tj`);
+  }
+  return { ops, width: totalWidth, usesFallback };
+}
+
+function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, original: Entry | undefined, font?: PDFFont, fallbackFont?: PDFFont): PDFDict {
   const ctx = pdfDoc.context;
   const dict = original ? original.dict.clone(ctx) : ctx.obj({ Type: 'Annot' });
   const set = (key: string, value: PDFObject) => dict.set(name(key), value);
@@ -490,6 +543,7 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
   const geometry = corners(b);
   const ops: string[] = ['q', `${list(matrix)} cm`, '1 J', '1 j'];
   const states: Record<string, PDFDict> = {};
+  let usedFallbackFont = false;
   const paint = (fill: Color, stroke: Color, multiply = false) => {
     const key = `G${Object.keys(states).length}`;
     states[key] = ctx.obj({ Type: 'ExtGState', ca: ann.opacity * fill.alpha, CA: ann.opacity * stroke.alpha, BM: multiply ? 'Multiply' : 'Normal' });
@@ -530,17 +584,18 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     const descent = font.heightAtSize(ann.fontSize) - ascent;
     ops.push('BT', `/F0 ${n(ann.fontSize)} Tf`);
     ann.text.split(/\r\n|\r|\n/).forEach((line, i) => {
-      const encoded = font.encodeText(line);
-      const width = font.widthOfTextAtSize(line, ann.fontSize);
-      const x = ann.textAlign === 'center' ? b.x + (b.width - width) / 2 : ann.textAlign === 'right' ? b.x + b.width - padding - width : b.x + padding;
+      const encodedLine = encodeMixedLine(line, font, fallbackFont, ann.fontSize);
+      if (encodedLine.usesFallback) usedFallbackFont = true;
+      const lineW = encodedLine.width;
+      const x = ann.textAlign === 'center' ? b.x + (b.width - lineW) / 2 : ann.textAlign === 'right' ? b.x + b.width - padding - lineW : b.x + padding;
       const top = b.y + padding + i * ann.fontSize * 1.35;
-      ops.push(`1 0 0 -1 ${list([x, top + ascent])} Tm`, `${encoded.toString()} Tj`);
-      geometry.push({ x, y: top }, { x: x + width, y: top + ascent + descent });
+      ops.push(`1 0 0 -1 ${list([x, top + ascent])} Tm`, ...encodedLine.ops);
+      geometry.push({ x, y: top }, { x: x + lineW, y: top + ascent + descent });
     });
     ops.push('ET');
     set('Contents', PDFHexString.fromText(ann.text));
     set('DA', PDFString.of(`/F0 ${n(ann.fontSize)} Tf ${list(fg.rgb)} rg`));
-    set('DR', ctx.obj({ Font: { F0: font.ref } }));
+    set('DR', ctx.obj({ Font: { F0: font.ref, ...(usedFallbackFont && fallbackFont ? { F1: fallbackFont.ref } : {}) } }));
     set('Q', PDFNumber.of(['left', 'center', 'right'].indexOf(ann.textAlign)));
     set('C', ctx.obj(bg.alpha ? bg.rgb : []));
     set('BS', ctx.obj({ W: width, S: dash.length ? 'D' : 'S', ...(dash.length ? { D: dash } : {}) }));
@@ -595,10 +650,11 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
         ann.text.split(/\r\n|\r|\n/).forEach((line, i) => {
           const top = topStart + i * ann.fontSize * 1.38;
           if (top + ascent > b.y + b.height - 28) return;
-          const encoded = font.encodeText(line);
-          const w = font.widthOfTextAtSize(line, ann.fontSize);
+          const encodedLine = encodeMixedLine(line, font, fallbackFont, ann.fontSize);
+          if (encodedLine.usesFallback) usedFallbackFont = true;
+          const w = encodedLine.width;
           const x = ann.textAlign === 'center' ? b.x + (b.width - w) / 2 : ann.textAlign === 'right' ? b.x + b.width - padX - w : b.x + padX;
-          ops.push(`1 0 0 -1 ${list([x, top + ascent])} Tm`, `${encoded.toString()} Tj`);
+          ops.push(`1 0 0 -1 ${list([x, top + ascent])} Tm`, ...encodedLine.ops);
         });
         ops.push('ET');
       }
@@ -607,8 +663,9 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
         const authorCol: Color = { rgb: fg.rgb, alpha: 0.72 };
         paint(authorCol, authorCol);
         const authorSize = 11.5;
-        const encoded = font.encodeText(ann.author.trim());
-        ops.push('BT', `/F0 ${n(authorSize)} Tf`, `1 0 0 -1 ${list([b.x + 16, b.y + b.height - 13])} Tm`, `${encoded.toString()} Tj`, 'ET');
+        const encodedAuthor = encodeMixedLine(ann.author.trim(), font, fallbackFont, authorSize);
+        if (encodedAuthor.usesFallback) usedFallbackFont = true;
+        ops.push('BT', `1 0 0 -1 ${list([b.x + 16, b.y + b.height - 13])} Tm`, ...encodedAuthor.ops, 'ET');
       }
       // Freehand strokes inside note
       if (Array.isArray(ann.strokes)) {
@@ -626,7 +683,7 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     set('Contents', PDFHexString.fromText(ann.text || ''));
     if (ann.author) set('T', PDFHexString.fromText(ann.author));
     set('DA', PDFString.of(`/F0 ${n(ann.fontSize)} Tf ${list(fg.rgb)} rg`));
-    if (font) set('DR', ctx.obj({ Font: { F0: font.ref } }));
+    if (font) set('DR', ctx.obj({ Font: { F0: font.ref, ...(usedFallbackFont && fallbackFont ? { F1: fallbackFont.ref } : {}) } }));
     set('Q', PDFNumber.of(['left', 'center', 'right'].indexOf(ann.textAlign)));
     set('C', ctx.obj(bg.alpha ? bg.rgb : []));
     set('BS', ctx.obj({ W: 1, S: 'S' }));
@@ -642,7 +699,7 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     const preset = STAMP_PRESETS.find(p => p.key === ann.presetKey) || STAMP_PRESETS[0];
     set('Name', name('Approved'));
     set('Contents', PDFHexString.fromText(preset.label));
-    paint(fill, fill);
+    paint(fill, stroke);
     ops.push(`${n(Math.max(1, b.height * 0.05))} w`, `${list([b.x, b.y, b.width, b.height])} re`, 'S');
     ops.push('BT', `/F0 ${n(Math.max(6, b.height * 0.3))} Tf`, `${list(fill.rgb)} rg`,
       `BT ${list([b.x + b.width / 2, cy - b.height * 0.1])} Td`, `${preset.label.replace(/[()\\]/g, '')} Tj`, 'ET');
@@ -723,7 +780,7 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
   if (!rect.every(finite)) throw new Error('Invalid transformed annotation bounds');
   set('Rect', ctx.obj(rect));
   if ((ann.type === 'rectangle' || ann.type === 'ellipse') && !angle) set('RD', ctx.obj([pad, pad, pad, pad]));
-  const resources = ctx.obj({ ExtGState: states, ...(font ? { Font: { F0: font.ref } } : {}) });
+  const resources = ctx.obj({ ExtGState: states, ...(font ? { Font: { F0: font.ref, ...(usedFallbackFont && fallbackFont ? { F1: fallbackFont.ref } : {}) } } : {}) });
   const stream = ctx.flateStream(ops.join('\n'), { Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: rect, Matrix: [1, 0, 0, 1, 0, 0], Resources: resources });
   set('AP', ctx.obj({ N: ctx.register(stream) }));
   return dict;
@@ -761,12 +818,14 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
         continue;
       }
       let font: PDFFont | undefined;
+      let fallbackFont: PDFFont | undefined;
       if (ann.type === 'text' || ann.type === 'sticky-note') {
         const fontName = ann.type === 'text' ? standardFont(ann) : StandardFonts.Helvetica;
-        font = fonts.get(fontName);
-        if (!font) { font = await pdfDoc.embedFont(fontName); fonts.set(fontName, font); }
+        let baseFont = fonts.get(fontName);
+        if (!baseFont) { baseFont = await pdfDoc.embedFont(fontName); fonts.set(fontName, baseFont); }
+        font = baseFont;
         const textToCheck = ann.type === 'sticky-note' ? `${ann.text || ''}\n${ann.author || ''}` : ann.text;
-        try { for (const line of textToCheck.split(/\r\n|\r|\n/)) font.encodeText(line); }
+        try { for (const line of textToCheck.split(/\r\n|\r|\n/)) baseFont.encodeText(line); }
         catch {
           if (!unicodeFontProvider) throw new Error(`FreeText ${ann.id}: standard WinAnsi fonts cannot encode this text. Content was preserved; a Unicode font provider is required.`);
           if (!unicodeFont) {
@@ -774,13 +833,17 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
             unicodeFont = await pdfDoc.embedFont(await unicodeFontProvider(), { subset: true });
           }
           const supported = new Set(unicodeFont.getCharacterSet());
-          if ([...textToCheck].some(ch => !['\r', '\n'].includes(ch) && !supported.has(ch.codePointAt(0)!))) {
+          const canBaseEncode = (ch: string): boolean => {
+            try { baseFont!.encodeText(ch); return true; } catch { return false; }
+          };
+          if ([...textToCheck].some(ch => !['\r', '\n'].includes(ch) && !supported.has(ch.codePointAt(0)!) && !canBaseEncode(ch))) {
             throw new Error(`FreeText ${ann.id}: the bundled font does not contain every required character.`);
           }
           font = unicodeFont;
+          fallbackFont = baseFont;
         }
       }
-      replacements.push({ dict: build(pdfDoc, page, ann, original, font), ref: original?.raw instanceof PDFRef ? original.raw : undefined });
+      replacements.push({ dict: build(pdfDoc, page, ann, original, font, fallbackFont), ref: original?.raw instanceof PDFRef ? original.raw : undefined });
     }
     plans.push({ page, keep, replacements });
   }

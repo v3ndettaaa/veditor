@@ -101,7 +101,6 @@
 | **Rich Text Boxes** | `T` | Multi-line text boxes with font sizing, colors, borders, and background fills |
 | **Vector Stamps** | `M` | High-res vector presets (`APPROVED`, `CONFIDENTIAL`, `DRAFT`, etc.) & image imports |
 | **Digital Signatures** | `K` | Vector ink signature capture dialog with persistent local signature library |
-| **True Redaction** | `X` | Content censoring that strips underlying text and graphics upon export |
 
 ---
 
@@ -264,7 +263,6 @@ veditor/
 | `M` | Vector Stamp Tool |
 | `N` | Scratchpad |
 | `K` | Digital Signature Pad |
-| `X` | Redaction Tool |
 | `Ctrl + Z` | Undo (Scoped to active PDF tab) |
 | `Ctrl + Y` | Redo (Scoped to active PDF tab) |
 | `Ctrl + +` / `Ctrl + -` | Zoom In / Zoom Out |

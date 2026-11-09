@@ -22,7 +22,13 @@ import { textTool } from '../annotations/tools/text';
 import { stickyNoteTool } from '../annotations/tools/sticky-note';
 import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
-import { redactionTool } from '../annotations/tools/redaction';
+import { pdfEngine } from '../core/pdf-engine';
+import {
+  hitTestPageTextPoint,
+  getTextRangeRects,
+  getSelectedTextFromRange,
+  computeUnionBounds,
+} from '../core/pdf-text-layout';
 import {
   selectionManager,
   normalizeDragBox,
@@ -82,6 +88,8 @@ export class PointerHandler {
   private _marquee: { pageIndex: number; start: Point; current: Point; additive: boolean } | null = null;
   /** Freehand lasso path (the Lasso tool, or Alt+drag in Select). */
   private _lasso: { pageIndex: number; points: Point[]; additive: boolean } | null = null;
+  /** Active PDF text range selection drag when using the Select tool over document text. */
+  private _textSelectDrag: { pageIndex: number; anchorOffset: number; currentOffset: number } | null = null;
   /** Drag-to-size or click-to-place state when creating a new Sticky Note. */
   private _stickyCreateDrag: { pageIndex: number; start: Point; current: Point } | null = null;
   /** Tracks active polygon creation inside an expanded Sticky Note mini-board. */
@@ -248,8 +256,29 @@ export class PointerHandler {
   }
 
   /**
+   * Executes the first scratchpad paint immediately for zero initial latency, then
+   * coalesces subsequent high-frequency pointermove redraws to at most once per
+   * display refresh frame (60/120Hz) so WebKitGTK on Linux never stalls on 240Hz splines.
+   */
+  private scheduleLiveInkPaint(paintFn: () => void): void {
+    if (this._scratchRafId === null) {
+      paintFn();
+      this._scratchNeedsTrailingPaint = false;
+      this._scratchRafId = requestAnimationFrame(() => {
+        this._scratchRafId = null;
+        if (this._scratchNeedsTrailingPaint) {
+          this._scratchNeedsTrailingPaint = false;
+          paintFn();
+        }
+      });
+    } else {
+      this._scratchNeedsTrailingPaint = true;
+    }
+  }
+
+  /**
    * Geometry vertices already on the page that a new shape point can snap to:
-   * line/arrow/polygon/freeform points plus rectangle/redaction corners.
+   * line/arrow/polygon/freeform points plus rectangle corners.
    */
   private collectShapeVertices(pageIndex: number): Point[] {
     const doc = store.activeDocument;
@@ -259,7 +288,7 @@ export class PointerHandler {
       if (a.type === 'line' || a.type === 'arrow' || a.type === 'polygon' || a.type === 'freeform-shape') {
         const pts = (a as { points?: Point[] }).points;
         if (pts) for (const p of pts) out.push({ x: p.x, y: p.y });
-      } else if (a.type === 'rectangle' || a.type === 'redaction') {
+      } else if (a.type === 'rectangle') {
         const b = a.box;
         out.push(
           { x: b.x, y: b.y },
@@ -973,10 +1002,6 @@ export class PointerHandler {
         );
         break;
 
-      case 'redaction':
-        redactionTool.start(pt, pageIndex, tSettings.redactionColor || '#000000');
-        break;
-
       case 'lasso': {
         // Freehand selection loop. Same session as Alt+drag in Select, so both
         // paths share the commit logic on pointer-up. Dropping the old
@@ -986,7 +1011,10 @@ export class PointerHandler {
         // A press on the current selection's handles or body is a transform,
         // never a new lasso — the controls behave identically to Select.
         if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) break;
-        if (!additive) store.clearSelection();
+        if (!additive) {
+          store.clearSelection();
+          store.setTextSelection(null);
+        }
         this._lasso = {
           pageIndex,
           points: [{ x: pt.x, y: pt.y }],
@@ -1011,28 +1039,51 @@ export class PointerHandler {
         // is impossible once something is already selected.
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         // 1. Grab a transform handle or the selection body to start a drag.
-        if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) break;
+        if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) {
+          store.setTextSelection(null);
+          break;
+        }
 
         // 2. Click an annotation to (multi-)select it.
         const ann = hitBeforeDrag;
         if (ann) {
+          store.setTextSelection(null);
           store.selectAnnotation(ann.id, additive);
           onNeedRepaint();
         } else if ((e as MouseEvent).altKey === true) {
           // 3a. Alt+drag: freehand lasso loop around arbitrary ink/shapes.
+          store.setTextSelection(null);
           this._lasso = {
             pageIndex,
             points: [{ x: pt.x, y: pt.y }],
             additive
           };
         } else {
-          // 3b. Empty press: rubber-band region select (tiny drag = click).
-          this._marquee = {
-            pageIndex,
-            start: { x: pt.x, y: pt.y },
-            current: { x: pt.x, y: pt.y },
-            additive
-          };
+          // 3b. Check if the press starts on selectable PDF text.
+          const textLayout = pdfEngine.getCachedPageTextLayout(pageIndex);
+          const textHit = !additive && textLayout
+            ? hitTestPageTextPoint(textLayout, pt.x, pt.y, 4, false)
+            : null;
+          if (textHit) {
+            store.clearSelection();
+            store.setTextSelection(null);
+            this._textSelectDrag = {
+              pageIndex,
+              anchorOffset: textHit.charOffset,
+              currentOffset: textHit.charOffset
+            };
+            onNeedRepaint();
+          } else {
+            // 3c. Empty press: rubber-band region select (tiny drag = click).
+            if (!additive) store.setTextSelection(null);
+            void pdfEngine.getPageTextLayout(pageIndex);
+            this._marquee = {
+              pageIndex,
+              start: { x: pt.x, y: pt.y },
+              current: { x: pt.x, y: pt.y },
+              additive
+            };
+          }
         }
         break;
       }
@@ -1228,7 +1279,7 @@ export class PointerHandler {
       return;
     }
 
-    // Zero-latency synchronous paint for freehand ink & highlighter
+    // Coalesced rAF paint for freehand ink & highlighter (eliminates 240Hz WebKitGTK lag)
     if (tool === 'pen') {
       for (const pt of pts) penTool.move(pt, store.zoom);
       const holdRadiusPage = PointerHandler.HOLD_RADIUS / Math.max(store.zoom, 0.25);
@@ -1239,7 +1290,8 @@ export class PointerHandler {
         this._morphHandle = null;
         this.startHoldTimer({ x: lastPt.x, y: lastPt.y });
       }
-      if (this._isPointerDown && this._pageScratchCtx && this._pageScratchCanvas) {
+      this.scheduleLiveInkPaint(() => {
+        if (!this._isPointerDown || !this._pageScratchCtx || !this._pageScratchCanvas) return;
         const c = this._pageScratchCtx;
         const cv = this._pageScratchCanvas;
         const rs = store.zoom * this.renderDpr();
@@ -1259,13 +1311,14 @@ export class PointerHandler {
           });
           this.setScratchpadDirtyFromPageBox(penTool.getLiveBoundingBox(), rs);
         }
-      }
+      });
       return;
     }
 
     if (tool === 'highlighter') {
       for (const pt of pts) highlighterTool.move(pt, shiftKey, store.zoom);
-      if (this._isPointerDown && this._pageScratchCtx && this._pageScratchCanvas) {
+      this.scheduleLiveInkPaint(() => {
+        if (!this._isPointerDown || !this._pageScratchCtx || !this._pageScratchCanvas) return;
         const c = this._pageScratchCtx;
         const cv = this._pageScratchCanvas;
         const rs = store.zoom * this.renderDpr();
@@ -1274,7 +1327,7 @@ export class PointerHandler {
           highlighterTool.renderScratchpad(c, rs);
         });
         this.setScratchpadDirtyFromPageBox(highlighterTool.getLiveBoundingBox(), rs);
-      }
+      });
       return;
     }
 
@@ -1357,6 +1410,38 @@ export class PointerHandler {
             }
           }
           onNeedRepaint();
+        } else if (this._textSelectDrag && this._textSelectDrag.pageIndex === pageIndex) {
+          const layout = pdfEngine.getCachedPageTextLayout(pageIndex);
+          if (layout) {
+            const directHit = hitTestPageTextPoint(layout, lastPt.x, lastPt.y, 6, false);
+            const hit = directHit ?? hitTestPageTextPoint(layout, lastPt.x, lastPt.y, 6, true);
+            if (hit) {
+              const curIdx = Math.min(Math.max(0, hit.charOffset), Math.max(0, layout.fullText.length - 1));
+              this._textSelectDrag.currentOffset = curIdx;
+              const anchor = Math.min(Math.max(0, this._textSelectDrag.anchorOffset), Math.max(0, layout.fullText.length - 1));
+              const startOffset = Math.min(anchor, curIdx);
+              const endOffset = Math.min(layout.fullText.length, Math.max(anchor, curIdx) + 1);
+              if (endOffset > startOffset) {
+                const rects = getTextRangeRects(layout, startOffset, endOffset);
+                const text = getSelectedTextFromRange(layout, startOffset, endOffset);
+                if (rects.length > 0 && text.trim().length > 0) {
+                  store.setTextSelection({
+                    pageIndex,
+                    startOffset,
+                    endOffset,
+                    text,
+                    rects,
+                    bounds: computeUnionBounds(rects)
+                  });
+                } else {
+                  store.setTextSelection(null);
+                }
+              } else {
+                store.setTextSelection(null);
+              }
+              onNeedRepaint();
+            }
+          }
         } else if (this._lasso && this._lasso.pageIndex === pageIndex) {
           this.withScratchOffset(ctx, activeScratch, () => {
             this.growLasso(pts, pageIndex, ctx, renderScale);
@@ -1399,13 +1484,6 @@ export class PointerHandler {
         for (const pt of pts) measureTool.move(pt);
         this.withScratchOffset(ctx, activeScratch, () => {
           measureTool.renderScratchpad(ctx, renderScale);
-        });
-        break;
-
-      case 'redaction':
-        for (const pt of pts) redactionTool.move(pt);
-        this.withScratchOffset(ctx, activeScratch, () => {
-          redactionTool.renderScratchpad(ctx, renderScale);
         });
         break;
 
@@ -1575,6 +1653,17 @@ export class PointerHandler {
           }
         }
         this._wasCollapsedNoteSelectedOnDown = null;
+        if (this._textSelectDrag) {
+          this._textSelectDrag = null;
+          const sel = store.textSelection;
+          if (sel && sel.text.trim().length > 0 && sel.rects.length > 0) {
+            floatingPropsBar?.showForTextSelection();
+          } else {
+            store.setTextSelection(null);
+          }
+          onNeedRepaint();
+          break;
+        }
         if (this._lasso) {
           const lasso = this._lasso;
           this._lasso = null;
@@ -1692,13 +1781,6 @@ export class PointerHandler {
         const measureAnn = measureTool.finish(defaultLayerId);
         if (measureAnn) {
           history.execute(new AddAnnotationCommand(pageIndex, measureAnn));
-        }
-        break;
-
-      case 'redaction':
-        const redAnn = redactionTool.finish(defaultLayerId);
-        if (redAnn) {
-          history.execute(new AddAnnotationCommand(pageIndex, redAnn));
         }
         break;
 
@@ -2028,51 +2110,75 @@ export class PointerHandler {
   }
 
   public handleHover(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): void {
-    if (store.selectedAnnotationIds.size === 0) return;
-
     const doc = store.activeDocument;
     if (!doc) return;
     const pageAnns = doc.annotations[pageIndex] || [];
-    const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
-    if (selected.length === 0) return;
-
     const pt = this.getPointInPage(e, canvas);
-    if (selected.length === 1 && selected[0].type === 'sticky-note' && !selected[0].collapsed) {
-      if (stickyNoteTool.hitTestCollapseButton(selected[0], pt)) {
-        canvas.style.cursor = 'pointer';
-        floatingPropsBar?.setHoverState(true);
+
+    const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+    if (selected.length > 0) {
+      if (selected.length === 1 && selected[0].type === 'sticky-note' && !selected[0].collapsed) {
+        if (stickyNoteTool.hitTestCollapseButton(selected[0], pt)) {
+          canvas.style.cursor = 'pointer';
+          floatingPropsBar?.setHoverState(true);
+          return;
+        }
+      }
+
+      const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
+      const hit = selectionManager.hitTestSelection(
+        pt, selected, store.zoom * this.renderDpr()
+      );
+      const cursorByHandle: Record<Exclude<HandleType, null>, string> = {
+        nw: 'nwse-resize',
+        se: 'nwse-resize',
+        ne: 'nesw-resize',
+        sw: 'nesw-resize',
+        n: 'ns-resize',
+        s: 'ns-resize',
+        e: 'ew-resize',
+        w: 'ew-resize',
+        rot: 'crosshair',
+        start: 'crosshair',
+        end: 'crosshair',
+        body: 'move'
+      };
+      const isNearOrOver = hit !== null || (
+        pt.x >= merged.x - 10 &&
+        pt.x <= merged.x + merged.width + 10 &&
+        pt.y >= merged.y - 10 &&
+        pt.y <= merged.y + merged.height + 10
+      );
+      floatingPropsBar?.setHoverState(isNearOrOver);
+
+      if (hit) {
+        canvas.style.cursor = cursorByHandle[hit];
         return;
       }
     }
 
-    const merged = mergeBoundingBoxes(selected.map(getAnnotationSelectionBox));
-    const hit = selectionManager.hitTestSelection(
-      pt, selected, store.zoom * this.renderDpr()
-    );
-    const cursorByHandle: Record<Exclude<HandleType, null>, string> = {
-      nw: 'nwse-resize',
-      se: 'nwse-resize',
-      ne: 'nesw-resize',
-      sw: 'nesw-resize',
-      n: 'ns-resize',
-      s: 'ns-resize',
-      e: 'ew-resize',
-      w: 'ew-resize',
-      rot: 'crosshair',
-      start: 'crosshair',
-      end: 'crosshair',
-      body: 'move'
-    };
-    if (hit) canvas.style.cursor = cursorByHandle[hit];
+    // When Select tool is active and not over a selection handle, switch cursor to
+    // pointer over unselected annotations or I-beam ('text') over selectable PDF text.
+    if (store.activeTool === 'select') {
+      const hoverAnn = selectionManager.findAnnotationAtPoint(pt, pageAnns);
+      if (hoverAnn) {
+        canvas.style.cursor = 'pointer';
+        return;
+      }
+      const layout = pdfEngine.getCachedPageTextLayout(pageIndex);
+      if (layout) {
+        const textHit = hitTestPageTextPoint(layout, pt.x, pt.y, 3.5, false);
+        canvas.style.cursor = textHit ? 'text' : '';
+      } else {
+        void pdfEngine.getPageTextLayout(pageIndex);
+        canvas.style.cursor = '';
+      }
+      return;
+    }
 
-    const isNearOrOver = hit !== null || (
-      pt.x >= merged.x - 10 &&
-      pt.x <= merged.x + merged.width + 10 &&
-      pt.y >= merged.y - 10 &&
-      pt.y <= merged.y + merged.height + 10
-    );
-
-    floatingPropsBar?.setHoverState(isNearOrOver);
+    if (selected.length > 0) {
+      canvas.style.cursor = '';
+    }
   }
 
   /**
@@ -2120,13 +2226,13 @@ export class PointerHandler {
       this.commitSelectDrag();
       this._marquee = null;
       this._lasso = null;
+      this._textSelectDrag = null;
       penTool.cancel();
       highlighterTool.cancel();
       // Keep finished polygon vertices; a mid-click rubber band is harmless
       // to drop since the next click re-renders it.
       if (!shapesTool.isPolygonActive()) shapesTool.reset();
       measureTool.cancel();
-      redactionTool.cancel();
     }
 
     if (this._pageScratchCtx && this._pageScratchCanvas) {

@@ -10,10 +10,11 @@ import { getAnnotationSelectionBox, offsetAnnotation } from '../../annotations/s
 import { mergeBoundingBoxes } from '../../utils/geometry';
 import { viewportManager } from '../../core/viewport';
 import { getIconSvg } from '../../utils/icons';
-import { Annotation, TextAnnotation, StickyNoteAnnotation } from '../../core/types';
+import { Annotation, TextAnnotation, StickyNoteAnnotation, HighlighterAnnotation, ShapeAnnotation, Point } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
 import { STICKY_NOTE_COLORS, stickyNoteTool } from '../../annotations/tools/sticky-note';
 import { pointerHandler } from '../../input/pointer-handler';
+import { showToast } from './toast';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
 
@@ -72,13 +73,13 @@ export class FloatingPropsBarComponent {
     }
   }
 
-  private show(): void {
+  public show(): void {
     if (this._hoverTimeout !== null) {
       window.clearTimeout(this._hoverTimeout);
       this._hoverTimeout = null;
     }
 
-    if (store.selectedAnnotationIds.size === 0) {
+    if (store.selectedAnnotationIds.size === 0 && !store.textSelection) {
       this.hideImmediate();
       return;
     }
@@ -89,11 +90,27 @@ export class FloatingPropsBarComponent {
     this._isVisible = true;
   }
 
+  public showForTextSelection(): void {
+    if (!store.textSelection || !store.textSelection.text.trim()) {
+      this.hideImmediate();
+      return;
+    }
+    this._isHoveredOverItem = true;
+    this.show();
+  }
+
   private scheduleHide(): void {
     if (this._hoverTimeout !== null) {
       window.clearTimeout(this._hoverTimeout);
+      this._hoverTimeout = null;
+    }
+    // Keep the floating action bar persistently visible while PDF text is selected
+    // until the user clicks elsewhere on the page, presses Escape, or runs an action.
+    if (store.textSelection) {
+      return;
     }
     this._hoverTimeout = window.setTimeout(() => {
+      if (store.textSelection) return;
       const activeEl = document.activeElement;
       if (activeEl && this._container.contains(activeEl)) return;
       if (!this._isHoveredOverItem && !this._isHoveredOverBar) {
@@ -119,7 +136,7 @@ export class FloatingPropsBarComponent {
   }
 
   private updateState(): void {
-    if (store.selectedAnnotationIds.size === 0) {
+    if (store.selectedAnnotationIds.size === 0 && !store.textSelection) {
       this.hideImmediate();
     } else if (this._isVisible) {
       this.renderContent();
@@ -143,18 +160,20 @@ export class FloatingPropsBarComponent {
 
   public updatePosition(): void {
     const annotations = this.getSelectedAnnotations();
-    if (annotations.length === 0) {
+    const textSel = store.textSelection;
+    if (annotations.length === 0 && !textSel) {
       this.hideImmediate();
       return;
     }
 
-    const first = annotations[0];
-    const pageIndex = first.pageIndex;
+    const pageIndex = annotations.length > 0 ? annotations[0].pageIndex : textSel!.pageIndex;
     const pageLayout = viewportManager.getLayout(pageIndex);
     const scroller = document.getElementById('document-scroll-container');
     if (!pageLayout || !scroller) return;
 
-    const merged = mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox));
+    const merged = annotations.length > 0
+      ? mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox))
+      : textSel!.bounds;
     const zoom = store.zoom;
 
     // Convert page coordinates to scrollContainer viewport relative coordinates
@@ -170,11 +189,10 @@ export class FloatingPropsBarComponent {
     // zero collision with the top rotation handle and its stem line.
     const barHeight = 44;
     const boxBottom = boxScreenY + merged.height * zoom;
-    let posY = boxBottom + 34;
+    let posY = boxBottom + (annotations.length > 0 ? 34 : 14);
     if (posY + barHeight > window.innerHeight - 30) {
       // If close to bottom of screen, flip above with generous clearance
-      // so it stays well above the top rotation handle (which is at -24px).
-      posY = boxScreenY - barHeight - 48;
+      posY = boxScreenY - barHeight - (annotations.length > 0 ? 48 : 14);
     }
 
     const toolbarWidth = this._container.offsetWidth || 340;
@@ -188,7 +206,12 @@ export class FloatingPropsBarComponent {
 
   private renderContent(): void {
     const selected = this.getSelectedAnnotations();
-    if (selected.length === 0) return;
+    if (selected.length === 0) {
+      if (store.textSelection) {
+        this.renderTextSelectionContent();
+      }
+      return;
+    }
 
     const first = selected[0] as any;
     const isShape = selected.some(a => ['rectangle', 'ellipse', 'polygon', 'freeform-shape'].includes(a.type));
@@ -708,5 +731,216 @@ export class FloatingPropsBarComponent {
     });
     store.setActivePageIndex(selected[0].pageIndex);
     this.renderContent();
+  }
+
+  private renderTextSelectionContent(): void {
+    const sel = store.textSelection;
+    if (!sel) return;
+
+    const highlightSwatches = [
+      { hex: '#fde047', rgba: 'rgba(250, 204, 21, 0.38)', label: 'Highlight Yellow' },
+      { hex: '#86efac', rgba: 'rgba(74, 222, 128, 0.38)', label: 'Highlight Green' },
+      { hex: '#93c5fd', rgba: 'rgba(96, 165, 250, 0.38)', label: 'Highlight Blue' },
+      { hex: '#f9a8d4', rgba: 'rgba(244, 114, 182, 0.38)', label: 'Highlight Pink' },
+      { hex: '#fdba74', rgba: 'rgba(251, 146, 60, 0.38)', label: 'Highlight Orange' }
+    ];
+
+    this._container.innerHTML = `
+      <div class="props-bar-inner">
+        <div class="props-bar-group" title="Highlight selected text">
+          <div class="props-swatch-strip">
+            ${highlightSwatches.map(sw => `
+              <button class="props-mini-swatch" data-sel-highlight="${sw.rgba}" style="background: ${sw.hex};" title="${sw.label}"></button>
+            `).join('')}
+          </div>
+        </div>
+
+        <div class="props-bar-divider"></div>
+
+        <div class="props-bar-group">
+          <button class="props-pill-btn" id="fp-sel-underline" title="Underline selected text">
+            <span style="text-decoration: underline; font-weight: 600;">U</span>
+          </button>
+          <button class="props-pill-btn" id="fp-sel-strike" title="Strikethrough selected text">
+            <span style="text-decoration: line-through; font-weight: 600;">S</span>
+          </button>
+          <button class="props-pill-btn" id="fp-sel-note" title="Add Sticky Note for selected text">
+            ${getIconSvg('stickyNote', 13)} Note
+          </button>
+        </div>
+
+        <div class="props-bar-divider"></div>
+
+        <div class="props-bar-group">
+          <button class="props-pill-btn" id="fp-sel-copy" title="Copy selected text (Ctrl+C)">
+            ${getIconSvg('copy', 13)} Copy
+          </button>
+        </div>
+      </div>
+    `;
+
+    this.attachTextSelectionHandlers();
+  }
+
+  private attachTextSelectionHandlers(): void {
+    const sel = store.textSelection;
+    if (!sel) return;
+
+    // Highlight color swatches -> create quadPoints HighlighterAnnotation
+    this._container.querySelectorAll<HTMLElement>('[data-sel-highlight]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const color = btn.getAttribute('data-sel-highlight') || 'rgba(250, 204, 21, 0.38)';
+        const currentSel = store.textSelection;
+        if (!currentSel || currentSel.rects.length === 0) return;
+
+        const b = currentSel.bounds;
+        const bw = Math.max(1, b.width);
+        const bh = Math.max(1, b.height);
+        const quadPoints: Point[][] = currentSel.rects.map((r) => {
+          const x0 = (r.x - b.x) / bw;
+          const y0 = (r.y - b.y) / bh;
+          const x1 = (r.x + r.width - b.x) / bw;
+          const y1 = (r.y + r.height - b.y) / bh;
+          return [
+            { x: x0, y: y0 },
+            { x: x1, y: y0 },
+            { x: x1, y: y1 },
+            { x: x0, y: y1 }
+          ];
+        });
+
+        const now = Date.now();
+        const ann: HighlighterAnnotation = {
+          id: `hl_${Math.random().toString(36).slice(2, 9)}_${now.toString(36)}`,
+          pageIndex: currentSel.pageIndex,
+          layerId: 'default',
+          type: 'highlighter',
+          box: { ...b },
+          createdAt: now,
+          updatedAt: now,
+          opacity: 0.38,
+          points: [],
+          color,
+          strokeWidth: Math.max(8, Math.round(currentSel.rects[0]?.height || 14)),
+          blendMode: 'multiply',
+          quadPoints,
+          tipShape: 'chisel'
+        };
+
+        history.execute(new AddAnnotationCommand(currentSel.pageIndex, ann));
+        store.setTextSelection(null);
+        this.hideImmediate();
+        window.app?.repaintAllRenderedAnnotations();
+      });
+    });
+
+    // Underline / Strikethrough helper
+    const createLineMarkup = (mode: 'underline' | 'strike') => {
+      const currentSel = store.textSelection;
+      if (!currentSel || currentSel.rects.length === 0) return;
+      const now = Date.now();
+      const strokeColor = mode === 'underline' ? '#2563eb' : '#ef4444';
+
+      for (let i = 0; i < currentSel.rects.length; i++) {
+        const r = currentSel.rects[i];
+        // Place underline cleanly below the glyph descender box so it never cuts through the middle of letters
+        const lineY = mode === 'underline'
+          ? r.y + r.height + Math.max(1.2, r.height * 0.06)
+          : r.y + r.height * 0.48;
+        const ann: ShapeAnnotation = {
+          id: `${mode}_${Math.random().toString(36).slice(2, 9)}_${now.toString(36)}_${i}`,
+          pageIndex: currentSel.pageIndex,
+          layerId: 'default',
+          type: 'line',
+          box: {
+            x: r.x,
+            y: Math.max(0, lineY - 2),
+            width: Math.max(2, r.width),
+            height: 4
+          },
+          createdAt: now,
+          updatedAt: now,
+          opacity: 1,
+          strokeColor,
+          fillColor: 'transparent',
+          strokeWidth: 1.6,
+          strokeStyle: 'solid',
+          points: [
+            { x: r.x, y: lineY },
+            { x: r.x + r.width, y: lineY }
+          ]
+        };
+        history.execute(new AddAnnotationCommand(currentSel.pageIndex, ann));
+      }
+
+      store.setTextSelection(null);
+      this.hideImmediate();
+      window.app?.repaintAllRenderedAnnotations();
+    };
+
+    this._container.querySelector('#fp-sel-underline')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      createLineMarkup('underline');
+    });
+
+    this._container.querySelector('#fp-sel-strike')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      createLineMarkup('strike');
+    });
+
+    // Add Sticky Note
+    this._container.querySelector('#fp-sel-note')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentSel = store.textSelection;
+      if (!currentSel) return;
+      const pageMeta = store.activeDocument?.pages?.[currentSel.pageIndex];
+      const pageW = pageMeta?.width || 612;
+      const pageH = pageMeta?.height || 792;
+      const noteX = Math.max(8, Math.min(pageW - 46, currentSel.bounds.x + currentSel.bounds.width + 6));
+      const noteY = Math.max(8, Math.min(pageH - 46, currentSel.bounds.y));
+      const noteText = currentSel.text.trim();
+      const hasRtl = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/.test(noteText);
+
+      const note = stickyNoteTool.createStickyNote(
+        currentSel.pageIndex,
+        { x: noteX, y: noteY },
+        {
+          text: noteText,
+          color: store.toolSettings.noteColor || '#fef08a',
+          textColor: store.toolSettings.noteTextColor || '#3b2f1e',
+          textAlign: hasRtl ? 'right' : 'left',
+          fontFamily: hasRtl ? 'Vazirmatn' : 'Inter',
+          collapsed: false,
+        }
+      );
+      history.execute(new AddAnnotationCommand(currentSel.pageIndex, note));
+      store.setTextSelection(null);
+      store.selectAnnotation(note.id);
+      window.app?.repaintAllRenderedAnnotations();
+    });
+
+    // Copy selected text
+    this._container.querySelector('#fp-sel-copy')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const currentSel = store.textSelection;
+      if (!currentSel || !currentSel.text) return;
+      try {
+        await navigator.clipboard.writeText(currentSel.text);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = currentSel.text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      showToast('Copied text to clipboard', 'success');
+      store.setTextSelection(null);
+      this.hideImmediate();
+      window.app?.repaintAllRenderedAnnotations();
+    });
   }
 }

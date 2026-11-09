@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>veditor – Professional PDF Editor & Annotator</title>
-  <meta name="description" content="Offline-first PDF editor, annotator, and notebook workspace with vector ink, shapes, signatures, redaction, and multi-tab document management.">
+  <meta name="description" content="Offline-first PDF editor, annotator, and notebook workspace with vector ink, shapes, signatures, sticky notes, and multi-tab document management.">
   <meta property="og:title" content="veditor – Professional PDF Editor & Annotator">
-  <meta property="og:description" content="Offline-first PDF editor, annotator, and notebook workspace with vector ink, shapes, signatures, redaction, and multi-tab document management.">
+  <meta property="og:description" content="Offline-first PDF editor, annotator, and notebook workspace with vector ink, shapes, signatures, sticky notes, and multi-tab document management.">
   <link rel="icon" type="image/png" href="icons/icon-32.png">
   <!--
     Layers, general to specific:
@@ -53,13 +53,30 @@
         <!-- Floating Scratchpad / Draft Overlay -->
         <div id="app-scratchpad"></div>
 
-        <!-- Centered PDF Loading Overlay -->
+        <!-- Centered PDF Loading Overlay (Paper Skeleton + Step Progress) -->
         <div id="pdf-loading-overlay" class="pdf-loading-overlay is-hidden" aria-live="polite">
           <div class="pdf-loading-card">
-            <div class="pdf-loading-spinner-ring"></div>
+            <div class="pdf-loading-paper-stage" aria-hidden="true">
+              <div class="pdf-loading-paper-sheet">
+                <div class="pdf-loading-paper-corner"></div>
+                <div class="pdf-loading-paper-header"></div>
+                <div class="pdf-loading-paper-line is-w90"></div>
+                <div class="pdf-loading-paper-line is-w75"></div>
+                <div class="pdf-loading-paper-line is-w85"></div>
+                <div class="pdf-loading-paper-block"></div>
+                <div class="pdf-loading-paper-line is-w60"></div>
+              </div>
+            </div>
             <div class="pdf-loading-info">
-              <div class="pdf-loading-title" id="pdf-loading-filename">Opening PDF…</div>
-              <div class="pdf-loading-subtitle" id="pdf-loading-status">Parsing document structure…</div>
+              <div class="pdf-loading-top-row">
+                <span class="pdf-loading-step-badge" id="pdf-loading-step-badge">1 / 3</span>
+                <span class="pdf-loading-pct" id="pdf-loading-pct">25%</span>
+              </div>
+              <div class="pdf-loading-title" id="pdf-loading-filename" dir="auto">Opening PDF…</div>
+              <div class="pdf-loading-subtitle" id="pdf-loading-status" dir="auto">Parsing document structure…</div>
+              <div class="pdf-loading-progress-track">
+                <div class="pdf-loading-progress-bar" id="pdf-loading-progress-bar" style="width: 25%"></div>
+              </div>
             </div>
           </div>
         </div>

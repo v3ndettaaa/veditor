@@ -130,11 +130,14 @@ async fn native_build_file_tree(root_path: String) -> Result<Option<RustFileNode
     .map_err(|e| e.to_string())?
 }
 
-/// Configures WebKitGTK on Linux (Arch / Wayland / X11) to avoid DMA-BUF
-/// texture allocation stalls, blank windows, and GPU driver crashes on resize.
+/// Configures WebKitGTK on Linux (Arch / Wayland / X11). Hardware-accelerated
+/// DMA-BUF rendering is enabled by default for smooth 60fps scrolling and pen input.
+/// Users with buggy GPU drivers can set `VEDITOR_DISABLE_DMABUF=1` to fall back.
 #[cfg(target_os = "linux")]
 fn configure_linux_webview_env() {
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    if std::env::var_os("VEDITOR_DISABLE_DMABUF").is_some()
+        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+    {
         // Safety: called at process startup before spawning threads.
         unsafe {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");

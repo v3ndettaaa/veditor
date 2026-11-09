@@ -158,14 +158,6 @@ describe('Custom Drawing Cursors', () => {
 });
 
 describe('Tool Configuration Settings', () => {
-  it('supports configuring redaction mode (Blackout vs Whiteout)', () => {
-    store.updateToolSettings({ redactionColor: '#ffffff' });
-    expect(store.toolSettings.redactionColor).toBe('#ffffff');
-
-    store.updateToolSettings({ redactionColor: '#000000' });
-    expect(store.toolSettings.redactionColor).toBe('#000000');
-  });
-
   it('supports configuring preset stamps and creates corresponding annotations', () => {
     store.updateToolSettings({ stampPreset: 'CONFIDENTIAL' });
     expect(store.toolSettings.stampPreset).toBe('CONFIDENTIAL');
@@ -179,8 +171,7 @@ describe('Tool Configuration Settings', () => {
       drawingCursor: 'crosshair',
       highlighterStraightLine: true,
       highlighterTipShape: 'chisel',
-      stampPreset: 'VOID',
-      redactionColor: '#ffffff'
+      stampPreset: 'VOID'
     });
 
     store.resetSettingsToDefault();
@@ -189,7 +180,6 @@ describe('Tool Configuration Settings', () => {
     expect(store.toolSettings.highlighterStraightLine).toBe(false);
     expect(store.toolSettings.highlighterTipShape).toBe('round');
     expect(store.toolSettings.stampPreset).toBe('APPROVED');
-    expect(store.toolSettings.redactionColor).toBe('#000000');
   });
 
   it('supports configuring shape fill color and applies to drawn shapes', () => {

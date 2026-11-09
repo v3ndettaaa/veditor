@@ -22,6 +22,7 @@ import {
   MAX_ZOOM,
   DEFAULT_TOOLBAR_ORDER
 } from './types';
+import type { PdfSearchMatch, PdfTextSelection } from './pdf-text-layout';
 import { getSystemDpi } from '../utils/dpi';
 import { pruneUnsupportedAnnotations } from '../annotations/migrate';
 
@@ -97,7 +98,6 @@ class StateStore {
     stylusInvertedEraserEnabled: true,
     drawingCursor: 'pen',
     stampPreset: 'APPROVED',
-    redactionColor: '#000000',
     noteColor: '#ebd09e',
     noteTextColor: '#3b2f1e',
     noteFontSize: 24,
@@ -143,6 +143,12 @@ class StateStore {
    * non-intrusive; cleared immediately after.
    */
   private _suppressAutoPanels: boolean = false;
+
+  // Search & PDF Text Selection State
+  private _searchMatches: PdfSearchMatch[] = [];
+  private _activeSearchMatchIndex: number = -1;
+  private _searchQuery: string = '';
+  private _textSelection: PdfTextSelection | null = null;
 
   // Toolbar customization (order + visibility persisted; arranged in Settings)
   private _toolbarOrder: ToolType[] = [...DEFAULT_TOOLBAR_ORDER];
@@ -299,6 +305,10 @@ class StateStore {
   }
   get suppressAutoPanels() { return this._suppressAutoPanels; }
   public setSuppressAutoPanels(value: boolean) { this._suppressAutoPanels = value; }
+  get searchMatches() { return this._searchMatches; }
+  get activeSearchMatchIndex() { return this._activeSearchMatchIndex; }
+  get searchQuery() { return this._searchQuery; }
+  get textSelection() { return this._textSelection; }
   get sidebarOpen() { return this._sidebarOpen; }
   get activeSidebarTab() { return this._activeSidebarTab; }
   get propertiesPanelOpen() { return this._propertiesPanelOpen; }
@@ -345,12 +355,42 @@ class StateStore {
       this._activePageIndex = doc.activePageIndex || 0;
       this.persistActiveSessionId(doc.id);
     } else {
+      this._sidebarOpen = false;
       this.persistActiveSessionId(null);
     }
     this._selectedAnnotationIds.clear();
     // Page indices are document-scoped; keeping them across a switch would
     // highlight unrelated pages in the next document.
     this._selectedPageIndices.clear();
+    this._searchMatches = [];
+    this._activeSearchMatchIndex = -1;
+    this._searchQuery = '';
+    this._textSelection = null;
+    this.notify();
+  }
+
+  public addUserBookmark(pageIndex: number, title?: string) {
+    if (!this._activeDocument) return;
+    const list = [...(this._activeDocument.userBookmarks || [])];
+    const cleanTitle = (title || '').trim() || `Page ${pageIndex + 1}`;
+    const existingIdx = list.findIndex(b => b.pageIndex === pageIndex && b.title === cleanTitle);
+    if (existingIdx >= 0) return;
+    list.push({
+      id: `bm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      title: cleanTitle,
+      pageIndex,
+      createdAt: Date.now()
+    });
+    list.sort((a, b) => a.pageIndex - b.pageIndex || a.createdAt - b.createdAt);
+    this._activeDocument.userBookmarks = list;
+    this._openDocuments.set(this._activeDocument.id, this._activeDocument);
+    this.notify();
+  }
+
+  public removeUserBookmark(bookmarkId: string) {
+    if (!this._activeDocument || !this._activeDocument.userBookmarks) return;
+    this._activeDocument.userBookmarks = this._activeDocument.userBookmarks.filter(b => b.id !== bookmarkId);
+    this._openDocuments.set(this._activeDocument.id, this._activeDocument);
     this.notify();
   }
 
@@ -368,6 +408,10 @@ class StateStore {
       this._activePageIndex = targetDoc.activePageIndex || 0;
       this.persistActiveSessionId(targetDoc.id);
       this._selectedAnnotationIds.clear();
+      this._searchMatches = [];
+      this._activeSearchMatchIndex = -1;
+      this._searchQuery = '';
+      this._textSelection = null;
       this.notify();
     }
   }
@@ -397,23 +441,42 @@ class StateStore {
       } else {
         this._activeDocument = null;
         this._activePageIndex = 0;
+        this._sidebarOpen = false;
         this.persistActiveSessionId(null);
       }
     }
     this._selectedAnnotationIds.clear();
     this._selectedPageIndices.clear();
+    this._searchMatches = [];
+    this._activeSearchMatchIndex = -1;
+    this._searchQuery = '';
+    this._textSelection = null;
     this.notify();
   }
 
   public closeAllDocumentTabs() {
+    for (const [id, doc] of this._openDocuments.entries()) {
+      for (const listener of this._closeTabListeners) {
+        try {
+          listener(id, doc);
+        } catch (e) {
+          console.error('Error in closeTab listener:', e);
+        }
+      }
+    }
     this._documentTabs = [];
     this._openDocuments.clear();
     this._pageRotationsByDoc.clear();
     this._activeDocument = null;
     this._activePageIndex = 0;
-    this.persistActiveSessionId(null);
+    this._sidebarOpen = false;
     this._selectedAnnotationIds.clear();
     this._selectedPageIndices.clear();
+    this._searchMatches = [];
+    this._activeSearchMatchIndex = -1;
+    this._searchQuery = '';
+    this._textSelection = null;
+    this.persistActiveSessionId(null);
     this.notify();
   }
 
@@ -471,6 +534,7 @@ class StateStore {
       this._activeTool = tool;
       if (tool !== 'select') {
         this._selectedAnnotationIds.clear();
+        this._textSelection = null;
       }
       this.notify();
     }
@@ -545,7 +609,6 @@ class StateStore {
       highlighterOpacity: 0.3,
       highlighterCursor: 'rectangle',
       stampPreset: 'APPROVED',
-      redactionColor: '#000000',
       noteColor: '#ebd09e',
       noteTextColor: '#3b2f1e',
       noteFontSize: 24,
@@ -602,6 +665,41 @@ class StateStore {
       this._selectedAnnotationIds.clear();
       this.notify();
     }
+  }
+
+  public setSearchResults(query: string, matches: PdfSearchMatch[], activeIndex: number = matches.length > 0 ? 0 : -1) {
+    this._searchQuery = query;
+    this._searchMatches = matches;
+    this._activeSearchMatchIndex = activeIndex;
+    this.notify();
+  }
+
+  public setActiveSearchMatchIndex(index: number) {
+    const clamped = this._searchMatches.length === 0
+      ? -1
+      : Math.max(0, Math.min(this._searchMatches.length - 1, index));
+    if (this._activeSearchMatchIndex !== clamped) {
+      this._activeSearchMatchIndex = clamped;
+      this.notify();
+    }
+  }
+
+  public clearSearchResults() {
+    if (this._searchMatches.length > 0 || this._searchQuery !== '' || this._activeSearchMatchIndex !== -1) {
+      this._searchMatches = [];
+      this._activeSearchMatchIndex = -1;
+      this._searchQuery = '';
+      this.notify();
+    }
+  }
+
+  public setTextSelection(selection: PdfTextSelection | null) {
+    if (this._textSelection === null && selection === null) return;
+    this._textSelection = selection;
+    if (selection && this._selectedAnnotationIds.size > 0) {
+      this._selectedAnnotationIds.clear();
+    }
+    this.notify();
   }
 
   public setClipboard(annotations: Annotation[]) {

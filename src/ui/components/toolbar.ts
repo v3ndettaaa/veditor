@@ -28,7 +28,6 @@ export const TOOL_SHORT_LABELS: Record<string, string> = {
   stamp: 'Stamp',
   'measure-distance': 'Measure',
   signature: 'Signature',
-  redaction: 'Redaction',
   scratchpad: 'Scratchpad'
 };
 
@@ -931,32 +930,6 @@ export class ToolbarComponent {
             ${getIconSvg('signature')}
           </button>
 
-          <!-- Redaction with Goodnotes Popover Card -->
-          <div class="tool-btn-wrapper ${this._pinnedTool === 'redaction' ? 'is-pinned' : ''}" data-wrapper-tool="redaction">
-            <button class="tool-btn has-popover ${activeTool === 'redaction' ? 'active' : ''}" data-tool="redaction" title="${t('tools.redaction')} (X)">
-              ${getIconSvg('redaction')}
-              <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
-            </button>
-            <div class="tool-hover-card gn-popover gn-popover-compact">
-              <div class="gn-popover-arrow"></div>
-              <div class="gn-card-header">
-                <span class="gn-card-title">${t('tools.redaction')}</span>
-              </div>
-              <div class="gn-section">
-                <div class="gn-tile-grid cols-2">
-                  <button type="button" class="gn-icon-tile mode-toggle-btn ${(s.redactionColor || '#000000') === '#000000' ? 'active' : ''}" data-redact-color="#000000">
-                    <span class="gn-tile-icon">${getIconSvg('redactBlack', 22)}</span>
-                    <span class="gn-tile-label">Blackout</span>
-                  </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn ${(s.redactionColor || '#000000') === '#ffffff' ? 'active' : ''}" data-redact-color="#ffffff">
-                    <span class="gn-tile-icon">${getIconSvg('redactWhite', 22)}</span>
-                    <span class="gn-tile-label">Whiteout</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
           <!-- Floating Scratchpad -->
           <button class="tool-btn ${activeTool === 'scratchpad' ? 'active' : ''}" data-tool="scratchpad" title="${t('tools.scratchpad')} (N)">
             ${getIconSvg('scratchpad')}
@@ -1468,13 +1441,7 @@ export class ToolbarComponent {
       el.classList.toggle('active', u === s.measureUnit);
     });
 
-    // 8. Redaction Indicators
-    this._container.querySelectorAll('[data-redact-color]').forEach(el => {
-      const rc = el.getAttribute('data-redact-color');
-      el.classList.toggle('active', rc === (s.redactionColor || '#000000'));
-    });
-
-    // 9. Undo / Redo buttons reactive state
+    // 8. Undo / Redo buttons reactive state
     const undoBtn = this._container.querySelector<HTMLButtonElement>('#toolbar-undo-btn');
     if (undoBtn) {
       undoBtn.disabled = !history.canUndo;
@@ -2487,18 +2454,6 @@ export class ToolbarComponent {
         const u = el.getAttribute('data-measure-unit') as any;
         if (u) {
           store.updateToolSettings({ measureUnit: u });
-          this.updateIndicators();
-        }
-      });
-    });
-
-    // Redaction listeners
-    this._container.querySelectorAll('[data-redact-color]').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const color = el.getAttribute('data-redact-color');
-        if (color) {
-          store.updateToolSettings({ redactionColor: color });
           this.updateIndicators();
         }
       });

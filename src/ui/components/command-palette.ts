@@ -66,7 +66,6 @@ export class CommandPaletteComponent {
       { id: 'tool-stamp', title: 'Vector Stamp Tool', category: 'Tools', shortcut: 'M', action: () => store.setActiveTool('stamp') },
       { id: 'tool-signature', title: 'Signature Pad', category: 'Tools', shortcut: 'K', action: () => store.setSignatureModalOpen(true) },
       { id: 'tool-measure', title: 'Measure Distance Tool', category: 'Tools', action: () => store.setActiveTool('measure-distance') },
-      { id: 'tool-redaction', title: 'Redaction Tool', category: 'Tools', shortcut: 'X', action: () => store.setActiveTool('redaction') },
       { id: 'tool-lasso', title: 'Lasso Select Tool', category: 'Tools', shortcut: 'Q', action: () => store.setActiveTool('lasso') },
       { id: 'tool-scratchpad', title: 'Floating Scratchpad', category: 'Tools', shortcut: 'N', action: () => { store.setActiveTool('scratchpad'); store.setScratchpadOpen(true); } },
 

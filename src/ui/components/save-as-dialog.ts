@@ -1,5 +1,5 @@
 /**
- * Save As dialog: filename + quality + pages + redaction options.
+ * Save As dialog: filename + quality + pages options.
  * Transient body-hosted modal (like NotebookDialog) so header re-renders
  * can't tear it down mid-edit.
  */
@@ -11,7 +11,6 @@ export interface SaveAsOptions {
   filename: string;
   dpi: 72 | 150 | 300 | 600;
   flatten: boolean;
-  applyRedactions: boolean;
   /** Bake the dark viewing theme into the saved pages. */
   darkMode?: boolean;
   pageRange?: { start: number; end: number };
@@ -24,7 +23,6 @@ interface SaveAsDialogOpts {
   selectedPageIndices?: number[];
   /** Preselects the theme choice to match the current on-screen appearance. */
   displayedDark?: boolean;
-  hasRedactions: boolean;
   supportsPicker: boolean;
   onSubmit: (opts: SaveAsOptions) => void | Promise<void>;
   onClose?: () => void;
@@ -85,14 +83,6 @@ export class SaveAsDialogComponent {
               <span>${t('saveAs.flatten')}</span>
             </label>
             <div class="form-hint">${t('saveAs.flattenHint')}</div>
-
-            ${this._opts.hasRedactions ? `
-            <label class="form-field form-check">
-              <input id="saveas-redactions" type="checkbox" checked />
-              <span>${t('saveAs.applyRedactions')}</span>
-            </label>
-            <div class="form-hint form-warn">${t('saveAs.redactionWarn')}</div>
-            ` : ''}
 
             <div class="form-field">
               <span class="form-label">${t('saveAs.pages')}</span>
@@ -161,7 +151,6 @@ export class SaveAsDialogComponent {
       const dpi = Number(q<HTMLSelectElement>('#saveas-dpi')?.value || 150) as 72 | 150 | 300 | 600;
       const flatten = q<HTMLInputElement>('#saveas-flatten')?.checked !== false;
       const darkMode = q<HTMLSelectElement>('#saveas-theme')?.value === 'dark';
-      const applyRedactions = q<HTMLInputElement>('#saveas-redactions')?.checked !== false;
       const custom = this._container.querySelector<HTMLInputElement>('input[name="saveas-range"]:checked')?.value === 'custom';
       let pageRange: { start: number; end: number } | undefined;
       let pageIndices: number[] | undefined;
@@ -176,7 +165,7 @@ export class SaveAsDialogComponent {
       this._busy = true;
       (q('#saveas-submit') as HTMLButtonElement | null)?.setAttribute('disabled', '');
       try {
-        await this._opts.onSubmit({ filename: name, dpi, flatten, applyRedactions, darkMode, pageRange, pageIndices });
+        await this._opts.onSubmit({ filename: name, dpi, flatten, darkMode, pageRange, pageIndices });
         this.destroy();
       } finally {
         this._busy = false;

@@ -2,14 +2,14 @@ import type { ToolType } from '../core/types';
 
 export type ShortcutAction = Extract<ToolType,
   'select' | 'hand' | 'lasso' | 'pen' | 'highlighter' | 'eraser' |
-  'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'text' | 'stamp' | 'redaction'>;
+  'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'text' | 'stamp'>;
 
 const STORAGE_KEY = 'veditor_shortcuts_v1';
 
 export const DEFAULT_SHORTCUTS: Record<ShortcutAction, string> = {
   select: 'v', hand: 'space', lasso: 'q', pen: 'p', highlighter: 'h',
   eraser: 'e', rectangle: 'r', ellipse: 'o', line: 'l', arrow: 'a',
-  polygon: 'g', text: 't', stamp: 'm', redaction: 'x'
+  polygon: 'g', text: 't', stamp: 'm'
 };
 
 function normalize(key: string): string {

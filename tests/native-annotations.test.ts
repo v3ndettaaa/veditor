@@ -85,6 +85,16 @@ describe('native annotation structural codec', () => {
     const font = reopened.context.lookup(fonts.get(key('F0')), PDFDict);
     expect(font.lookup(key('Subtype'), PDFName).decodeText()).toBe('Type0');
   });
+  it('embeds mixed Persian + English + numbers in FreeText without throwing missing-glyph errors', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([400, 500]);
+    const ann = { ...textAnnotation('mixed-fa-en'), text: 'یادداشت: فصل 2 — Vector Calculus', fontFamily: 'Vazirmatn' };
+    await syncNativeAnnotations(doc, { 0: [ann] }, async () => new Uint8Array(await readFile(
+      new URL('../node_modules/@fontsource/vazirmatn/files/vazirmatn-arabic-400-normal.woff', import.meta.url)
+    )));
+    const reopened = await PDFDocument.load(await doc.save());
+    expect(importNativeAnnotations(reopened)[0].annotation).toEqual(ann);
+  });
   it('imports the five supported subtypes and FreeText properties without mutating dictionaries', async () => {
     const { doc } = await fixture();
     const before = dicts(doc).map(dict => dict.toString());

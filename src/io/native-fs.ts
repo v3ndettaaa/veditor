@@ -71,20 +71,20 @@ export async function nativeReadFile(path: string): Promise<Uint8Array | null> {
 export async function nativeWriteFile(path: string, bytes: Uint8Array): Promise<boolean> {
   if (!isDesktop()) return false;
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const ok = await invoke<boolean>('native_write_pdf_fast', { path, bytes: Array.from(bytes) });
-    if (ok) return true;
-  } catch {
-    // Fallback to plugin-fs below
-  }
-  try {
     const { writeFile } = await import('@tauri-apps/plugin-fs');
     await writeFile(path, bytes);
     return true;
+  } catch {
+    // Fallback to Tauri invoke command below
+  }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const ok = await invoke<boolean>('native_write_pdf_fast', { path, bytes: Array.from(bytes) });
+    if (ok) return true;
   } catch (e) {
     console.warn('Native write failed:', e);
-    return false;
   }
+  return false;
 }
 
 export async function nativeSaveAsDialog(suggestedName: string): Promise<string | null> {

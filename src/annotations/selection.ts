@@ -385,8 +385,7 @@ export class SelectionManager {
     if (boxHitsPoly || polyHitsBox || edgesCross) {
       // Box-like annotations are decided by box overlap alone.
       if (ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'text' ||
-          ann.type === 'stamp' || ann.type === 'redaction' ||
-          ann.type === 'signature') {
+          ann.type === 'stamp' || ann.type === 'signature') {
         return true;
       }
     }

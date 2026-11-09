@@ -25,7 +25,6 @@ import { stickyNoteTool } from './tools/sticky-note';
 import { stampTool } from './tools/stamp';
 import { measureTool } from './tools/measure';
 import { signatureTool } from './tools/signature';
-import { redactionTool } from './tools/redaction';
 
 export class AnnotationEngine {
   /**
@@ -154,6 +153,51 @@ export class AnnotationEngine {
       this.renderSingleAnnotation(ctx, ann, scale);
       ctx.restore();
     }
+
+    // Paint sidebar search matches in translucent yellow (active match emphasized)
+    const searchMatches = store.searchMatches;
+    if (searchMatches.length > 0) {
+      const activeIdx = store.activeSearchMatchIndex;
+      ctx.save();
+      ctx.scale(scale, scale);
+      for (let i = 0; i < searchMatches.length; i++) {
+        const match = searchMatches[i];
+        if (match.pageIndex !== pageIndex) continue;
+        const isActive = i === activeIdx;
+        ctx.fillStyle = isActive ? 'rgba(250, 204, 21, 0.62)' : 'rgba(253, 224, 71, 0.42)';
+        ctx.strokeStyle = isActive ? 'rgba(202, 138, 4, 0.95)' : 'rgba(234, 179, 8, 0.45)';
+        ctx.lineWidth = isActive ? 1.5 : 0.8;
+        for (const r of match.rects) {
+          ctx.beginPath();
+          if (typeof ctx.roundRect === 'function') {
+            ctx.roundRect(r.x - 1, r.y - 0.5, r.width + 2, r.height + 1, 2);
+          } else {
+            ctx.rect(r.x - 1, r.y - 0.5, r.width + 2, r.height + 1);
+          }
+          ctx.fill();
+          if (isActive) ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Paint active Select-tool PDF text selection in translucent blue
+    const textSelection = store.textSelection;
+    if (textSelection && textSelection.pageIndex === pageIndex && textSelection.rects.length > 0) {
+      ctx.save();
+      ctx.scale(scale, scale);
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.28)';
+      for (const r of textSelection.rects) {
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(r.x - 0.5, r.y, r.width + 1, r.height, 1.5);
+        } else {
+          ctx.rect(r.x - 0.5, r.y, r.width + 1, r.height);
+        }
+        ctx.fill();
+      }
+      ctx.restore();
+    }
   }
 
   /**
@@ -263,10 +307,6 @@ export class AnnotationEngine {
 
       case 'signature':
         signatureTool.renderToCanvas(ctx, ann, scale);
-        break;
-
-      case 'redaction':
-        redactionTool.renderToCanvas(ctx, ann, scale);
         break;
     }
   }

@@ -230,6 +230,7 @@ export function syncNativeInkAnnotations(
 
       // Update Dictionary attributes per ISO 32000-1
       annotDict.set(PDFName.of('VEditorManaged'), PDFNumber.of(1));
+      annotDict.set(PDFName.of('VEditorTool'), PDFString.of(ann.type));
       annotDict.set(PDFName.of('Rect'), pdfDoc.context.obj([rectLlx, rectLly, rectUrx, rectUry]));
       annotDict.set(PDFName.of('F'), PDFNumber.of(4)); // Print flag
       annotDict.set(PDFName.of('C'), pdfDoc.context.obj([r, g, b]));
@@ -322,3 +323,23 @@ export async function stripNativeInkAnnotationsFromBytes(bytes: Uint8Array): Pro
     return bytes;
   }
 }
+
+export function extractNativeInkToolMap(pdfDoc: PDFDocument): Map<string, 'pen' | 'highlighter'> {
+  const toolMap = new Map<string, 'pen' | 'highlighter'>();
+  for (const page of pdfDoc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      const dict = annots.lookupMaybe(i, PDFDict);
+      const subtype = dict?.lookupMaybe(PDFName.of('Subtype'), PDFName);
+      if (subtype?.asString() !== INK_NAME || !dict) continue;
+      const nm = dict.lookupMaybe(PDFName.of('NM'), PDFString)?.asString();
+      const tool = dict.lookupMaybe(PDFName.of('VEditorTool'), PDFString)?.asString();
+      if (nm && (tool === 'highlighter' || tool === 'pen')) {
+        toolMap.set(nm, tool);
+      }
+    }
+  }
+  return toolMap;
+}
+

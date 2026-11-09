@@ -37,8 +37,7 @@ const TOOLBAR_ICONS: Record<string, string> = {
   text: 'text',
   stamp: 'stamp',
   'measure-distance': 'measure',
-  signature: 'signature',
-  redaction: 'redaction'
+  signature: 'signature'
 };
 
 export class SettingsModalComponent {

@@ -18,7 +18,6 @@
 | `M` | **Stamp** | Insert built-in vector stamps (APPROVED, CONFIDENTIAL, etc.) |
 | `C` | **Callout** | Speech bubble with directional pointer |
 | `K` | **Signature** | Digital ink signature pad |
-| `X` | **Redaction** | Permanent blackout / whiteout redaction box |
 | `U` | **Sticky Note** | Drag to create a handwritten note card; double-click to collapse into a pin; click with note tool to edit inside |
 | `Z` | **Laser Pointer** | Ephemeral glowing presentation pointer |
 | `N` | **Scratchpad** | Floating draft overlay: move/resize, Insert sends strokes to the page |

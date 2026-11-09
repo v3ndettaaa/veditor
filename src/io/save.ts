@@ -14,7 +14,7 @@ import { showToast } from '../ui/components/toast';
 import { openSaveAsDialog, type SaveAsOptions } from '../ui/components/save-as-dialog';
 import { isDesktop } from '../core/platform';
 import { isPdfDisplayedDark } from './save-policy';
-import { nativeSaveAsDialog, nativeWriteFile, nativeConfirm } from './native-fs';
+import { nativeSaveAsDialog, nativeWriteFile } from './native-fs';
 
 const fileHandles = new Map<string, any>();
 
@@ -33,25 +33,35 @@ export function isDocumentDirty(docId: string): boolean {
   return (doc.lastModifiedAt ?? 0) > (doc.lastSavedAt ?? doc.createdAt ?? 0);
 }
 
-async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
-  return pdfExporter.exportPDF({
-    flatten: opts?.flatten ?? false,
-    dpi: opts?.dpi ?? 150,
-    applyRedactions: opts?.applyRedactions ?? true,
-    pageRange: opts?.pageRange,
-    pageIndices: opts?.pageIndices,
-    darkMode: opts?.darkMode === true
-  });
-}
-
-function hasPendingRedactions(): boolean {
+function hasCompositeAnnotations(): boolean {
   const doc = store.activeDocument;
   if (!doc) return false;
   for (const key of Object.keys(doc.annotations)) {
     const anns = doc.annotations[Number(key)] || [];
-    if (anns.some(a => a.type === 'redaction')) return true;
+    if (
+      anns.some(
+        (a) =>
+          a.type === 'signature' ||
+          a.type === 'measure-distance' ||
+          a.type === 'measure-angle' ||
+          a.type === 'measure-area'
+      )
+    ) {
+      return true;
+    }
   }
   return false;
+}
+
+async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
+  return pdfExporter.exportPDF({
+    flatten: opts?.flatten ?? false,
+    dpi: opts?.dpi ?? 150,
+    pageRange: opts?.pageRange,
+    pageIndices: opts?.pageIndices,
+    darkMode: opts?.darkMode === true,
+    embedCompositeAnnotations: opts?.embedCompositeAnnotations ?? true
+  });
 }
 
 async function refreshEngineFromSavedBytes(docId: string, bytes: Uint8Array): Promise<void> {
@@ -95,60 +105,33 @@ export async function saveActiveDocument(): Promise<boolean> {
     showToast('No PDF document loaded to save', 'error');
     return false;
   }
-  if (hasPendingRedactions()) {
-    const ok = await nativeConfirm('This document contains redactions. Saving burns them in permanently. Continue?');
-    if (!ok) return false;
-  }
-  showToast('Saving…', 'progress');
+
   try {
-    const bytes = await buildSavedBytes();
-    doc.fileData = bytes;
-    doc.lastModifiedAt = Date.now();
-    doc.lastSavedAt = Date.now();
-    await saveDocumentSession(doc, { includeBytes: true });
-    await refreshEngineFromSavedBytes(doc.id, bytes);
+    // 1. Resolve target destination first so cancelling the dialog leaves state untouched
+    let desktopPath = doc.nativeFilePath;
+    let browserHandle = fileHandles.get(doc.id);
 
     if (isDesktop()) {
-      // Native shell: write straight to the file this document was opened
-      // from — no dialog. A document with no known path yet (new notebook,
-      // or opened by some other means) is asked once, and that path is then
-      // remembered for every subsequent Save.
-      let path = doc.nativeFilePath;
-      if (!path) {
+      if (!desktopPath) {
         const filename = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
-        path = await nativeSaveAsDialog(filename) ?? undefined;
-        if (!path) {
+        desktopPath = (await nativeSaveAsDialog(filename)) ?? undefined;
+        if (!desktopPath) {
           showToast('Save cancelled', 'info');
           return false;
         }
-        doc.nativeFilePath = path;
-        doc.name = path.split(/[\\/]/).pop() || filename;
       }
-      const wrote = await nativeWriteFile(path, bytes);
-      if (wrote) {
-        showToast('Saved', 'success');
-      } else {
-        showToast('Could not write to the original file (saved in session only)', 'error');
-      }
-      store.notify();
-      viewportManager.updateLayout(true);
-      return wrote;
-    }
-
-    let handle = fileHandles.get(doc.id);
-    if (!handle && typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
-      // First save without retained handle: link directly to original disk file
+    } else if (!browserHandle && typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
       try {
         const filename = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
-        handle = await (window as any).showSaveFilePicker({
+        browserHandle = await (window as any).showSaveFilePicker({
           suggestedName: filename,
           types: [{
             description: 'PDF Document',
             accept: { 'application/pdf': ['.pdf'] }
           }]
         });
-        if (handle) {
-          rememberFileHandle(doc.id, handle);
+        if (browserHandle) {
+          rememberFileHandle(doc.id, browserHandle);
         }
       } catch (err: any) {
         if (err?.name === 'AbortError') {
@@ -158,15 +141,57 @@ export async function saveActiveDocument(): Promise<boolean> {
       }
     }
 
-    if (handle) {
-      const wrote = await writeHandle(handle, bytes);
+    showToast('Saving…', 'progress');
+
+    // Keep session bytes un-flattened for composite annotations so active tab stays editable
+    const sessionBytes = await buildSavedBytes({
+      flatten: false,
+      embedCompositeAnnotations: false
+    });
+    const diskBytes = hasCompositeAnnotations()
+      ? await buildSavedBytes({ flatten: false, embedCompositeAnnotations: true })
+      : sessionBytes;
+
+    doc.fileData = sessionBytes;
+    await refreshEngineFromSavedBytes(doc.id, sessionBytes);
+
+    if (isDesktop() && desktopPath) {
+      const wrote = await nativeWriteFile(desktopPath, diskBytes);
       if (wrote) {
+        doc.nativeFilePath = desktopPath;
+        doc.name = desktopPath.split(/[\\/]/).pop() || doc.name;
+        const now = Date.now();
+        doc.lastModifiedAt = now;
+        doc.lastSavedAt = now;
+        await saveDocumentSession(doc, { includeBytes: true });
+        showToast('Saved', 'success');
+      } else {
+        await saveDocumentSession(doc, { includeBytes: true });
+        showToast('Could not write to the original file (saved in session only)', 'error');
+      }
+      store.notify();
+      viewportManager.updateLayout(true);
+      return wrote;
+    }
+
+    if (browserHandle) {
+      const wrote = await writeHandle(browserHandle, diskBytes);
+      const now = Date.now();
+      doc.lastModifiedAt = now;
+      if (wrote) {
+        doc.lastSavedAt = now;
+        await saveDocumentSession(doc, { includeBytes: true });
         showToast('Saved directly to original file', 'success');
       } else {
+        await saveDocumentSession(doc, { includeBytes: true });
         showToast('Saved in session', 'success');
       }
     } else {
-      await pdfExporter.saveToFile(bytes, doc.name);
+      await pdfExporter.saveToFile(diskBytes, doc.name);
+      const now = Date.now();
+      doc.lastModifiedAt = now;
+      doc.lastSavedAt = now;
+      await saveDocumentSession(doc, { includeBytes: true });
       showToast('Saved', 'success');
     }
     store.notify();
@@ -211,7 +236,6 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
     return false;
   }
   const suggested = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
-  const hasRed = hasPendingRedactions();
   const pageCount = doc.pageCount;
   const supportsPicker = isDesktop() || (typeof window !== 'undefined' && 'showSaveFilePicker' in window);
 
@@ -220,7 +244,6 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
       defaultFilename: suggested,
       pageCount,
       selectedPageIndices: [...store.selectedPageIndices],
-      hasRedactions: hasRed,
       supportsPicker,
       displayedDark: isPdfDisplayedDark(
         store.appSettings.invertDocumentOled,
@@ -230,55 +253,79 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
       onSubmit: async (opts: SaveAsOptions) => {
         try {
           showToast('Preparing Save As…', 'progress');
-          const bytes = await buildSavedBytes({
+          const diskBytes = await buildSavedBytes({
             dpi: opts.dpi,
             flatten: opts.flatten,
-            applyRedactions: opts.applyRedactions,
             darkMode: opts.darkMode === true,
             pageRange: opts.pageRange,
-            pageIndices: opts.pageIndices
+            pageIndices: opts.pageIndices,
+            embedCompositeAnnotations: true
           });
-          const result = await writeExportedBytes(bytes, opts.filename);
+          const result = await writeExportedBytes(diskBytes, opts.filename);
           if (result.cancelled) {
             resolve(false);
             return;
           }
           const chosenName = result.chosenName;
 
-          // Save As with a range creates a new, smaller document. Keep its
-          // in-memory annotation map in the same coordinate system as the
-          // copied PDF pages; otherwise a later save could draw annotations
-          // onto the wrong page.
-          if (opts.pageRange || opts.pageIndices?.length) {
-            const sourcePages = opts.pageIndices?.length
-              ? opts.pageIndices
-              : Array.from(
-                { length: opts.pageRange!.end - opts.pageRange!.start + 1 },
-                (_, offset) => opts.pageRange!.start - 1 + offset
-              );
-            const selectedAnnotations: typeof doc.annotations = {};
-            sourcePages.forEach((sourceIndex, targetIndex) => {
-              const annotations = doc.annotations[sourceIndex];
-              if (!annotations?.length) return;
-              selectedAnnotations[targetIndex] = annotations.map(annotation => ({
-                ...annotation,
-                pageIndex: targetIndex
-              }));
-            });
-            doc.annotations = selectedAnnotations;
-            doc.activePageIndex = Math.max(0, sourcePages.indexOf(doc.activePageIndex));
+          if (opts.flatten) {
+            // Flattened export baked all annotations into the PDF page streams;
+            // clear in-memory annotations so they are not drawn twice.
+            doc.annotations = {};
+            if (opts.pageRange || opts.pageIndices?.length) {
+              const sourcePages = opts.pageIndices?.length
+                ? opts.pageIndices
+                : Array.from(
+                  { length: opts.pageRange!.end - opts.pageRange!.start + 1 },
+                  (_, offset) => opts.pageRange!.start - 1 + offset
+                );
+              doc.activePageIndex = Math.max(0, sourcePages.indexOf(doc.activePageIndex));
+            }
+            doc.fileData = diskBytes;
+          } else {
+            if (opts.pageRange || opts.pageIndices?.length) {
+              const sourcePages = opts.pageIndices?.length
+                ? opts.pageIndices
+                : Array.from(
+                  { length: opts.pageRange!.end - opts.pageRange!.start + 1 },
+                  (_, offset) => opts.pageRange!.start - 1 + offset
+                );
+              const selectedAnnotations: typeof doc.annotations = {};
+              sourcePages.forEach((sourceIndex, targetIndex) => {
+                const annotations = doc.annotations[sourceIndex];
+                if (!annotations?.length) return;
+                selectedAnnotations[targetIndex] = annotations.map(annotation => ({
+                  ...annotation,
+                  pageIndex: targetIndex
+                }));
+              });
+              doc.annotations = selectedAnnotations;
+              doc.activePageIndex = Math.max(0, sourcePages.indexOf(doc.activePageIndex));
+            }
+            const sessionBytes = hasCompositeAnnotations()
+              ? await buildSavedBytes({
+                  dpi: opts.dpi,
+                  flatten: false,
+                  darkMode: opts.darkMode === true,
+                  pageRange: opts.pageRange,
+                  pageIndices: opts.pageIndices,
+                  embedCompositeAnnotations: false
+                })
+              : diskBytes;
+            doc.fileData = sessionBytes;
           }
-          doc.fileData = bytes;
+
           doc.name = chosenName;
           if (result.nativeFilePath) doc.nativeFilePath = result.nativeFilePath;
-          doc.lastModifiedAt = Date.now();
-          doc.lastSavedAt = Date.now();
+          const now = Date.now();
+          doc.lastModifiedAt = now;
+          doc.lastSavedAt = now;
           const tabs = (store as any)._documentTabs as Array<{ id: string; name: string }> | undefined;
           const tab = tabs?.find(t => t.id === doc.id);
           if (tab) tab.name = chosenName;
           if (result.handle) rememberFileHandle(doc.id, result.handle);
           await saveDocumentSession(doc, { includeBytes: true });
-          await refreshEngineFromSavedBytes(doc.id, bytes);
+          await refreshEngineFromSavedBytes(doc.id, doc.fileData);
           store.notify();
           viewportManager.updateLayout(true);
           showToast(`Saved as ${chosenName}`, 'success');

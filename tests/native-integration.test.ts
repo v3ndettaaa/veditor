@@ -69,13 +69,13 @@ it('imports editable objects, paints the overlay, and saves/reopens without dupl
   const text = session.annotations[0][0];
   if (text.type !== 'text') throw new Error('Expected editable text');
   text.text = 'Changed';
-  const saved = await pdfExporter.exportPDF({ flatten: false, dpi: 150, applyRedactions: false });
+  const saved = await pdfExporter.exportPDF({ flatten: false, dpi: 150 });
   const reopened = await PDFDocument.load(saved);
   expect(importNativeAnnotations(reopened).map(e => e.annotation)).toEqual(session.annotations[0]);
   expect(reopened.getPage(0).node.Annots()!.size()).toBe(3);
   session.fileData = saved;
   session.annotations[0] = [];
-  const deleted = await PDFDocument.load(await pdfExporter.exportPDF({ flatten: false, dpi: 150, applyRedactions: false }));
+  const deleted = await PDFDocument.load(await pdfExporter.exportPDF({ flatten: false, dpi: 150 }));
   expect(importNativeAnnotations(deleted)).toEqual([]);
   expect(deleted.getPage(0).node.Annots()!.size()).toBe(1);
 });

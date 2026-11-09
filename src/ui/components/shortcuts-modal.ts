@@ -45,8 +45,7 @@ export class ShortcutsModalComponent {
           { key: 'T', desc: 'Text box' },
           { key: 'M', desc: 'Stamp / image' },
           { key: 'K', desc: 'Signature' },
-          { key: 'N', desc: 'Scratchpad' },
-          { key: 'X', desc: 'Redaction' }
+          { key: 'N', desc: 'Scratchpad' }
         ]
       },
       {

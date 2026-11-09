@@ -1,9 +1,9 @@
 /**
  * PDF Export Engine powered by pdf-lib
- * Supports high-resolution annotation flattening, vector embedding, and redaction scrubbing.
+ * Supports high-resolution annotation flattening and native vector/composite embedding.
  */
 
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import { store } from '../core/store';
 import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
@@ -20,7 +20,6 @@ async function loadUnicodeFont(): Promise<Uint8Array> {
 export interface PDFExportOptions {
   flatten: boolean;
   dpi: 72 | 150 | 300 | 600;
-  applyRedactions: boolean;
   pageRange?: { start: number; end: number }; // 1-indexed
   /** Exact zero-indexed pages, used by sidebar multi-selection. */
   pageIndices?: number[];
@@ -30,13 +29,19 @@ export interface PDFExportOptions {
    * colors untouched. Only ever applied when explicitly requested.
    */
   darkMode?: boolean;
+  /**
+   * When flatten is false, embeds composite annotations (signatures and
+   * measurements) onto exported pages so external PDF viewers display them.
+   * Defaults to true.
+   */
+  embedCompositeAnnotations?: boolean;
 }
 
 export class PDFExporter {
   /**
    * Exports document with annotations.
    */
-  public async exportPDF(options: PDFExportOptions = { flatten: true, dpi: 150, applyRedactions: true }): Promise<Uint8Array> {
+  public async exportPDF(options: PDFExportOptions = { flatten: true, dpi: 150 }): Promise<Uint8Array> {
     const doc = store.activeDocument;
     if (!doc || !doc.fileData) {
       throw new Error('No PDF document loaded to export');
@@ -44,9 +49,43 @@ export class PDFExporter {
 
     // Load original PDF using pdf-lib to preserve structure and metadata
     const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
+    const fallbackBakedIds = new Set<string>();
+
     // Bidirectionally sync Veditor pen/highlighter vector ink into native PDF /Ink dicts
     if (!options.flatten) {
-      await syncNativeAnnotations(pdfDoc, doc.annotations, loadUnicodeFont);
+      const normalizedAnnotations: Record<number, any[]> = {};
+      for (const [pageKey, list] of Object.entries(doc.annotations)) {
+        const pageIdx = Number(pageKey);
+        if (!Array.isArray(list)) continue;
+        normalizedAnnotations[pageIdx] = list
+          .filter((a) => {
+            if (a.type === 'stamp' && a.stampType === 'custom') {
+              fallbackBakedIds.add(a.id);
+              return false;
+            }
+            return true;
+          })
+          .map((a) => {
+            if (a.type === 'highlighter' && 'quadPoints' in a && Array.isArray(a.quadPoints) && a.quadPoints.length > 0) {
+              return { ...a, points: [], blendMode: a.blendMode || 'multiply' };
+            }
+            return a;
+          });
+      }
+
+      try {
+        await syncNativeAnnotations(pdfDoc, normalizedAnnotations, loadUnicodeFont);
+      } catch (err) {
+        console.warn('Native annotation sync encountered an unsupported item; falling back to composite bake for affected items:', err);
+        for (const list of Object.values(doc.annotations)) {
+          if (!Array.isArray(list)) continue;
+          for (const a of list) {
+            if (['text', 'sticky-note', 'rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'freeform-shape', 'stamp'].includes(a.type) || (a.type === 'highlighter' && 'quadPoints' in a)) {
+              fallbackBakedIds.add(a.id);
+            }
+          }
+        }
+      }
       syncNativeInkAnnotations(pdfDoc, doc.annotations);
     } else {
       stripImportedNativeAnnotations(pdfDoc);
@@ -121,23 +160,36 @@ export class PDFExporter {
             opacity: 1.0
           });
         }
-      } else {
-        // Vector annotations embedding
-        for (const ann of pageAnnotations) {
-          if (ann.type === 'rectangle' || ann.type === 'redaction') {
-            const { height: pageHeight } = pdfPage.getSize();
-            // Invert Y coordinate (PDF 0,0 is bottom-left, Canvas 0,0 is top-left)
-            const pdfY = pageHeight - ann.box.y - ann.box.height;
-
-            if (ann.type === 'redaction' && options.applyRedactions) {
-              pdfPage.drawRectangle({
-                x: ann.box.x,
-                y: pdfY,
-                width: ann.box.width,
-                height: ann.box.height,
-                color: rgb(0, 0, 0)
-              });
-            }
+      } else if (options.embedCompositeAnnotations !== false) {
+        // Embed composite annotations (signatures, measurements, custom image stamps,
+        // and any fallback items) that are not covered by syncNativeAnnotations / syncNativeInkAnnotations.
+        const compositeAnns = pageAnnotations.filter(
+          (a) =>
+            a.type === 'signature' ||
+            a.type === 'measure-distance' ||
+            a.type === 'measure-angle' ||
+            a.type === 'measure-area' ||
+            fallbackBakedIds.has(a.id)
+        );
+        if (compositeAnns.length > 0 && typeof document !== 'undefined') {
+          const { width, height } = pdfPage.getSize();
+          const dpiScale = (options.dpi || 150) / 72;
+          const offCanvas = document.createElement('canvas');
+          offCanvas.width = Math.max(1, Math.floor(width * dpiScale));
+          offCanvas.height = Math.max(1, Math.floor(height * dpiScale));
+          const ctx = offCanvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, offCanvas.width, offCanvas.height);
+            annotationEngine.renderCommittedAnnotations(ctx, compositeAnns, [], dpiScale);
+            const pngBytes = await this.canvasToBytes(offCanvas, 'image/png');
+            const embeddedPng = await pdfDoc.embedPng(pngBytes);
+            pdfPage.drawImage(embeddedPng, {
+              x: 0,
+              y: 0,
+              width,
+              height,
+              opacity: 1.0
+            });
           }
         }
       }

@@ -6,7 +6,6 @@ import fs from 'fs';
 const rootDir = import.meta.dirname ?? dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(fs.readFileSync(resolve(rootDir, 'package.json'), 'utf-8'));
 
-// Prevent Vite from exiting when spawned with closed stdin during container pre-warming
 process.env.CI = 'true';
 
 export default defineConfig(({ mode, command }) => {
@@ -74,6 +73,7 @@ export default defineConfig(({ mode, command }) => {
           }
         },
         configureServer(server) {
+          process.stdin.removeAllListeners('end');
           server.middlewares.use((req, res, next) => {
             const url = req.url?.split('?')[0] || '';
             if (url.startsWith('/cmaps/') || url.startsWith('/standard_fonts/')) {

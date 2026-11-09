@@ -6,11 +6,12 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import { importNativeAnnotations, stripImportedNativeAnnotations } from './native-annotations';
-import { PageInfo, PDFBookmarkItem, PenAnnotation, StrokePoint } from './types';
+import { PageInfo, PDFBookmarkItem, PenAnnotation, HighlighterAnnotation, StrokePoint } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
 import { ADAPTIVE_CANVAS_MAX_DIMENSION, ADAPTIVE_CANVAS_MAX_PIXELS, resolveAdaptiveCanvasDpr, resolveRenderDpr } from '../utils/dpi';
-import { stripNativeInkAnnotationsFromBytes } from './native-ink';
+import { stripNativeInkAnnotationsFromBytes, extractNativeInkToolMap } from './native-ink';
+import { extractPageTextLayout, PageTextLayout } from './pdf-text-layout';
 
 /** Backing-store multiplier over CSS pixels for the current target DPI. */
 function effectiveDpr(): number {
@@ -78,6 +79,8 @@ export class PDFEngine {
   private _activeRenderTasks: Map<number, any> = new Map();
   private _activeChunkTasks: Map<number, any> = new Map();
   private _renderedBitmaps = new Map<string, CachedBitmap>();
+  private _textLayoutCache = new Map<string, PageTextLayout>();
+  private _textLayoutInFlight = new Map<string, Promise<PageTextLayout | null>>();
   private _docSessions: Map<string, CachedDocSession> = new Map();
   private _currentDocId: string | null = null;
   private _dimListeners: Set<(docId: string) => void> = new Set();
@@ -296,8 +299,18 @@ export class PDFEngine {
       try {
         const outline = await doc.getOutline();
         if (outline && Array.isArray(outline)) {
-          meta.bookmarks = this.formatOutline(outline);
-          if (docId) this.emitDimensionsUpdated(docId);
+          meta.bookmarks = await this.resolveOutlineItems(doc, outline);
+          if (docId) {
+            const openDoc = store.openDocuments.get(docId);
+            if (openDoc) {
+              openDoc.bookmarks = meta.bookmarks;
+            }
+            if (store.activeDocument?.id === docId) {
+              store.activeDocument.bookmarks = meta.bookmarks;
+              store.notify();
+            }
+            this.emitDimensionsUpdated(docId);
+          }
         }
       } catch (err) {
         console.warn('Could not extract outline:', err);
@@ -307,13 +320,42 @@ export class PDFEngine {
     }
   }
 
-  private formatOutline(items: any[]): PDFBookmarkItem[] {
+  private async resolveOutlineItems(doc: pdfjsLib.PDFDocumentProxy, items: any[]): Promise<PDFBookmarkItem[]> {
     if (!items || !Array.isArray(items)) return [];
-    return items.map(item => ({
-      title: typeof item.title === 'string' ? item.title : String(item.title || ''),
-      pageIndex: typeof item.pageIndex === 'number' ? item.pageIndex : undefined,
-      items: item.items && Array.isArray(item.items) ? this.formatOutline(item.items) : undefined
-    }));
+    const resolved: PDFBookmarkItem[] = [];
+    for (const item of items) {
+      let pageIndex: number | undefined = typeof item.pageIndex === 'number' ? item.pageIndex : undefined;
+      if (pageIndex === undefined && item.dest) {
+        try {
+          const destArray = typeof item.dest === 'string'
+            ? await doc.getDestination(item.dest)
+            : (Array.isArray(item.dest) ? item.dest : null);
+          if (destArray && destArray.length > 0) {
+            const ref = destArray[0];
+            if (typeof ref === 'number' && Number.isFinite(ref)) {
+              pageIndex = Math.max(0, Math.min(doc.numPages - 1, ref));
+            } else if (ref && typeof ref === 'object') {
+              const idx = await doc.getPageIndex(ref);
+              if (typeof idx === 'number' && Number.isFinite(idx)) {
+                pageIndex = Math.max(0, Math.min(doc.numPages - 1, idx));
+              }
+            }
+          }
+        } catch (_) {
+          // Some malformed outline items have invalid destinations; keep title & children intact
+        }
+      }
+      const children = item.items && Array.isArray(item.items) && item.items.length > 0
+        ? await this.resolveOutlineItems(doc, item.items)
+        : undefined;
+      resolved.push({
+        title: typeof item.title === 'string' ? item.title : String(item.title || ''),
+        dest: item.dest,
+        pageIndex,
+        items: children
+      });
+    }
+    return resolved;
   }
 
   /**
@@ -327,11 +369,15 @@ export class PDFEngine {
    */
   public async extractNativeAnnotations(bytes: Uint8Array) {
     const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false });
-    return [...await this.extractNativeInkStrokes(bytes), ...importNativeAnnotations(pdfDoc)];
+    const toolMap = extractNativeInkToolMap(pdfDoc);
+    return [...await this.extractNativeInkStrokes(bytes, toolMap), ...importNativeAnnotations(pdfDoc)];
   }
 
-  public async extractNativeInkStrokes(bytes: Uint8Array): Promise<Array<{ pageIndex: number; annotation: PenAnnotation }>> {
-    const results: Array<{ pageIndex: number; annotation: PenAnnotation }> = [];
+  public async extractNativeInkStrokes(
+    bytes: Uint8Array,
+    toolMap?: Map<string, 'pen' | 'highlighter'>
+  ): Promise<Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }>> {
+    const results: Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }> = [];
     let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
     try {
       const localBase = resolveAssetUrl('');
@@ -364,9 +410,10 @@ export class PDFEngine {
             ? a.annotationName
             : (typeof a.id === 'string' && a.id ? a.id : '');
 
-          // A single Ink annotation can hold several disconnected strokes
-          // (one pen-down/up per array) — each becomes its own pen
-          // annotation so none of the original drawing is merged or lost.
+          const isHighlighter =
+            (annotationName && toolMap?.get(annotationName) === 'highlighter') ||
+            (opacity <= 0.5 && width >= 10);
+
           const lists = a.inkLists as number[][];
           for (let listIndex = 0; listIndex < lists.length; listIndex++) {
             const list = lists[listIndex];
@@ -389,25 +436,50 @@ export class PDFEngine {
             const annotId = lists.length > 1
               ? `${annotationName || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`}#${listIndex}`
               : (annotationName || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`);
-            results.push({
-              pageIndex: n - 1,
-              annotation: {
-                id: annotId,
+
+            if (isHighlighter) {
+              const hlColor = color.startsWith('#') && color.length === 7
+                ? `rgba(${parseInt(color.slice(1, 3), 16)}, ${parseInt(color.slice(3, 5), 16)}, ${parseInt(color.slice(5, 7), 16)}, ${Math.max(0.18, Math.min(0.6, opacity))})`
+                : color;
+              results.push({
                 pageIndex: n - 1,
-                layerId: 'default',
-                type: 'pen',
-                box: { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
-                createdAt: now,
-                updatedAt: now,
-                opacity,
-                points,
-                color,
-                strokeWidth: width,
-                pressureEnabled: false,
-                smoothing: false,
-                strokeSmoothing: 'none'
-              }
-            });
+                annotation: {
+                  id: annotId,
+                  pageIndex: n - 1,
+                  layerId: 'default',
+                  type: 'highlighter',
+                  box: { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
+                  createdAt: now,
+                  updatedAt: now,
+                  opacity: Math.max(0.18, Math.min(0.6, opacity)),
+                  points,
+                  color: hlColor,
+                  strokeWidth: width,
+                  blendMode: 'source-over',
+                  tipShape: 'round'
+                }
+              });
+            } else {
+              results.push({
+                pageIndex: n - 1,
+                annotation: {
+                  id: annotId,
+                  pageIndex: n - 1,
+                  layerId: 'default',
+                  type: 'pen',
+                  box: { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
+                  createdAt: now,
+                  updatedAt: now,
+                  opacity,
+                  points,
+                  color,
+                  strokeWidth: width,
+                  pressureEnabled: false,
+                  smoothing: false,
+                  strokeSmoothing: 'none'
+                }
+              });
+            }
           }
         }
       }
@@ -895,10 +967,20 @@ export class PDFEngine {
     return canvas;
   }
 
-  public async renderThumbnail(pageIndex: number, maxWidth = 120, maxHeight = 156): Promise<HTMLCanvasElement | null> {
+  public async renderThumbnail(pageIndex: number, maxWidth = 136, maxHeight = 176): Promise<HTMLCanvasElement | null> {
     if (!this._pdfDoc) return null;
 
-    const page = this._pageCache.get(pageIndex) || await this._pdfDoc.getPage(pageIndex + 1);
+    let page = this._pageCache.get(pageIndex);
+    if (!page) {
+      try {
+        page = await this._pdfDoc.getPage(pageIndex + 1);
+        if (this._pageCache.size < 24) {
+          this._pageCache.set(pageIndex, page);
+        }
+      } catch (_) {
+        return null;
+      }
+    }
     const base = page.getViewport({ scale: 1, rotation: page.rotate || 0 });
     const scale = Math.min(maxWidth / base.width, maxHeight / base.height);
     const viewport = page.getViewport({ scale, rotation: page.rotate || 0 });
@@ -986,6 +1068,44 @@ export class PDFEngine {
     const textContent = await page.getTextContent();
     const fullText = textContent.items.map((item: any) => item.str).join(' ');
     return { text: fullText, items: textContent.items };
+  }
+
+  private textLayoutKey(pageIndex: number, rotationOverride?: number): string {
+    const docId = this._currentDocId || store.activeDocument?.id || 'ephemeral';
+    const userRot = rotationOverride ?? (store.pageRotations[pageIndex] || 0);
+    const normRot = ((userRot % 360) + 360) % 360;
+    return `${docId}:${pageIndex}:${normRot}`;
+  }
+
+  public getCachedPageTextLayout(pageIndex: number, rotationOverride?: number): PageTextLayout | null {
+    const key = this.textLayoutKey(pageIndex, rotationOverride);
+    return this._textLayoutCache.get(key) ?? null;
+  }
+
+  public async getPageTextLayout(pageIndex: number, rotationOverride?: number): Promise<PageTextLayout | null> {
+    if (!this._pdfDoc) return null;
+    const key = this.textLayoutKey(pageIndex, rotationOverride);
+    const cached = this._textLayoutCache.get(key);
+    if (cached) return cached;
+
+    const existingPromise = this._textLayoutInFlight.get(key);
+    if (existingPromise) return existingPromise;
+
+    const userRot = rotationOverride ?? (store.pageRotations[pageIndex] || 0);
+    const promise = extractPageTextLayout(this._pdfDoc, pageIndex, userRot)
+      .then((layout) => {
+        this._textLayoutCache.set(key, layout);
+        this._textLayoutInFlight.delete(key);
+        return layout;
+      })
+      .catch((err) => {
+        console.warn(`Failed to extract text layout for page ${pageIndex}:`, err);
+        this._textLayoutInFlight.delete(key);
+        return null;
+      });
+
+    this._textLayoutInFlight.set(key, promise);
+    return promise;
   }
 
   /**

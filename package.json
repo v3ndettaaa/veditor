@@ -4,7 +4,7 @@
   "description": "a simple extention for pdf annotation!",
   "main": "index.js",
   "scripts": {
-    "dev": "vite --port 3000 --host 0.0.0.0",
+    "dev": "vite",
     "lint": "tsc --noEmit",
     "build:chrome": "vite build --mode chrome",
     "build:firefox": "vite build --mode firefox",

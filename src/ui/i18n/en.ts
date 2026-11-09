@@ -30,7 +30,6 @@ export const en = {
     angle: 'Measure Angle',
     area: 'Measure Area',
     signature: 'Signature (K)',
-    redaction: 'Redaction (X)',
     scratchpad: 'Floating Scratchpad (N)'
   },
   sidebar: {
@@ -163,9 +162,7 @@ export const en = {
     locationDownload: 'Your browser will save it to the downloads folder.',
     quality: 'Quality',
     flatten: 'Flatten annotations into the PDF',
-    flattenHint: 'Off keeps pages editable but only rectangles are preserved.',
-    applyRedactions: 'Burn in redactions permanently',
-    redactionWarn: 'Redacted content cannot be recovered after saving.',
+    flattenHint: 'Off keeps pages editable while preserving native annotations.',
     pages: 'Pages',
     allPages: 'All pages',
     custom: 'Custom',

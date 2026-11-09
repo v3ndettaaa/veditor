@@ -9,21 +9,22 @@ import { viewportManager } from '../../core/viewport';
 import { pdfEngine } from '../../core/pdf-engine';
 import { pageActions } from '../../core/page-actions';
 import { onPageStructureChanged } from '../../core/page-ops';
-import { DocumentSession } from '../../core/types';
+import { DocumentSession, PDFBookmarkItem } from '../../core/types';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { t } from '../i18n';
 import { openContextMenu, MenuEntry } from './context-menu';
 import { showToast } from './toast';
+import { findMatchesInPageLayout, PdfSearchMatch } from '../../core/pdf-text-layout';
+import { triggerAutoSave } from '../../io/storage';
+
+export let sidePanelsInstance: SidePanelsComponent | null = null;
 
 export class SidePanelsComponent {
   private _container: HTMLElement;
   /**
    * Rendered page previews as data URLs, keyed by
-   * `${docId}:${structureRevision}:${pageIndex}`. Stored as images rather than
-   * canvases so a cached preview can be inserted into the panel repeatedly -
-   * cloning a canvas element does not copy its bitmap, and a canvas can only be
-   * attached at one place in the document.
+   * `${docId}:${structureRevision}:${pageIndex}`.
    */
   private _thumbnailCache: Map<string, string> = new Map();
   /** Zoom never changes sidebar output — skip full rebuilds on zoom-only notifies. */
@@ -36,22 +37,23 @@ export class SidePanelsComponent {
   /** Document the anchor belongs to; page indices are document-scoped. */
   private _anchorDocId: string | null = null;
   /**
-   * Bumped on every page-structure change. Thunderstorms of annotation edits
-   * touch `lastModifiedAt` constantly, so that cannot drive the cache; this
-   * only moves when the page list itself is renumbered.
+   * Bumped on every page-structure change.
    */
   private _structureRevision = 0;
   /** Last page whose thumbnail was scrolled into view (avoids re-scrolling). */
   private _lastActivePageIndex: number = -1;
   /** Lazy thumbnail rasteriser for the current list generation. */
   private _thumbObserver: IntersectionObserver | null = null;
+  /** Token to cancel stale background thumbnail warmup passes. */
+  private _thumbWarmupToken = 0;
+  /** Monotonic token to cancel stale in-flight searches immediately. */
+  private _searchToken = 0;
+  private _searchDebounceTimer: number | null = null;
 
   constructor(container: HTMLElement) {
+    sidePanelsInstance = this;
     this._container = container;
     store.subscribe(() => this.render());
-    // A page operation renumbers every thumbnail, so the cached previews are
-    // all stale at once; dropping them here keeps the cache from growing with
-    // one dead generation per operation.
     onPageStructureChanged(() => {
       this._thumbnailCache.clear();
       this._structureRevision++;
@@ -60,29 +62,59 @@ export class SidePanelsComponent {
     this.render();
   }
 
+  /**
+   * Immediately cancels any in-flight search, clears the search input and results,
+   * removes all yellow canvas highlights, and repaints the viewport.
+   */
+  public cancelAndResetSearch(): boolean {
+    const hadSearch =
+      store.searchMatches.length > 0 ||
+      store.searchQuery.length > 0 ||
+      this._searchDebounceTimer !== null;
+
+    this._searchToken++;
+    if (this._searchDebounceTimer !== null) {
+      window.clearTimeout(this._searchDebounceTimer);
+      this._searchDebounceTimer = null;
+    }
+
+    const searchInput = this._container.querySelector<HTMLInputElement>('#pdf-search-input');
+    const hadInputText = Boolean(searchInput && searchInput.value.length > 0);
+    if (searchInput) {
+      searchInput.value = '';
+      searchInput.blur();
+    }
+
+    store.clearSearchResults();
+    this.renderSearchResultsList();
+    window.app?.repaintAllRenderedAnnotations();
+    return hadSearch || hadInputText;
+  }
+
   public render(): void {
     const isOpen = store.sidebarOpen;
     const activeTab = store.activeSidebarTab;
     const doc = store.activeDocument;
 
-    // Zoom/page-scroll-independent parts first: collapsed state is trivial.
-    // Full rebuild key excludes zoom — zoom commits must not rebuild O(n)
-    // thumbnail DOM or refire thumbnail renders. The page selection and the
-    // active page are also excluded: both are applied by syncPageSelection() to
-    // the existing cards, so neither ctrl-clicking twenty pages nor scrolling
-    // through the document rebuilds the list (a rebuild also resets the list's
-    // scroll offset, which made the panel jump on every page change).
-    // `lastModifiedAt` is excluded for the same reason: it changes on every
-    // stroke, which would re-decode every thumbnail in the document. Page
-    // renumbering is signalled by `_structureRevision` instead.
+    const outlineSig = doc ? `${doc.bookmarks?.length ?? 0}:${doc.userBookmarks?.length ?? 0}` : '0:0';
+    const historySig = activeTab === 'history' ? String(history.historyList.length) : '0';
+
     const renderKey = [
-      isOpen ? 1 : 0, activeTab,
-      doc?.id ?? '', doc?.pageCount ?? 0,
+      isOpen && doc ? 1 : 0,
+      activeTab,
+      doc?.id ?? '',
+      doc?.pageCount ?? 0,
       this._structureRevision,
+      outlineSig,
+      historySig,
       store.appSettings.language
     ].join('|');
-    if (!isOpen) {
+
+    // Auto-collapse sidebar whenever sidebarOpen is false OR there is no active PDF document
+    if (!isOpen || !doc) {
       this._container.classList.add('collapsed');
+      this._thumbObserver?.disconnect();
+      this._thumbWarmupToken++;
       this._lastRenderKey = renderKey;
       return;
     }
@@ -90,6 +122,9 @@ export class SidePanelsComponent {
     if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') {
       this.syncPageSelection();
       this.syncPageBadges();
+      if (activeTab === 'search') {
+        this.syncActiveSearchCard();
+      }
       return;
     }
     this._lastRenderKey = renderKey;
@@ -101,22 +136,48 @@ export class SidePanelsComponent {
 
     this._container.classList.remove('collapsed');
 
+    const lang = store.appSettings.language;
+    const tabTitleMap: Record<string, string> = {
+      thumbnails: t('sidebar.thumbnails'),
+      outline: t('sidebar.outline'),
+      search: t('sidebar.search'),
+      history: t('sidebar.history')
+    };
+    const activeTabTitle = tabTitleMap[activeTab] || t('sidebar.thumbnails');
+    let activeTabBadge = '';
+    if (activeTab === 'thumbnails') {
+      activeTabBadge = `<span class="badge">${doc.pages.length}</span>`;
+    } else if (activeTab === 'outline') {
+      const totalBm = (doc.bookmarks?.length || 0) + (doc.userBookmarks?.length || 0);
+      if (totalBm > 0) activeTabBadge = `<span class="badge">${totalBm}</span>`;
+    } else if (activeTab === 'history') {
+      const hLen = history.historyList.length;
+      if (hLen > 0) activeTabBadge = `<span class="badge">${hLen}</span>`;
+    }
+
     this._container.innerHTML = `
       <div class="sidebar-header">
-        <div class="sidebar-tabs-nav">
-          <button class="sidebar-tab-btn ${activeTab === 'thumbnails' ? 'active' : ''}" data-tab="thumbnails">
-            ${t('sidebar.thumbnails')}
+        <div class="sidebar-tabs-nav" role="tablist">
+          <button class="sidebar-tab-btn ${activeTab === 'thumbnails' ? 'active' : ''}" data-tab="thumbnails" role="tab" aria-selected="${activeTab === 'thumbnails'}" title="${escapeHtml(t('sidebar.thumbnails'))}" aria-label="${escapeHtml(t('sidebar.thumbnails'))}">
+            <span class="sidebar-tab-icon">${getIconSvg('gridView', 15)}</span>
           </button>
-          <button class="sidebar-tab-btn ${activeTab === 'outline' ? 'active' : ''}" data-tab="outline">
-            ${t('sidebar.outline')}
+          <button class="sidebar-tab-btn ${activeTab === 'outline' ? 'active' : ''}" data-tab="outline" role="tab" aria-selected="${activeTab === 'outline'}" title="${escapeHtml(t('sidebar.outline'))}" aria-label="${escapeHtml(t('sidebar.outline'))}">
+            <span class="sidebar-tab-icon">${getIconSvg('bookmark', 15)}</span>
           </button>
-          <button class="sidebar-tab-btn ${activeTab === 'search' ? 'active' : ''}" data-tab="search">
-            ${t('sidebar.search')}
+          <button class="sidebar-tab-btn ${activeTab === 'search' ? 'active' : ''}" data-tab="search" role="tab" aria-selected="${activeTab === 'search'}" title="${escapeHtml(t('sidebar.search'))}" aria-label="${escapeHtml(t('sidebar.search'))}">
+            <span class="sidebar-tab-icon">${getIconSvg('search', 15)}</span>
           </button>
-          <button class="sidebar-tab-btn ${activeTab === 'history' ? 'active' : ''}" data-tab="history">
-            ${t('sidebar.history')}
+          <button class="sidebar-tab-btn ${activeTab === 'history' ? 'active' : ''}" data-tab="history" role="tab" aria-selected="${activeTab === 'history'}" title="${escapeHtml(t('sidebar.history'))}" aria-label="${escapeHtml(t('sidebar.history'))}">
+            <span class="sidebar-tab-icon">${getIconSvg('history', 15)}</span>
           </button>
         </div>
+        <button type="button" class="sidebar-close-btn" id="sidebar-close-btn" title="${lang === 'fa' ? 'بستن نوار کناری' : 'Close Sidebar'}" aria-label="Close Sidebar">
+          ${getIconSvg('close', 14)}
+        </button>
+      </div>
+      <div class="sidebar-active-tab-bar">
+        <span class="sidebar-active-tab-title">${escapeHtml(activeTabTitle)}</span>
+        ${activeTabBadge}
       </div>
 
       <div class="sidebar-content" id="sidebar-tab-content"></div>
@@ -130,30 +191,22 @@ export class SidePanelsComponent {
       });
     });
 
+    this._container.querySelector('#sidebar-close-btn')?.addEventListener('click', () => {
+      store.toggleSidebar();
+    });
+
     const contentArea = this._container.querySelector('#sidebar-tab-content') as HTMLElement;
     if (contentArea) {
       this.renderTabContent(contentArea, activeTab);
     }
-    // A fresh list starts at the top, so the current page's card has to be
-    // brought back into view (the in-place sync below would skip it, believing
-    // it was already handled).
     this._lastActivePageIndex = -1;
     this.syncPageSelection();
   }
 
-  /**
-   * Applies the page selection *and* the active-page highlight to the rendered
-   * cards in place. Both change far more often than the list itself (every
-   * ctrl-click, every page turn), so neither may pay for a full O(n) rebuild
-   * and thumbnail re-decode — nor for the scroll reset a rebuild implies.
-   */
   private syncPageSelection(): void {
     const selected = store.selectedPageIndices;
     const active = store.activePageIndex;
     let activeCard: HTMLElement | null = null;
-    // This runs on every store notify (including every pen sample), so each
-    // write is guarded: a 500-page document must not pay 2000 attribute writes
-    // per stroke to re-assert values that did not change.
     this._container.querySelectorAll<HTMLElement>('.thumbnail-card[data-page]').forEach(card => {
       const idx = parseInt(card.dataset.page || '-1', 10);
 
@@ -171,19 +224,12 @@ export class SidePanelsComponent {
       if (isActive) activeCard = card;
     });
 
-    // Keep the current page's thumbnail in view as the reader scrolls, without
-    // stealing focus or scrolling a card that is already visible.
     if (activeCard && this._lastActivePageIndex !== active) {
       (activeCard as HTMLElement).scrollIntoView({ block: 'nearest' });
     }
     this._lastActivePageIndex = active;
   }
 
-  /**
-   * Patches the per-page annotation-count badges in place. The list is no
-   * longer rebuilt on every edit (that would re-decode every thumbnail), so the
-   * badge has to be maintained its own way.
-   */
   private syncPageBadges(): void {
     const doc = store.activeDocument;
     if (!doc) return;
@@ -206,8 +252,31 @@ export class SidePanelsComponent {
     });
   }
 
+  private renderOutlineTreeHtml(items: PDFBookmarkItem[], depth = 0): string {
+    return items.map((item) => {
+      const hasPage = typeof item.pageIndex === 'number' && Number.isFinite(item.pageIndex);
+      const hasChildren = Boolean(item.items && item.items.length > 0);
+      const padStart = 10 + Math.min(depth, 5) * 14;
+      const isCurrent = hasPage && item.pageIndex === store.activePageIndex;
+      return `
+        <div class="outline-tree-node">
+          <button type="button"
+                  class="list-card is-interactive bookmark-item ${isCurrent ? 'is-current' : ''}"
+                  style="padding-inline-start:${padStart}px;"
+                  ${hasPage ? `data-bookmark-page="${item.pageIndex}"` : 'disabled'}>
+            <span class="list-card-icon">${getIconSvg(hasChildren ? 'bookOpen' : 'book', 13)}</span>
+            <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(item.title || 'Untitled section')}</span>
+            ${hasPage ? `<span class="bookmark-page-pill">${item.pageIndex! + 1}</span>` : ''}
+          </button>
+          ${hasChildren ? `<div class="outline-tree-children">${this.renderOutlineTreeHtml(item.items!, depth + 1)}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
   private renderTabContent(el: HTMLElement, tab: string) {
     const doc = store.activeDocument;
+    const lang = store.appSettings.language;
     if (!doc) {
       el.innerHTML = `<div class="empty-note">No document active</div>`;
       return;
@@ -221,13 +290,15 @@ export class SidePanelsComponent {
             const isActive = idx === store.activePageIndex;
             const isSelected = selected.has(idx);
             const annotCount = doc.annotations[idx]?.length || 0;
+            const cachedSrc = this._thumbnailCache.get(`${doc.id}:${this._structureRevision}:${idx}`);
             return `
               <button class="thumbnail-card ${isActive ? 'is-active' : ''} ${isSelected ? 'is-selected' : ''}"
                       data-page="${idx}" role="option" draggable="true"
                       aria-current="${isActive ? 'true' : 'false'}"
                       aria-selected="${isSelected ? 'true' : 'false'}"
                       title="${escapeHtml(t('sidebar.pages.goTo', { page: idx + 1 }))}">
-                <span class="thumbnail-frame is-loading" data-thumb-frame="${idx}">
+                <span class="thumbnail-frame ${cachedSrc ? '' : 'is-loading'}" data-thumb-frame="${idx}">
+                  ${cachedSrc ? `<img src="${cachedSrc}" decoding="async" alt="Page ${idx + 1} preview">` : ''}
                   ${annotCount > 0 ? `<span class="thumbnail-badge">${annotCount}</span>` : ''}
                 </span>
                 <span class="thumbnail-label">${idx + 1}</span>
@@ -241,80 +312,216 @@ export class SidePanelsComponent {
       if (list) this.bindThumbnailList(list, doc);
       this.fillThumbnails(el, doc.id, doc.pages.length, this._structureRevision);
     } else if (tab === 'outline') {
-      if (doc.bookmarks.length === 0) {
-        el.innerHTML = `<div class="empty-note">No outline or bookmarks found in this document</div>`;
-      } else {
-        el.innerHTML = `
-          <div class="panel-stack">
-            ${doc.bookmarks.map(b => `
-              <div class="list-card is-interactive bookmark-item">
-                <span class="list-card-icon">${getIconSvg('book', 13)}</span>
-                <span class="list-card-title">${escapeHtml(b.title)}</span>
-              </div>
-            `).join('')}
-          </div>
-        `;
-      }
-    } else if (tab === 'search') {
+      const userBookmarks = doc.userBookmarks || [];
+      const pdfOutline = doc.bookmarks || [];
+      const curPage = store.activePageIndex + 1;
+
       el.innerHTML = `
         <div class="panel-stack">
-          <input type="search" id="pdf-search-input" class="field"
-                 placeholder="Search text, then press Enter" aria-label="Search text in document">
-          <div id="search-results-list" class="panel-stack"></div>
+          <div class="bookmark-add-box">
+            <input type="text" id="custom-bookmark-input" class="field bookmark-add-input" dir="auto"
+                   placeholder="${lang === 'fa' ? `عنوان نشانک (صفحه ${curPage})…` : `Bookmark title (Page ${curPage})…`}"
+                   aria-label="Bookmark title">
+            <button type="button" class="primary-btn is-sm bookmark-add-btn" id="add-page-bookmark-btn" title="Bookmark current page">
+              ${getIconSvg('bookmarkPlus', 14)}
+              <span>${lang === 'fa' ? `افزودن ص ${curPage}` : `+ Page ${curPage}`}</span>
+            </button>
+          </div>
+
+          ${userBookmarks.length > 0 ? `
+            <div class="sidebar-section-bar" style="margin-top:4px;">
+              <span class="sidebar-section-label">${lang === 'fa' ? 'نشانک‌های من' : 'Saved Bookmarks'}</span>
+              <span class="badge">${userBookmarks.length}</span>
+            </div>
+            <div class="panel-stack">
+              ${userBookmarks.map(ub => `
+                <div class="list-card is-interactive bookmark-item ${ub.pageIndex === store.activePageIndex ? 'is-current' : ''}"
+                     data-bookmark-page="${ub.pageIndex}">
+                  <span class="list-card-icon" style="color:var(--accent);">${getIconSvg('bookmark', 13)}</span>
+                  <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(ub.title)}</span>
+                  <span class="bookmark-page-pill">${ub.pageIndex + 1}</span>
+                  <button type="button" class="bookmark-delete-btn" data-remove-bookmark="${escapeHtml(ub.id)}" title="Remove bookmark" aria-label="Remove bookmark">
+                    ${getIconSvg('close', 11)}
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          <div class="sidebar-section-bar" style="margin-top:${userBookmarks.length > 0 ? '8px' : '2px'};">
+            <span class="sidebar-section-label">${lang === 'fa' ? 'فهرست مطالب کتاب' : 'Document Outline'}</span>
+            ${pdfOutline.length > 0 ? `<span class="badge">${pdfOutline.length}</span>` : ''}
+          </div>
+
+          ${pdfOutline.length === 0 ? `
+            <div class="sidebar-empty-state">
+              <div class="sidebar-empty-icon">${getIconSvg('bookOpen', 22)}</div>
+              <div class="sidebar-empty-title">${lang === 'fa' ? 'فهرستی در این پی‌دی‌اف ثبت نشده است' : 'No table of contents in this PDF'}</div>
+              <div class="sidebar-empty-sub">${lang === 'fa' ? 'می‌توانید از دکمه بالا برای نشانه‌گذاری صفحات دلخواه استفاده کنید.' : 'Use the button above to bookmark any page for quick access.'}</div>
+            </div>
+          ` : `
+            <div class="panel-stack outline-tree-root">
+              ${this.renderOutlineTreeHtml(pdfOutline, 0)}
+            </div>
+          `}
         </div>
       `;
 
-      const searchInput = el.querySelector('#pdf-search-input') as HTMLInputElement;
-      const resultsList = el.querySelector('#search-results-list') as HTMLElement;
+      const bookmarkInput = el.querySelector<HTMLInputElement>('#custom-bookmark-input');
+      const addBookmarkBtn = el.querySelector<HTMLButtonElement>('#add-page-bookmark-btn');
+      const handleAddBookmark = () => {
+        const pageIdx = store.activePageIndex;
+        const customTitle = bookmarkInput?.value.trim() || `${lang === 'fa' ? 'صفحه' : 'Page'} ${pageIdx + 1}`;
+        store.addUserBookmark(pageIdx, customTitle);
+        triggerAutoSave();
+        showToast(lang === 'fa' ? `صفحه ${pageIdx + 1} نشانه‌گذاری شد` : `Bookmarked Page ${pageIdx + 1}`, 'success');
+      };
 
-      searchInput?.addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter' && searchInput.value.trim().length > 1) {
-          const query = searchInput.value.trim().toLowerCase();
-          resultsList.innerHTML = `<div class="empty-note">Searching…</div>`;
+      addBookmarkBtn?.addEventListener('click', handleAddBookmark);
+      bookmarkInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleAddBookmark();
+        }
+      });
 
-          const matches: Array<{ pageIndex: number; snippet: string }> = [];
-
-          for (let i = 0; i < doc.pages.length; i++) {
-            const { text } = await pdfEngine.getPageText(i);
-            const lower = text.toLowerCase();
-            const idx = lower.indexOf(query);
-            if (idx !== -1) {
-              const snippet = text.substring(Math.max(0, idx - 20), Math.min(text.length, idx + query.length + 30));
-              matches.push({ pageIndex: i, snippet: `...${snippet}...` });
-            }
+      el.querySelectorAll<HTMLElement>('[data-remove-bookmark]').forEach((delBtn) => {
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const bmId = delBtn.getAttribute('data-remove-bookmark');
+          if (bmId) {
+            store.removeUserBookmark(bmId);
+            triggerAutoSave();
           }
+        });
+      });
 
-          if (matches.length === 0) {
-            resultsList.innerHTML = `<div class="empty-note">No matches found</div>`;
+      el.querySelectorAll<HTMLElement>('[data-bookmark-page]').forEach((itemEl) => {
+        itemEl.addEventListener('click', (e) => {
+          if ((e.target as HTMLElement).closest('[data-remove-bookmark]')) return;
+          const pageIdx = parseInt(itemEl.getAttribute('data-bookmark-page') || '-1', 10);
+          if (Number.isFinite(pageIdx) && pageIdx >= 0 && pageIdx < doc.pageCount) {
+            store.setActivePageIndex(pageIdx);
+            viewportManager.scrollToPage(pageIdx);
+          }
+        });
+      });
+    } else if (tab === 'search') {
+      el.innerHTML = `
+        <div class="panel-stack">
+          <div class="sidebar-search-box">
+            <span class="sidebar-search-icon">${getIconSvg('search', 14)}</span>
+            <input type="search" id="pdf-search-input" class="sidebar-search-input" dir="auto"
+                   value="${escapeHtml(store.searchQuery)}"
+                   placeholder="${lang === 'fa' ? 'جستجوی متن در سند…' : 'Search text in document…'}"
+                   aria-label="Search text in document">
+            <span id="search-status-bar" class="sidebar-search-count"></span>
+            <div class="sidebar-search-actions">
+              <button type="button" class="sidebar-search-nav-btn" id="pdf-search-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">
+                ${getIconSvg('chevronUp', 14)}
+              </button>
+              <button type="button" class="sidebar-search-nav-btn" id="pdf-search-next" title="Next match (Enter)" aria-label="Next match">
+                ${getIconSvg('chevronDown', 14)}
+              </button>
+              <button type="button" class="sidebar-search-nav-btn is-clear" id="pdf-search-clear" title="Clear search (Esc)" aria-label="Clear search">
+                ${getIconSvg('close', 13)}
+              </button>
+            </div>
+          </div>
+          <div id="search-results-list" class="panel-stack search-results-container"></div>
+        </div>
+      `;
+
+      const searchInput = el.querySelector<HTMLInputElement>('#pdf-search-input');
+      const prevBtn = el.querySelector<HTMLButtonElement>('#pdf-search-prev');
+      const nextBtn = el.querySelector<HTMLButtonElement>('#pdf-search-next');
+      const clearBtn = el.querySelector<HTMLButtonElement>('#pdf-search-clear');
+
+      this.renderSearchResultsList();
+
+      const triggerSearch = (rawQuery: string, autoJumpFirst: boolean) => {
+        void this.executeConcurrentSearch(doc, rawQuery, autoJumpFirst);
+      };
+
+      searchInput?.addEventListener('input', () => {
+        if (this._searchDebounceTimer !== null) {
+          window.clearTimeout(this._searchDebounceTimer);
+          this._searchDebounceTimer = null;
+        }
+        const val = searchInput.value.trim();
+        if (!val) {
+          this._searchToken++;
+          store.clearSearchResults();
+          this.renderSearchResultsList();
+          window.app?.repaintAllRenderedAnnotations();
+          return;
+        }
+        this._searchDebounceTimer = window.setTimeout(() => {
+          this._searchDebounceTimer = null;
+          triggerSearch(val, true);
+        }, 120);
+      });
+
+      searchInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          this.cancelAndResetSearch();
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (this._searchDebounceTimer !== null) {
+            window.clearTimeout(this._searchDebounceTimer);
+            this._searchDebounceTimer = null;
+          }
+          const val = searchInput.value.trim();
+          if (!val) return;
+          if (val.toLowerCase() === store.searchQuery.toLowerCase() && store.searchMatches.length > 0) {
+            const delta = e.shiftKey ? -1 : 1;
+            const nextIdx = (store.activeSearchMatchIndex + delta + store.searchMatches.length) % store.searchMatches.length;
+            this.jumpToSearchMatch(nextIdx);
           } else {
-            resultsList.innerHTML = matches.map(m => `
-              <div class="list-card is-interactive search-result-card" data-page="${m.pageIndex}"
-                   style="flex-direction:column; align-items:stretch;">
-                <strong class="search-result-page">Page ${m.pageIndex + 1}</strong>
-                <span class="search-result-snippet">${escapeHtml(m.snippet)}</span>
-              </div>
-            `).join('');
-
-            resultsList.querySelectorAll('.search-result-card').forEach(c => {
-              c.addEventListener('click', () => {
-                const p = parseInt(c.getAttribute('data-page') || '0', 10);
-                viewportManager.scrollToPage(p);
-              });
-            });
+            triggerSearch(val, true);
           }
         }
+      });
+
+      prevBtn?.addEventListener('click', () => {
+        if (store.searchMatches.length === 0) return;
+        const nextIdx = (store.activeSearchMatchIndex - 1 + store.searchMatches.length) % store.searchMatches.length;
+        this.jumpToSearchMatch(nextIdx);
+      });
+
+      nextBtn?.addEventListener('click', () => {
+        if (store.searchMatches.length === 0) return;
+        const nextIdx = (store.activeSearchMatchIndex + 1) % store.searchMatches.length;
+        this.jumpToSearchMatch(nextIdx);
+      });
+
+      clearBtn?.addEventListener('click', () => {
+        this.cancelAndResetSearch();
       });
     } else if (tab === 'history') {
       const historyItems = history.historyList;
       if (historyItems.length === 0) {
-        el.innerHTML = `<div class="empty-note">No actions recorded yet</div>`;
+        el.innerHTML = `
+          <div class="sidebar-empty-state">
+            <div class="sidebar-empty-icon">${getIconSvg('history', 22)}</div>
+            <div class="sidebar-empty-title">${lang === 'fa' ? 'هنوز تغییری ثبت نشده است' : 'No actions recorded yet'}</div>
+            <div class="sidebar-empty-sub">${lang === 'fa' ? 'تغییرات و یادداشت‌های شما در اینجا نمایش داده می‌شوند.' : 'Your annotation edits and page actions will appear here.'}</div>
+          </div>
+        `;
       } else {
         el.innerHTML = `
           <div class="panel-stack">
             ${historyItems.slice().reverse().map(h => `
-              <div class="list-card ${h.isCurrent ? 'is-current' : ''}" style="flex-direction:column; align-items:stretch;">
-                <span class="list-card-title">${escapeHtml(h.description)}</span>
-                <span class="list-card-meta">${new Date(h.timestamp).toLocaleTimeString()}</span>
+              <div class="list-card history-item-card ${h.isCurrent ? 'is-current' : ''}">
+                <span class="list-card-icon">${getIconSvg('clock', 13)}</span>
+                <div style="flex:1; min-width:0;">
+                  <div class="list-card-title" dir="auto">${escapeHtml(h.description)}</div>
+                  <span class="list-card-meta">${new Date(h.timestamp).toLocaleTimeString()}</span>
+                </div>
               </div>
             `).join('')}
           </div>
@@ -323,13 +530,7 @@ export class SidePanelsComponent {
     }
   }
 
-  /**
-   * Wires the whole thumbnail interaction model on the freshly rendered list:
-   * click selection, ctrl/shift extension, the page context menu, drag-to-
-   * reorder and the keyboard shortcuts that mirror the menu.
-   */
   private bindThumbnailList(list: HTMLElement, doc: DocumentSession): void {
-    /** Pages picked up by an in-flight drag. */
     let dragging: number[] = [];
 
     const cards = Array.from(list.querySelectorAll<HTMLElement>('[data-page]'));
@@ -364,8 +565,6 @@ export class SidePanelsComponent {
       card.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // Right-clicking outside the current selection re-targets it, which is
-        // what every file manager does and what makes Delete unambiguous.
         if (!store.selectedPageIndices.has(idx)) {
           this._pageAnchor = idx;
           store.setSelectedPageIndices([]);
@@ -401,9 +600,7 @@ export class SidePanelsComponent {
         card.classList.remove('is-drop-target');
         const moving = dragging;
         dragging = [];
-        // Dropping onto one of the dragged pages is a no-op, not a jump.
         if (moving.length === 0 || moving.includes(idx)) return;
-        // Dragged upward -> land before the target; downward -> after it.
         const toIndex = moving[0] > idx ? idx : idx + 1;
         void this.runPageAction(() => pageActions.movePages(moving, toIndex));
       });
@@ -411,14 +608,10 @@ export class SidePanelsComponent {
 
     list.addEventListener('keydown', (e) => {
       const target = e.target as HTMLElement | null;
-      // Let the search field inside other tabs keep its own keys.
       if (target && target.tagName === 'INPUT') return;
       const mod = e.ctrlKey || e.metaKey;
       const current = store.effectivePageSelection();
 
-      // Every handled key stops propagating: the window-level shortcut handler
-      // would otherwise act on the annotation selection at the same time
-      // (Delete deletes pages *and* annotations).
       const handled = () => {
         e.preventDefault();
         e.stopPropagation();
@@ -477,12 +670,9 @@ export class SidePanelsComponent {
     });
   }
 
-  /** Wraps a page action so failures surface once, as a toast. */
   private async runPageAction(run: () => Promise<boolean>): Promise<void> {
     const doc = store.activeDocument;
     if (!doc) return;
-    // A page op is already in flight: dropping the click beats queueing it and
-    // then reporting the runner's own busy-guard rejection as a failure.
     if (pageActions.isBusy) return;
     let ok = false;
     try {
@@ -584,41 +774,46 @@ export class SidePanelsComponent {
         }); } }
     ];
 
-    // Parented to the body, not the sidebar: the sidebar re-renders on every
-    // store notify, which would tear down an open menu mid-interaction.
     openContextMenu(x, y, entries);
   }
 
   /**
-   * Renders each page preview once and reuses it afterwards, so switching tabs
-   * or moving between pages does not re-rasterise the whole document.
+   * Ultra-fast thumbnail loader:
+   * 1. Encodes thumbnails as fast JPEG (0.80) instead of heavy PNG.
+   * 2. Immediately renders the active page neighborhood (`activePageIndex ± 6`) in parallel.
+   * 3. Uses a wide 1400px IntersectionObserver lookahead for scrolling.
+   * 4. Pre-warms remaining pages in background batches of 4 so thumbnails are ready before scrolling.
    */
   private fillThumbnails(el: HTMLElement, docId: string, pageCount: number, revision: number): void {
-    // One observer per fill pass; drop the previous pass's observer so a
-    // rebuilt list never keeps dead elements alive.
     this._thumbObserver?.disconnect();
+    const warmupToken = ++this._thumbWarmupToken;
+    const inFlight = new Set<number>();
 
-    const fillFrame = async (frame: HTMLElement, idx: number): Promise<void> => {
-      // `revision` is the page-structure generation: a page op renumbers every
-      // page, so a cache entry from before it would show the wrong page. The
-      // structure handler also clears the cache, which makes this
-      // belt-and-braces.
+    const fillFrame = async (idx: number): Promise<void> => {
+      if (idx < 0 || idx >= pageCount) return;
       const key = `${docId}:${revision}:${idx}`;
       let src = this._thumbnailCache.get(key);
 
       if (!src) {
-        // Fast path: pages the reader has already viewed have a full-res
-        // bitmap in the engine cache — one synchronous downscale, zero pdf.js
-        // work, and the preview appears immediately.
-        const fast = pdfEngine.thumbnailFromCache(idx);
-        const rendered = fast ?? await pdfEngine.renderThumbnail(idx);
-        if (!rendered) return;
-        src = rendered.toDataURL('image/png');
-        this._thumbnailCache.set(key, src);
+        if (inFlight.has(idx)) return;
+        inFlight.add(idx);
+        try {
+          const fast = pdfEngine.thumbnailFromCache(idx);
+          const rendered = fast ?? await pdfEngine.renderThumbnail(idx);
+          if (!rendered) return;
+          src = rendered.toDataURL('image/jpeg', 0.80);
+          this._thumbnailCache.set(key, src);
+        } finally {
+          inFlight.delete(idx);
+        }
       }
 
-      // The panel may have been re-rendered while this page was rasterising.
-      if (!frame.isConnected) return;
+      const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
+      if (!frame || !frame.isConnected) return;
+      if (frame.querySelector('img')) {
+        frame.classList.remove('is-loading');
+        return;
+      }
 
       const img = document.createElement('img');
       img.src = src;
@@ -628,23 +823,248 @@ export class SidePanelsComponent {
       frame.prepend(img);
     };
 
-    // Lazy rasterisation: only thumbnails near the visible part of the list
-    // render. Opening the sidebar on a 500-page document no longer rasterises
-    // all 500 pages up front; each card fills as it scrolls into view (with a
-    // one-screen lookahead) and is unobserved once filled.
+    // 1. Immediate priority batch around the current page (activePageIndex ± 6)
+    const center = store.activePageIndex;
+    const priorityIndices: number[] = [];
+    for (let radius = 0; radius <= 6; radius++) {
+      const a = center - radius;
+      const b = center + radius;
+      if (a >= 0 && a < pageCount) priorityIndices.push(a);
+      if (radius > 0 && b >= 0 && b < pageCount) priorityIndices.push(b);
+    }
+
+    // 2. Wide-margin IntersectionObserver for instant scroll lookahead
     this._thumbObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         this._thumbObserver?.unobserve(entry.target);
         const frame = entry.target as HTMLElement;
         const idx = Number(frame.dataset.thumbFrame);
-        if (Number.isFinite(idx)) void fillFrame(frame, idx);
+        if (Number.isFinite(idx)) void fillFrame(idx);
       }
-    }, { rootMargin: '600px' });
+    }, { rootMargin: '1400px' });
 
     for (let idx = 0; idx < pageCount; idx++) {
       const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
-      if (frame) this._thumbObserver.observe(frame);
+      if (frame && !frame.querySelector('img')) {
+        this._thumbObserver.observe(frame);
+      }
     }
+
+    // 3. Run priority pages immediately in parallel, then pre-warm remaining pages in background batches of 4
+    void (async () => {
+      const batchSize = 4;
+      for (let i = 0; i < priorityIndices.length; i += batchSize) {
+        if (warmupToken !== this._thumbWarmupToken || store.activeDocument?.id !== docId) return;
+        const slice = priorityIndices.slice(i, i + batchSize);
+        await Promise.all(slice.map(idx => fillFrame(idx)));
+      }
+
+      // Background pre-warm remaining pages up to 160 pages so scrolling never hits shimmer
+      const maxWarmup = Math.min(pageCount, 160);
+      for (let idx = 0; idx < maxWarmup; idx += batchSize) {
+        if (warmupToken !== this._thumbWarmupToken || store.activeDocument?.id !== docId || !store.sidebarOpen) return;
+        const batch: number[] = [];
+        for (let k = idx; k < Math.min(maxWarmup, idx + batchSize); k++) {
+          if (!this._thumbnailCache.has(`${docId}:${revision}:${k}`)) {
+            batch.push(k);
+          }
+        }
+        if (batch.length > 0) {
+          await Promise.all(batch.map(p => fillFrame(p)));
+          await new Promise(r => setTimeout(r, 8));
+        }
+      }
+    })();
+  }
+
+  private async executeConcurrentSearch(
+    doc: DocumentSession,
+    rawQuery: string,
+    autoJumpFirst: boolean
+  ): Promise<void> {
+    const query = rawQuery.trim();
+    const token = ++this._searchToken;
+    const statusBar = this._container.querySelector<HTMLElement>('#search-status-bar');
+
+    if (!query) {
+      store.clearSearchResults();
+      this.renderSearchResultsList();
+      window.app?.repaintAllRenderedAnnotations();
+      return;
+    }
+
+    if (statusBar) statusBar.textContent = '…';
+
+    const allMatches: PdfSearchMatch[] = [];
+    const totalPages = doc.pages.length;
+    const batchSize = 8;
+    let jumpedToFirst = false;
+
+    for (let batchStart = 0; batchStart < totalPages; batchStart += batchSize) {
+      if (token !== this._searchToken || store.activeDocument?.id !== doc.id) return;
+      const batchEnd = Math.min(totalPages, batchStart + batchSize);
+      const batchPromises: Promise<PdfSearchMatch[]>[] = [];
+
+      for (let pageIdx = batchStart; pageIdx < batchEnd; pageIdx++) {
+        batchPromises.push(
+          pdfEngine.getPageTextLayout(pageIdx).then((layout) => {
+            if (!layout) return [];
+            return findMatchesInPageLayout(layout, query);
+          })
+        );
+      }
+
+      const batchResults = await Promise.all(batchPromises);
+      if (token !== this._searchToken || store.activeDocument?.id !== doc.id) return;
+
+      let addedInBatch = false;
+      for (const pageMatches of batchResults) {
+        if (pageMatches.length > 0) {
+          allMatches.push(...pageMatches);
+          addedInBatch = true;
+        }
+      }
+
+      if (addedInBatch) {
+        const activeIdx = allMatches.length > 0 ? Math.max(0, store.activeSearchMatchIndex) : -1;
+        store.setSearchResults(query, [...allMatches], activeIdx);
+        this.renderSearchResultsList();
+        window.app?.repaintAllRenderedAnnotations();
+
+        if (autoJumpFirst && !jumpedToFirst && allMatches.length > 0) {
+          jumpedToFirst = true;
+          this.jumpToSearchMatch(0);
+        }
+      }
+    }
+
+    if (token !== this._searchToken || store.activeDocument?.id !== doc.id) return;
+
+    if (allMatches.length === 0) {
+      store.setSearchResults(query, [], -1);
+      this.renderSearchResultsList();
+      window.app?.repaintAllRenderedAnnotations();
+    } else {
+      this.renderSearchResultsList();
+    }
+  }
+
+  private jumpToSearchMatch(matchIndex: number): void {
+    const matches = store.searchMatches;
+    if (matchIndex < 0 || matchIndex >= matches.length) return;
+    const match = matches[matchIndex];
+    store.setActiveSearchMatchIndex(matchIndex);
+
+    viewportManager.scrollToPage(match.pageIndex);
+    const scroller = document.getElementById('document-scroll-container');
+    const layout = viewportManager.getLayout(match.pageIndex);
+    if (scroller && layout) {
+      const zoom = store.zoom;
+      const targetCenterY = layout.top + (match.bounds.y + match.bounds.height / 2) * zoom;
+      const desiredTop = Math.max(0, targetCenterY - scroller.clientHeight * 0.42);
+      scroller.scrollTop = desiredTop;
+    }
+
+    this.syncActiveSearchCard();
+    window.app?.repaintAllRenderedAnnotations();
+  }
+
+  private syncActiveSearchCard(): void {
+    const activeIdx = store.activeSearchMatchIndex;
+    const matches = store.searchMatches;
+    const statusBar = this._container.querySelector<HTMLElement>('#search-status-bar');
+    if (statusBar) {
+      if (!store.searchQuery) {
+        statusBar.textContent = '';
+        statusBar.classList.remove('has-matches', 'no-matches');
+      } else if (matches.length === 0) {
+        statusBar.textContent = '0/0';
+        statusBar.classList.add('no-matches');
+        statusBar.classList.remove('has-matches');
+      } else {
+        statusBar.textContent = `${activeIdx + 1}/${matches.length}`;
+        statusBar.classList.add('has-matches');
+        statusBar.classList.remove('no-matches');
+      }
+    }
+
+    const cards = this._container.querySelectorAll<HTMLElement>('.search-result-card[data-match-index]');
+    cards.forEach((card) => {
+      const idx = parseInt(card.dataset.matchIndex || '-1', 10);
+      const isCurrent = idx === activeIdx;
+      card.classList.toggle('is-current', isCurrent);
+      if (isCurrent) {
+        card.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  private renderSearchResultsList(): void {
+    const resultsList = this._container.querySelector<HTMLElement>('#search-results-list');
+    const statusBar = this._container.querySelector<HTMLElement>('#search-status-bar');
+    const lang = store.appSettings.language;
+    if (!resultsList) return;
+
+    const query = store.searchQuery;
+    const matches = store.searchMatches;
+    const activeIdx = store.activeSearchMatchIndex;
+
+    if (!query) {
+      if (statusBar) {
+        statusBar.textContent = '';
+        statusBar.classList.remove('has-matches', 'no-matches');
+      }
+      resultsList.innerHTML = `
+        <div class="sidebar-empty-state">
+          <div class="sidebar-empty-icon">${getIconSvg('search', 22)}</div>
+          <div class="sidebar-empty-title">${lang === 'fa' ? 'جستجو در تمام صفحات' : 'Search across all pages'}</div>
+          <div class="sidebar-empty-sub">${lang === 'fa' ? 'عبارت مورد نظر را در کادر بالا بنویسید تا تمام نتایج هایلایت شوند.' : 'Type a word or phrase above to highlight and jump to matches.'}</div>
+        </div>
+      `;
+      return;
+    }
+
+    if (matches.length === 0) {
+      if (statusBar) {
+        statusBar.textContent = '0/0';
+        statusBar.classList.add('no-matches');
+        statusBar.classList.remove('has-matches');
+      }
+      resultsList.innerHTML = `
+        <div class="sidebar-empty-state">
+          <div class="sidebar-empty-icon">${getIconSvg('search', 22)}</div>
+          <div class="sidebar-empty-title">${lang === 'fa' ? 'نتیجه‌ای یافت نشد' : 'No matches found'}</div>
+          <div class="sidebar-empty-sub">${lang === 'fa' ? 'عبارت دیگری را امتحان کنید.' : 'Try searching for a different keyword.'}</div>
+        </div>
+      `;
+      return;
+    }
+
+    if (statusBar) {
+      statusBar.textContent = `${activeIdx + 1}/${matches.length}`;
+      statusBar.classList.add('has-matches');
+      statusBar.classList.remove('no-matches');
+    }
+
+    resultsList.innerHTML = matches.map((m, idx) => `
+      <div class="list-card is-interactive search-result-card ${idx === activeIdx ? 'is-current' : ''}"
+           data-match-index="${idx}" data-page="${m.pageIndex}">
+        <div class="search-result-header">
+          <span class="search-result-page">${lang === 'fa' ? `صفحه ${m.pageIndex + 1}` : `Page ${m.pageIndex + 1}`}</span>
+          <span class="search-result-index">#${idx + 1}</span>
+        </div>
+        <span class="search-result-snippet" dir="auto">
+          ${escapeHtml(m.snippetPre)}<mark class="search-result-mark">${escapeHtml(m.snippetMatch)}</mark>${escapeHtml(m.snippetPost)}
+        </span>
+      </div>
+    `).join('');
+
+    resultsList.querySelectorAll<HTMLElement>('.search-result-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        const idx = parseInt(card.dataset.matchIndex || '0', 10);
+        this.jumpToSearchMatch(idx);
+      });
+    });
   }
 }

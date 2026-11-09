@@ -1,10 +1,11 @@
 /**
  * Top Application Header Component
- * Multi-document tabs, quick actions, export buttons, and system settings.
+ * Multi-document dropdown menu, quick actions, export buttons, and system settings.
  */
 
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
+import { escapeHtml } from '../../utils/html';
 import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
 import { isFullscreen, toggleFullscreen } from '../fullscreen';
 import { showToast } from './toast';
@@ -21,6 +22,7 @@ export class HeaderComponent {
   /** Zoom never changes header output — skip full rebuilds on zoom-only notifies. */
   private _lastRenderKey: string = '';
   private _isFullscreen = false;
+  private _dropdownOpen = false;
 
   constructor(
     container: HTMLElement,
@@ -29,12 +31,39 @@ export class HeaderComponent {
   ) {
     this._container = container;
     this._onOpenFileRequested = onOpenFileRequested;
-    // The tab-strip "+" opens the full landing (recents, folders, new file)
+    // The "+" button opens the full landing (recents, folders, new file)
     // instead of jumping straight to the file picker.
     this._onAddTabRequested = onAddTabRequested ?? onOpenFileRequested;
     store.subscribe(() => this.render());
     document.addEventListener('fullscreenchange', () => this.render());
+
+    // Close the open documents dropdown when clicking outside or pressing Escape
+    document.addEventListener('pointerdown', (e) => {
+      if (!this._dropdownOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('.header-docs-dropdown-wrap')) return;
+      this.setDropdownOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this._dropdownOpen) {
+        this.setDropdownOpen(false);
+      }
+    });
+
     this.render();
+  }
+
+  private setDropdownOpen(open: boolean): void {
+    this._dropdownOpen = open;
+    const menu = this._container.querySelector<HTMLElement>('#header-docs-menu');
+    const trigger = this._container.querySelector<HTMLElement>('#header-docs-dropdown-btn');
+    if (menu) {
+      menu.classList.toggle('is-open', open);
+    }
+    if (trigger) {
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      trigger.classList.toggle('is-open', open);
+    }
   }
 
   public render(): void {
@@ -45,14 +74,24 @@ export class HeaderComponent {
     const isNotebook = notebookController.isNotebook(activeDoc);
     const fullscreen = isFullscreen();
 
+    if (tabs.length === 0 && this._dropdownOpen) {
+      this._dropdownOpen = false;
+    }
+
     const renderKey = [
       activeDoc?.id ?? '',
-      tabs.map(t => `${t.id}:${t.name}:${isDocumentDirty(t.id) ? 1 : 0}`).join(','),
+      tabs.map(t => {
+        const d = store.openDocuments.get(t.id);
+        return `${t.id}:${t.name}:${d?.pageCount ?? 0}:${isDocumentDirty(t.id) ? 1 : 0}`;
+      }).join(','),
       lang, theme, isNotebook ? 1 : 0, fullscreen ? 1 : 0
     ].join('|');
     if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') return;
     this._lastRenderKey = renderKey;
     this._isFullscreen = fullscreen;
+
+    const activeTabName = activeDoc?.name || tabs[0]?.name || 'Documents';
+    const activeDirty = activeDoc ? isDocumentDirty(activeDoc.id) : false;
 
     this._container.innerHTML = `
       <div class="header-left">
@@ -65,18 +104,65 @@ export class HeaderComponent {
           <span>${t('appName')}</span>
         </div>
 
-        <div class="document-tabs-bar" ${tabs.length === 0 ? 'style="display:none;"' : ''}>
-          ${tabs.map(tab => `
-            <div class="doc-tab ${activeDoc?.id === tab.id ? 'active' : ''}" data-tab-id="${tab.id}" title="${tab.name}">
-              <span class="doc-tab-icon">${getIconSvg('fileText', 13)}</span>
-              <span class="doc-tab-title">${tab.name}</span>
-              ${isDocumentDirty(tab.id) ? '<span class="doc-tab-dirty" title="Unsaved changes">●</span>' : ''}
-              <span class="doc-tab-close" data-close-tab="${tab.id}" title="Close Tab">${getIconSvg('close', 11)}</span>
-            </div>
-          `).join('')}
-          <button id="header-add-tab-btn" class="doc-tab-add" title="Open PDF in new tab">
-            ${getIconSvg('plus', 13)}
+        <div class="document-tabs-bar header-docs-dropdown-wrap" ${tabs.length === 0 ? 'style="display:none;"' : ''}>
+          <button type="button"
+                  id="header-docs-dropdown-btn"
+                  class="header-docs-trigger ${this._dropdownOpen ? 'is-open' : ''}"
+                  aria-haspopup="listbox"
+                  aria-expanded="${this._dropdownOpen ? 'true' : 'false'}"
+                  title="${escapeHtml(activeTabName)} (${tabs.length} open)">
+            <span class="doc-tab-icon">${getIconSvg('fileText', 14)}</span>
+            <span class="doc-tab-title">${escapeHtml(activeTabName)}</span>
+            ${activeDirty ? '<span class="doc-tab-dirty" title="Unsaved changes">●</span>' : ''}
+            <span class="header-docs-count" title="${tabs.length} open PDF${tabs.length === 1 ? '' : 's'}">${tabs.length}</span>
+            <span class="header-docs-chevron">${getIconSvg('chevronDown', 13)}</span>
           </button>
+
+          <button type="button" id="header-add-tab-btn" class="doc-tab-add" title="Open PDF in new tab">
+            ${getIconSvg('plus', 14)}
+          </button>
+
+          <div id="header-docs-menu" class="header-docs-menu ${this._dropdownOpen ? 'is-open' : ''}" role="listbox" aria-label="Open documents">
+            <div class="header-docs-menu-header">
+              <span>${lang === 'fa' ? 'پی‌دی‌اف‌های باز' : 'Open Documents'}</span>
+              <span class="badge">${tabs.length}</span>
+            </div>
+            <div class="header-docs-menu-list">
+              ${tabs.map(tab => {
+                const isActive = activeDoc?.id === tab.id;
+                const dirty = isDocumentDirty(tab.id);
+                const docSession = store.openDocuments.get(tab.id);
+                const pagesCount = docSession?.pageCount || 0;
+                return `
+                  <div class="doc-tab header-docs-item ${isActive ? 'active' : ''}"
+                       data-tab-id="${escapeHtml(tab.id)}"
+                       role="option"
+                       aria-selected="${isActive ? 'true' : 'false'}"
+                       title="${escapeHtml(tab.name)}">
+                    <span class="doc-tab-icon">${getIconSvg('fileText', 14)}</span>
+                    <div class="header-docs-item-info">
+                      <span class="doc-tab-title">${escapeHtml(tab.name)}</span>
+                      ${pagesCount > 0 ? `<span class="header-docs-item-meta">${pagesCount} ${lang === 'fa' ? 'صفحه' : (pagesCount === 1 ? 'page' : 'pages')}</span>` : ''}
+                    </div>
+                    ${dirty ? '<span class="doc-tab-dirty" title="Unsaved changes">●</span>' : ''}
+                    <button type="button" class="doc-tab-close" data-close-tab="${escapeHtml(tab.id)}" title="Close Tab" aria-label="Close ${escapeHtml(tab.name)}">
+                      ${getIconSvg('close', 12)}
+                    </button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+            ${tabs.length > 1 ? `
+              <div class="header-docs-menu-footer">
+                <button type="button" class="header-docs-footer-btn" id="header-docs-close-others">
+                  ${lang === 'fa' ? 'بستن بقیه تب‌ها' : 'Close Others'}
+                </button>
+                <button type="button" class="header-docs-footer-btn is-danger" id="header-docs-close-all">
+                  ${lang === 'fa' ? 'بستن همه' : 'Close All'}
+                </button>
+              </div>
+            ` : ''}
+          </div>
         </div>
       </div>
 
@@ -93,11 +179,6 @@ export class HeaderComponent {
           <div class="toolbar-separator" style="height:18px;"></div>
         ` : ''}
 
-        <button id="header-open-btn" class="header-btn">
-          ${getIconSvg('upload', 14)}
-          <span>${t('openFile')}</span>
-        </button>
-
         <button id="header-save-btn" class="header-btn primary" ${!activeDoc ? 'style="display:none;"' : ''} title="Save (Ctrl+S)">
           ${getIconSvg('save', 14)}
           <span>Save</span>
@@ -108,7 +189,7 @@ export class HeaderComponent {
           <span>Save As</span>
         </button>
 
-        <div class="toolbar-separator" style="height:18px;"></div>
+        <div class="toolbar-separator" style="height:18px; ${!activeDoc ? 'display:none;' : ''}"></div>
 
         <button id="header-palette-btn" class="header-btn" title="Command Palette (Cmd+K)">
           ${getIconSvg('command', 15)}
@@ -139,11 +220,8 @@ export class HeaderComponent {
     });
 
     this._container.querySelector('#header-logo-btn')?.addEventListener('click', () => {
+      this._dropdownOpen = false;
       store.setActiveDocument(null);
-    });
-
-    this._container.querySelector('#header-open-btn')?.addEventListener('click', () => {
-      this._onOpenFileRequested();
     });
 
     this._container.querySelector('#header-paper-btn')?.addEventListener('click', () => {
@@ -194,11 +272,18 @@ export class HeaderComponent {
       store.setSettingsModalOpen(true);
     });
 
-    // Tab click events
+    // Open Documents Dropdown toggle
+    this._container.querySelector('#header-docs-dropdown-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setDropdownOpen(!this._dropdownOpen);
+    });
+
+    // Tab item click events inside dropdown
     this._container.querySelectorAll('[data-tab-id]').forEach(tabEl => {
       tabEl.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).closest('[data-close-tab]')) return;
         const tabId = tabEl.getAttribute('data-tab-id');
+        this.setDropdownOpen(false);
         if (tabId) {
           store.switchDocumentTab(tabId);
         }
@@ -210,13 +295,22 @@ export class HeaderComponent {
         e.stopPropagation();
         const tabId = closeEl.getAttribute('data-close-tab');
         if (!tabId) return;
-        if (isDocumentDirty(tabId)) {
-          const ok = await nativeConfirm('This document has unsaved changes. Close without saving?');
-          if (!ok) return;
-        }
-        forgetFileHandle(tabId);
-        store.closeDocumentTab(tabId);
+        await this.closeTabWithConfirm(tabId);
       });
+    });
+
+    this._container.querySelector('#header-docs-close-others')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const currentId = store.activeDocument?.id;
+      if (!currentId) return;
+      this.setDropdownOpen(false);
+      void this.closeTabsWithConfirm(tabs.filter(t => t.id !== currentId).map(t => t.id));
+    });
+
+    this._container.querySelector('#header-docs-close-all')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setDropdownOpen(false);
+      void this.closeTabsWithConfirm(tabs.map(t => t.id));
     });
 
     this._container.querySelectorAll<HTMLElement>('[data-tab-id]').forEach(tabEl => {
@@ -228,6 +322,7 @@ export class HeaderComponent {
     });
 
     this._container.querySelector('#header-add-tab-btn')?.addEventListener('click', () => {
+      this.setDropdownOpen(false);
       this._onAddTabRequested();
     });
   }

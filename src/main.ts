@@ -5,12 +5,13 @@
 
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
+import { getWordOrMathRangeAtPoint } from './core/pdf-text-layout';
 import { viewportManager, rotatedPageSize } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
 import { HeaderComponent } from './ui/components/header';
 import { ToolbarComponent } from './ui/components/toolbar';
-import { SidePanelsComponent } from './ui/components/side-panels';
+import { SidePanelsComponent, sidePanelsInstance } from './ui/components/side-panels';
 import { PropertiesPanelComponent } from './ui/components/properties-panel';
 import { ViewControlsComponent } from './ui/components/view-controls';
 import { ScratchpadComponent } from './ui/components/scratchpad';
@@ -21,7 +22,7 @@ import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
-import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail } from './io/storage';
+import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail, deleteRecentDocument } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
 import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
@@ -156,6 +157,15 @@ class VeditorApp {
     //    document, and keep them in sync for the rest of the session.
     initAppearanceSync();
 
+    // 1b. Tag Linux desktop/WebKitGTK environments so CSS can disable expensive
+    //     per-frame backdrop-filter blurs over the scrolling canvas.
+    if (typeof navigator !== 'undefined') {
+      const ua = `${navigator.userAgent || ''} ${navigator.platform || ''}`;
+      if (/Linux/i.test(ua) && !/Android/i.test(ua)) {
+        document.documentElement.classList.add('platform-linux');
+      }
+    }
+
     // 2. Initialize Components
     new HeaderComponent(
       document.getElementById('app-header') as HTMLElement,
@@ -198,6 +208,16 @@ class VeditorApp {
       this._pagesWrapper,
       (visibleIndices) => this.renderVisiblePages(visibleIndices)
     );
+
+    // Clear active PDF text selection when clicking on the outer viewport background outside pages
+    this._scrollContainer.addEventListener('pointerdown', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if ((target === this._scrollContainer || target === this._pagesWrapper) && store.textSelection) {
+        store.setTextSelection(null);
+        this.repaintAllRenderedAnnotations();
+      }
+    });
 
     // Background dimension fills (true page sizes arriving after first paint)
     // correct the layout so mixed-size docs stop overlapping. Preserve the
@@ -304,15 +324,22 @@ class VeditorApp {
             return;
           }
           const session = await getDocumentSession(docId);
-          if (session && session.fileData) {
-            // Carry the notebook spec + last-viewed position so reopening
-            // restores where the user left off instead of page 1.
-            await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
-              activePageIndex: session.activePageIndex || 0,
-              savedScrollTop: session.savedScrollTop,
-              savedScrollLeft: session.savedScrollLeft,
-              annotations: session.annotations
-            });
+          if (!session || !session.fileData || session.fileData.byteLength < 8) {
+            await deleteRecentDocument(docId).catch(() => {});
+            showToast('Removed invalid or unavailable PDF from Library', 'error');
+            void this._landingPage?.render();
+            return;
+          }
+          const loadedId = await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+            activePageIndex: session.activePageIndex || 0,
+            savedScrollTop: session.savedScrollTop,
+            savedScrollLeft: session.savedScrollLeft,
+            annotations: session.annotations,
+            userBookmarks: session.userBookmarks
+          });
+          if (!loadedId) {
+            await deleteRecentDocument(docId).catch(() => {});
+            void this._landingPage?.render();
           }
         }
       });
@@ -372,13 +399,22 @@ class VeditorApp {
           return;
         }
         const session = await getDocumentSession(docId);
-        if (session && session.fileData) {
-          await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
-            activePageIndex: session.activePageIndex || 0,
-            savedScrollTop: session.savedScrollTop,
-            savedScrollLeft: session.savedScrollLeft,
-            annotations: session.annotations
-          });
+        if (!session || !session.fileData || session.fileData.byteLength < 8) {
+          await deleteRecentDocument(docId).catch(() => {});
+          showToast('Removed invalid or unavailable PDF from Library', 'error');
+          void this._landingPage?.render();
+          return;
+        }
+        const loadedId = await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+          activePageIndex: session.activePageIndex || 0,
+          savedScrollTop: session.savedScrollTop,
+          savedScrollLeft: session.savedScrollLeft,
+          annotations: session.annotations,
+          userBookmarks: session.userBookmarks
+        });
+        if (!loadedId) {
+          await deleteRecentDocument(docId).catch(() => {});
+          void this._landingPage?.render();
         }
       }
     });
@@ -453,7 +489,8 @@ class VeditorApp {
         activePageIndex: existing.activePageIndex || 0,
         savedScrollTop: existing.savedScrollTop,
         savedScrollLeft: existing.savedScrollLeft,
-        annotations: existing.annotations
+        annotations: existing.annotations,
+        userBookmarks: existing.userBookmarks
       } : undefined,
       path
     );
@@ -509,12 +546,24 @@ class VeditorApp {
     });
   }
 
-  private showPdfLoading(filename: string, statusText: string = 'Parsing document structure…'): void {
+  private showPdfLoading(
+    filename: string,
+    statusText: string = 'Parsing document structure…',
+    progressPct: number = 25,
+    stepLabel: string = '1 / 3'
+  ): void {
     const overlay = document.getElementById('pdf-loading-overlay');
     const titleEl = document.getElementById('pdf-loading-filename');
     const statusEl = document.getElementById('pdf-loading-status');
+    const barEl = document.getElementById('pdf-loading-progress-bar');
+    const pctEl = document.getElementById('pdf-loading-pct');
+    const stepEl = document.getElementById('pdf-loading-step-badge');
+    const clamped = Math.max(5, Math.min(100, Math.round(progressPct)));
     if (titleEl) titleEl.textContent = filename;
     if (statusEl) statusEl.textContent = statusText;
+    if (barEl) barEl.style.width = `${clamped}%`;
+    if (pctEl) pctEl.textContent = `${clamped}%`;
+    if (stepEl) stepEl.textContent = stepLabel;
     if (overlay) {
       overlay.classList.remove('is-hidden');
     }
@@ -527,6 +576,27 @@ class VeditorApp {
     }
   }
 
+  /**
+   * Validates that a byte buffer contains the standard `%PDF-` header signature
+   * within the first 1024 bytes (ISO 32000-1 Annex H.3.1).
+   */
+  private hasValidPdfHeader(bytes: Uint8Array): boolean {
+    if (!bytes || bytes.byteLength < 8) return false;
+    const limit = Math.min(bytes.byteLength - 5, 1024);
+    for (let i = 0; i <= limit; i++) {
+      if (
+        bytes[i] === 0x25 &&     // '%'
+        bytes[i + 1] === 0x50 && // 'P'
+        bytes[i + 2] === 0x44 && // 'D'
+        bytes[i + 3] === 0x46 && // 'F'
+        bytes[i + 4] === 0x2D    // '-'
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public async loadPDF(
     name: string,
     bytes: Uint8Array,
@@ -537,23 +607,45 @@ class VeditorApp {
       savedScrollTop?: number;
       savedScrollLeft?: number;
       annotations?: DocumentSession['annotations'];
+      userBookmarks?: DocumentSession['userBookmarks'];
     },
     nativeFilePath?: string
   ): Promise<string | null> {
-    this.showPdfLoading(name, 'Opening document…');
+    const isFa = store.appSettings.language === 'fa';
+    this.showPdfLoading(
+      name,
+      isFa ? 'در حال بررسی و خواندن ساختار پی‌دی‌اف…' : 'Reading & validating PDF structure…',
+      28,
+      '1 / 3'
+    );
     showToast(`Loading ${name}…`, 'progress');
     try {
-      // Caller hands us a fresh buffer (file.arrayBuffer); take ownership with
-      // zero extra copies. pdfEngine slices internally before worker transfer.
       const masterBytes = bytes;
+      if (!this.hasValidPdfHeader(masterBytes)) {
+        throw new Error(
+          isFa
+            ? 'فایل دریافتی یک پی‌دی‌اف معتبر نیست (احتمالاً صفحه وب یا لینک محافظت‌شده است).'
+            : 'The file is not a valid PDF document (the URL may have returned a web page or login screen).'
+        );
+      }
+
       const docId = existingDocId || createDocumentId();
+      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
+      if (!pageCount || pageCount <= 0) {
+        throw new Error(isFa ? 'این فایل پی‌دی‌اف فاقد صفحه قابل نمایش است.' : 'PDF document contains 0 readable pages.');
+      }
+
+      // Only persist to IndexedDB / Recent Library AFTER pdfEngine confirms valid PDF!
       if (!existingDocId) {
-        // Persist in background: IDB structured-clone of large bytes must not
-        // block first paint.
         void openDocumentSession(name, masterBytes, undefined, docId).catch(() => {});
       }
-      this.showPdfLoading(name, 'Parsing PDF structure & pages…');
-      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
+
+      this.showPdfLoading(
+        name,
+        isFa ? 'در حال بارگذاری یادداشت‌ها و فهرست…' : 'Loading annotations & outline…',
+        66,
+        '2 / 3'
+      );
 
       const existingSession = existingDocId ? store.openDocuments.get(existingDocId) : null;
       const baseAnnotations = existingSession?.annotations || initialState?.annotations;
@@ -579,6 +671,7 @@ class VeditorApp {
         pageCount,
         pages,
         bookmarks,
+        userBookmarks: existingSession?.userBookmarks || initialState?.userBookmarks || [],
         annotations: importedAnnotations,
         layers: {},
         activePageIndex: initialState?.activePageIndex ?? 0,
@@ -593,6 +686,13 @@ class VeditorApp {
       // Persist metadata (pageCount, notebook spec) to recent store without rewriting full bytes.
       void saveDocumentSession(session, { includeBytes: false }).catch(() => {});
 
+      this.showPdfLoading(
+        name,
+        isFa ? `در حال آماده‌سازی ${pageCount} صفحه…` : `Rendering ${pageCount} pages…`,
+        94,
+        '3 / 3'
+      );
+
       this._lastDocId = docId;
       history.switchDocument(docId);
       // Suppress scroll tracking while the fresh layout builds so the initial
@@ -603,12 +703,16 @@ class VeditorApp {
         this._scrollContainer.scrollTop = 0;
         this._scrollContainer.scrollLeft = 0;
         viewportManager.clearVisible();
-        store.setActiveDocument(session);
         this.clearRenderedPages();
+
+        // Register document and compute target default zoom BEFORE the layout pass
+        // so pages rasterize once at their true zoom without a 1.0 -> fitWidth blur jump.
+        store.setActiveDocument(session);
         this.renderEmptyState();
-        // Apply the user's default zoom (defaults to fitWidth).
         this.applyDefaultZoomMode();
+        this._lastZoom = store.zoom;
         viewportManager.updateLayout(true);
+
         if (typeof session.savedScrollTop === 'number' && session.savedScrollTop > 0) {
           this._scrollContainer.scrollTo({ top: session.savedScrollTop, left: session.savedScrollLeft ?? 0, behavior: 'auto' });
         } else if (session.activePageIndex > 0) {
@@ -618,6 +722,13 @@ class VeditorApp {
         store.endDocSwitch();
         viewportManager.handleScroll(true);
       }
+
+      this.showPdfLoading(
+        name,
+        isFa ? 'آماده نمایش!' : 'Ready!',
+        100,
+        '3 / 3'
+      );
 
       // Capture first-page cover thumbnail off the critical path for the Library gallery.
       window.setTimeout(async () => {
@@ -642,7 +753,7 @@ class VeditorApp {
       // Smooth fade out of the loading overlay
       window.setTimeout(() => {
         this.hidePdfLoading();
-      }, 180);
+      }, 150);
     }
   }
 
@@ -974,8 +1085,8 @@ class VeditorApp {
    */
   private doesChunkCoverViewport(
     chunk: HTMLCanvasElement | undefined,
-    container: HTMLElement,
-    layout: { width: number; height: number },
+    _container: HTMLElement,
+    layout: { top: number; left: number; width: number; height: number },
     marginPx: number = 48
   ): boolean {
     if (!chunk || chunk.style.display !== 'block' || chunk.width <= 1 || chunk.height <= 1) return false;
@@ -989,16 +1100,19 @@ class VeditorApp {
     const ch = parseFloat(chunk.dataset.baseHeight || '0');
     if (cw <= 8 || ch <= 8) return false;
 
-    const scrollRect = this._scrollContainer.getBoundingClientRect();
-    const pageRect = container.getBoundingClientRect();
-    if (scrollRect.width <= 0 || scrollRect.height <= 0 || pageRect.width <= 0 || pageRect.height <= 0) {
+    const viewW = this._scrollContainer.clientWidth;
+    const viewH = this._scrollContainer.clientHeight;
+    if (viewW <= 0 || viewH <= 0 || layout.width <= 0 || layout.height <= 0) {
       return false;
     }
 
-    const visX0 = Math.max(0, scrollRect.left - pageRect.left);
-    const visY0 = Math.max(0, scrollRect.top - pageRect.top);
-    const visX1 = Math.min(layout.width, scrollRect.right - pageRect.left);
-    const visY1 = Math.min(layout.height, scrollRect.bottom - pageRect.top);
+    const relLeft = this._scrollContainer.scrollLeft - layout.left;
+    const relTop = this._scrollContainer.scrollTop - layout.top;
+
+    const visX0 = Math.max(0, relLeft);
+    const visY0 = Math.max(0, relTop);
+    const visX1 = Math.min(layout.width, relLeft + viewW);
+    const visY1 = Math.min(layout.height, relTop + viewH);
     if (visX1 <= visX0 || visY1 <= visY0) return false;
 
     const reqX0 = Math.max(0, visX0 - marginPx);
@@ -1016,39 +1130,23 @@ class VeditorApp {
 
   /**
    * Computes a CONSTANT-SIZE viewport chunk rectangle (padded by 192 CSS px)
-   * for a visible page container. Keeping `width` and `height` constant across
-   * the entire page while scrolling ensures the canvas backing store (`width`,
-   * `height`) is allocated ONCE and never reallocated as the user scrolls near
-   * the top or bottom edge of a page.
+   * for a visible page container using pure scroll/layout arithmetic (zero
+   * getBoundingClientRect() synchronous layout reflows during scroll).
    */
   private computePageViewportChunkRect(
-    container: HTMLElement,
+    _container: HTMLElement,
     layout: { top: number; left: number; width: number; height: number }
   ): { x: number; y: number; width: number; height: number } | null {
     if (!this._scrollContainer) return null;
     const pad = 192;
     const pageW = Math.max(1, Math.ceil(layout.width));
     const pageH = Math.max(1, Math.ceil(layout.height));
-    const scrollRect = this._scrollContainer.getBoundingClientRect();
-    const pageRect = container.getBoundingClientRect();
 
-    let viewW: number;
-    let viewH: number;
-    let relLeft: number;
-    let relTop: number;
-
-    if (scrollRect.width > 0 && scrollRect.height > 0 && pageRect.width > 0 && pageRect.height > 0) {
-      viewW = scrollRect.width;
-      viewH = scrollRect.height;
-      relLeft = scrollRect.left - pageRect.left;
-      relTop = scrollRect.top - pageRect.top;
-    } else {
-      viewW = this._scrollContainer.clientWidth;
-      viewH = this._scrollContainer.clientHeight;
-      if (viewW <= 0 || viewH <= 0) return null;
-      relLeft = this._scrollContainer.scrollLeft - layout.left;
-      relTop = this._scrollContainer.scrollTop - layout.top;
-    }
+    const viewW = this._scrollContainer.clientWidth;
+    const viewH = this._scrollContainer.clientHeight;
+    if (viewW <= 0 || viewH <= 0) return null;
+    const relLeft = this._scrollContainer.scrollLeft - layout.left;
+    const relTop = this._scrollContainer.scrollTop - layout.top;
 
     // First verify the page actually intersects the visible viewport
     const visX0 = Math.max(0, relLeft);
@@ -1650,6 +1748,8 @@ class VeditorApp {
         const rot = store.pageRotations[pageIndex] || 0;
         void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
       }
+      // Pre-warm PDF text layout for on-screen pages so Select-tool hover is instant
+      void pdfEngine.getPageTextLayout(pageIndex);
       p.needsRepaint = false;
       this.repaintPageAnnotations(pageIndex, p);
     }
@@ -2095,6 +2195,20 @@ class VeditorApp {
           onRepaint();
           return;
         }
+        // Double-clicking on PDF text in Select mode selects the clicked word or connected math expression
+        if (!hit && store.activeTool === 'select') {
+          void (async () => {
+            const layout = pdfEngine.getCachedPageTextLayout(pageIndex) ?? await pdfEngine.getPageTextLayout(pageIndex);
+            if (!layout) return;
+            const sel = getWordOrMathRangeAtPoint(layout, point.x, point.y);
+            if (sel && sel.text.trim().length > 0) {
+              store.setTextSelection(sel);
+              floatingPropsBar?.showForTextSelection();
+              onRepaint();
+            }
+          })();
+          return;
+        }
       }
 
       if (store.activeTool !== 'hand') return;
@@ -2285,8 +2399,37 @@ class VeditorApp {
     }, { capture: true });
 
     window.addEventListener('keydown', (e) => {
-      // Don't trigger tool shortcuts when typing in inputs or contenteditable elements
       const target = e.target as HTMLElement | null;
+
+      // Pressing Escape anywhere immediately aborts/resets active search & highlights
+      // and clears any PDF text selection, even if focus is inside the search input.
+      if (e.key === 'Escape') {
+        const hadSearch = Boolean(store.searchQuery || store.searchMatches.length > 0);
+        const hadTextSel = Boolean(store.textSelection);
+        if (hadSearch) {
+          sidePanelsInstance?.cancelAndResetSearch();
+        }
+        if (hadTextSel) {
+          store.setTextSelection(null);
+        }
+        if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
+          if (target.id === 'doc-search-input') {
+            target.blur();
+          }
+          if (hadSearch || hadTextSel) {
+            this.repaintAllRenderedAnnotations();
+          }
+          return;
+        }
+        // Mid-drag marquee/lasso first, then polygons/selection.
+        if (pointerHandler.cancelLasso()) { this.repaintAllRenderedAnnotations(); return; }
+        pointerHandler.cancelPolygon();
+        store.clearSelection();
+        this.repaintAllRenderedAnnotations();
+        return;
+      }
+
+      // Don't trigger tool shortcuts when typing in inputs or contenteditable elements
       if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
         return;
       }
@@ -2309,19 +2452,18 @@ class VeditorApp {
           e.preventDefault();
           return;
         }
-      } else if (e.key === 'Escape') {
-        // Mid-drag marquee/lasso first, then polygons/selection.
-        if (pointerHandler.cancelLasso()) { this.repaintAllRenderedAnnotations(); return; }
-        pointerHandler.cancelPolygon();
-        store.clearSelection();
-        this.repaintAllRenderedAnnotations();
-        return;
       }
 
       // Handle Ctrl / Cmd modifier shortcuts
       if (e.ctrlKey || e.metaKey) {
         const key = e.key.toLowerCase();
-        if (key === 'z') {
+        if (key === 'c' && store.textSelection?.text) {
+          e.preventDefault();
+          void navigator.clipboard?.writeText(store.textSelection.text).then(() => {
+            showToast('Copied text to clipboard', 'info');
+          }).catch(() => {});
+          return;
+        } else if (key === 'z') {
           e.preventDefault();
           if (e.shiftKey) {
             history.redo();
@@ -2459,6 +2601,34 @@ class VeditorApp {
     return nativeConfirm(message, 'Unsaved changes');
   }
 
+  private resolveWebPdfUrl(rawUrl: string): string {
+    const trimmed = rawUrl.trim();
+    try {
+      const parsed = new URL(trimmed, window.location.href);
+      // Unwrap browser PDF viewer wrapper URLs (e.g. ?src=... or ?file=...)
+      const embedded = parsed.searchParams.get('src') || parsed.searchParams.get('file');
+      if (embedded && /^https?:\/\/|^file:\/\/|^blob:/i.test(embedded)) {
+        return embedded;
+      }
+      return parsed.href;
+    } catch {
+      return trimmed;
+    }
+  }
+
+  private extractCleanPdfFilename(urlStr: string): string {
+    try {
+      const u = new URL(urlStr, window.location.href);
+      const rawSeg = u.pathname.split('/').filter(Boolean).pop() || 'document.pdf';
+      const decoded = decodeURIComponent(rawSeg).replace(/[?#].*$/, '').trim();
+      if (!decoded) return 'document.pdf';
+      return decoded.toLowerCase().endsWith('.pdf') ? decoded : `${decoded}.pdf`;
+    } catch {
+      const fallback = urlStr.split(/[?#]/)[0].split('/').filter(Boolean).pop() || 'document.pdf';
+      return fallback.toLowerCase().endsWith('.pdf') ? fallback : `${fallback}.pdf`;
+    }
+  }
+
   private async checkUrlParams() {
     const params = new URLSearchParams(window.location.search);
     const docId = params.get('docId');
@@ -2469,6 +2639,55 @@ class VeditorApp {
       store.setShortcutsModalOpen(true);
     }
 
+    // 1. Explicit docId in URL query takes top priority
+    if (docId) {
+      const session = await getDocumentSession(docId);
+      if (session && session.fileData && this.hasValidPdfHeader(session.fileData)) {
+        await this.loadPDF(session.name, session.fileData, docId, session.notebook, {
+          activePageIndex: session.activePageIndex || 0,
+          savedScrollTop: session.savedScrollTop,
+          savedScrollLeft: session.savedScrollLeft,
+          annotations: session.annotations,
+          userBookmarks: session.userBookmarks
+        });
+        return;
+      }
+    }
+
+    // 2. Explicit pdfUrl from browser extension / webpage takes priority over stale sessionStorage!
+    if (pdfUrl) {
+      const resolvedUrl = this.resolveWebPdfUrl(pdfUrl);
+      const filename = this.extractCleanPdfFilename(resolvedUrl);
+      try {
+        const isFa = store.appSettings.language === 'fa';
+        this.showPdfLoading(
+          filename,
+          isFa ? 'در حال دریافت فایل پی‌دی‌اف از صفحه وب…' : 'Fetching PDF from webpage…',
+          15,
+          '1 / 3'
+        );
+        showToast(`Fetching ${filename}…`, 'progress');
+        const res = await fetch(resolvedUrl, { credentials: 'include' }).catch(() => fetch(resolvedUrl));
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} ${res.statusText || ''}`.trim());
+        }
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (!this.hasValidPdfHeader(bytes)) {
+          throw new Error(
+            isFa
+              ? 'این لینک مستقیم به فایل PDF نیست یا نیاز به دانلود مستقیم از مرورگر دارد.'
+              : 'URL did not return a valid PDF binary (it may require authentication or direct download).'
+          );
+        }
+        const loadedId = await this.loadPDF(filename, bytes);
+        if (loadedId) return;
+      } catch (err: any) {
+        this.hidePdfLoading();
+        showToast(`Failed to load PDF from URL: ${err.message}`, 'error');
+      }
+    }
+
+    // 3. Fallback: restore active session tab from sessionStorage if valid
     let savedSessionId: string | null = null;
     try {
       if (typeof window !== 'undefined' && window.sessionStorage) {
@@ -2476,29 +2695,18 @@ class VeditorApp {
       }
     } catch (_) {}
 
-    const targetDocId = docId || savedSessionId;
-    if (targetDocId) {
-      const session = await getDocumentSession(targetDocId);
-      if (session && session.fileData) {
-        await this.loadPDF(session.name, session.fileData, targetDocId, session.notebook, {
+    if (savedSessionId) {
+      const session = await getDocumentSession(savedSessionId);
+      if (session && session.fileData && this.hasValidPdfHeader(session.fileData)) {
+        await this.loadPDF(session.name, session.fileData, savedSessionId, session.notebook, {
           activePageIndex: session.activePageIndex || 0,
           savedScrollTop: session.savedScrollTop,
           savedScrollLeft: session.savedScrollLeft,
-          annotations: session.annotations
+          annotations: session.annotations,
+          userBookmarks: session.userBookmarks
         });
-        return;
-      }
-    }
-
-    if (pdfUrl) {
-      try {
-        showToast(`Fetching ${pdfUrl}…`, 'progress');
-        const res = await fetch(pdfUrl);
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        const filename = pdfUrl.split('/').pop() || 'document.pdf';
-        await this.loadPDF(filename, bytes);
-      } catch (err: any) {
-        showToast(`Failed to load PDF from URL: ${err.message}`, 'error');
+      } else if (session) {
+        await deleteRecentDocument(savedSessionId).catch(() => {});
       }
     }
   }
