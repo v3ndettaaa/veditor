@@ -37,18 +37,18 @@ export function calculateStrokeWidth(
     mappedPressure = Math.pow(pressure, 3);
   }
 
-  let minFactor = 0.84;
-  let maxFactor = 1.16;
+  let minFactor = 0.35;
+  let maxFactor = 1.65;
   if (strength === 'light') {
-    minFactor = 0.90;
-    maxFactor = 1.10;
+    minFactor = 0.55;
+    maxFactor = 1.35;
   } else if (strength === 'strong') {
-    minFactor = 0.74;
-    maxFactor = 1.26;
+    minFactor = 0.22;
+    maxFactor = 1.95;
   }
 
   const factor = minFactor + (maxFactor - minFactor) * mappedPressure;
-  const floorWidth = Math.min(baseWidth * minFactor, Math.max(0.75, baseWidth * 0.70));
+  const floorWidth = Math.min(baseWidth * minFactor, Math.max(0.35, baseWidth * 0.22));
   return Math.max(floorWidth, baseWidth * factor);
 }
 
@@ -85,57 +85,34 @@ export function smoothStrokePoints(
 
   if (deduped.length <= 2) return deduped;
 
-  // 2. Stabilize touch-down and lift-off pressure tails so strokes never thin out at the ends,
-  // smooth pressure with a symmetric low-pass kernel, and enforce a tight arc-length slope bound
-  // so small handwriting never develops beaded width oscillations.
+  // 2. Smooth pressure with a responsive low-pass kernel while preserving natural
+  // stylus touch-down and lift-off tapers.
   const n = deduped.length;
   const rawP = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     rawP[i] = deduped[i].pressure ?? 0.5;
   }
 
-  if (n >= 4) {
-    const interiorEndIdx = Math.max(1, n - 4);
-    const sustainedEndP = Math.max(rawP[interiorEndIdx], rawP[Math.max(0, interiorEndIdx - 1)]);
-    const endFloor = sustainedEndP * 0.94;
-    for (let i = interiorEndIdx + 1; i < n; i++) {
-      if (rawP[i] < endFloor) rawP[i] = endFloor;
-    }
-    const sustainedStartP = Math.max(rawP[1], rawP[Math.min(n - 1, 2)]);
-    const startFloor = sustainedStartP * 0.94;
-    if (rawP[0] < startFloor) rawP[0] = startFloor;
-  }
-
-  // Two-pass symmetric low-pass filter on pressure
-  const pass1P = new Float64Array(n);
+  // Symmetric low-pass filter on pressure (preserves true dynamic range)
+  const pass2P = new Float64Array(n);
   for (let i = 0; i < n; i++) {
-    const pM2 = rawP[Math.max(0, i - 2)];
     const pM1 = rawP[Math.max(0, i - 1)];
     const p0 = rawP[i];
     const pP1 = rawP[Math.min(n - 1, i + 1)];
-    const pP2 = rawP[Math.min(n - 1, i + 2)];
-    pass1P[i] = pM2 * 0.14 + pM1 * 0.24 + p0 * 0.24 + pP1 * 0.24 + pP2 * 0.14;
+    pass2P[i] = pM1 * 0.22 + p0 * 0.56 + pP1 * 0.22;
   }
 
-  const pass2P = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const pM1 = pass1P[Math.max(0, i - 1)];
-    const p0 = pass1P[i];
-    const pP1 = pass1P[Math.min(n - 1, i + 1)];
-    pass2P[i] = pM1 * 0.28 + p0 * 0.44 + pP1 * 0.28;
-  }
-
-  // Forward-backward arc-length pressure slope clamp (|dp/ds| <= 0.032 per page pt)
-  const maxPressureSlope = 0.032;
+  // Forward-backward arc-length pressure slope clamp (|dp/ds| <= 0.16 per page pt)
+  const maxPressureSlope = 0.16;
   for (let i = 1; i < n; i++) {
     const ds = Math.hypot(deduped[i].x - deduped[i - 1].x, deduped[i].y - deduped[i - 1].y);
-    const maxDelta = Math.max(0.002, ds * maxPressureSlope);
+    const maxDelta = Math.max(0.025, ds * maxPressureSlope);
     if (pass2P[i] > pass2P[i - 1] + maxDelta) pass2P[i] = pass2P[i - 1] + maxDelta;
     else if (pass2P[i] < pass2P[i - 1] - maxDelta) pass2P[i] = pass2P[i - 1] - maxDelta;
   }
   for (let i = n - 2; i >= 0; i--) {
     const ds = Math.hypot(deduped[i + 1].x - deduped[i].x, deduped[i + 1].y - deduped[i].y);
-    const maxDelta = Math.max(0.002, ds * maxPressureSlope);
+    const maxDelta = Math.max(0.025, ds * maxPressureSlope);
     if (pass2P[i] > pass2P[i + 1] + maxDelta) pass2P[i] = pass2P[i + 1] + maxDelta;
     else if (pass2P[i] < pass2P[i + 1] - maxDelta) pass2P[i] = pass2P[i + 1] - maxDelta;
   }
@@ -335,17 +312,17 @@ export function generateSmoothSegments(
     }
   }
 
-  // Clamp physical width slope across arc length (|dw/ds| <= 0.018) so small handwriting
-  // never develops sudden beaded width bulges when zoomed to 800%.
+  // Clamp physical width slope across arc length (|dw/ds| <= 0.12) so width transitions
+  // respond smoothly and visibly to stylus pressure without sudden single-sample spikes.
   if (pressureEnabled) {
-    const maxWidthSlope = 0.018;
+    const maxWidthSlope = 0.12;
     for (let i = 1; i < count; i++) {
-      const maxDw = Math.max(0.004, segChord[i - 1] * maxWidthSlope);
+      const maxDw = Math.max(0.02, segChord[i - 1] * maxWidthSlope);
       if (knotWidth[i] > knotWidth[i - 1] + maxDw) knotWidth[i] = knotWidth[i - 1] + maxDw;
       else if (knotWidth[i] < knotWidth[i - 1] - maxDw) knotWidth[i] = knotWidth[i - 1] - maxDw;
     }
     for (let i = count - 2; i >= 0; i--) {
-      const maxDw = Math.max(0.004, segChord[i] * maxWidthSlope);
+      const maxDw = Math.max(0.02, segChord[i] * maxWidthSlope);
       if (knotWidth[i] > knotWidth[i + 1] + maxDw) knotWidth[i] = knotWidth[i + 1] + maxDw;
       else if (knotWidth[i] < knotWidth[i + 1] - maxDw) knotWidth[i] = knotWidth[i + 1] - maxDw;
     }
@@ -613,10 +590,10 @@ function buildVectorPenPlan(
   fillPath.moveTo(lastSample.x + rEnd, lastSample.y);
   fillPath.arc(lastSample.x, lastSample.y, rEnd, 0, Math.PI * 2);
 
-  // Uniform or fine handwriting stroke: render as a SINGLE continuous Path2D so
-  // intermediate round caps never stack into beads at 800% zoom!
-  const widthBandThreshold = Math.max(0.14, baseWidth * 0.12);
-  if (!pressureEnabled || maxW - minW <= widthBandThreshold || totalLen <= Math.max(6.0, baseWidth * 3.0)) {
+  // Uniform stroke (e.g. mouse with pressure disabled or constant 0.5 pressure):
+  // render as a single continuous Path2D.
+  const widthBandThreshold = Math.max(0.04, baseWidth * 0.025);
+  if (!pressureEnabled || maxW - minW <= widthBandThreshold) {
     const path = new Path2D();
     traceSampledSplinePath(path, sampled);
     return {
@@ -625,11 +602,10 @@ function buildVectorPenPlan(
     };
   }
 
-  // Variable-width stroke with significant dynamic range: group spans into long continuous
-  // batches (requiring both a meaningful width delta and a minimum arc-length run before splitting).
+  // Variable-width stroke: group spans into smooth variable-width batches
   const batches: VectorPenBatch[] = [];
-  const stepQuantum = Math.max(0.04, baseWidth * 0.03);
-  const minBatchRunLen = Math.max(1.5, baseWidth * 0.75);
+  const stepQuantum = Math.max(0.03, baseWidth * 0.02);
+  const minBatchRunLen = Math.max(0.45, baseWidth * 0.22);
   let curPath: Path2D | null = null;
   let curWidth = -1;
   let curRunLen = 0;
@@ -709,8 +685,8 @@ function strokeVectorPenDirect(
   ctx.arc(sampled[m - 1].x, sampled[m - 1].y, Math.max(MIN_INK_WIDTH, sampled[m - 1].w) * 0.5, 0, Math.PI * 2);
   ctx.fill();
 
-  const widthBandThreshold = Math.max(0.14, baseWidth * 0.12);
-  if (!pressureEnabled || maxW - minW <= widthBandThreshold || totalLen <= Math.max(6.0, baseWidth * 3.0)) {
+  const widthBandThreshold = Math.max(0.04, baseWidth * 0.025);
+  if (!pressureEnabled || maxW - minW <= widthBandThreshold) {
     ctx.lineWidth = avgW;
     ctx.beginPath();
     traceSampledSplinePath(ctx, sampled);
@@ -719,8 +695,8 @@ function strokeVectorPenDirect(
     return;
   }
 
-  const stepQuantum = Math.max(0.04, baseWidth * 0.03);
-  const minBatchRunLen = Math.max(1.5, baseWidth * 0.75);
+  const stepQuantum = Math.max(0.03, baseWidth * 0.02);
+  const minBatchRunLen = Math.max(0.45, baseWidth * 0.22);
   let curWidth = -1;
   let curRunLen = 0;
   ctx.beginPath();

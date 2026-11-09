@@ -165,6 +165,9 @@ class VeditorApp {
         document.documentElement.classList.add('platform-linux');
       }
     }
+    if (isDesktop()) {
+      document.documentElement.classList.add('platform-desktop');
+    }
 
     // 2. Initialize Components
     new HeaderComponent(
@@ -326,7 +329,7 @@ class VeditorApp {
           const session = await getDocumentSession(docId);
           if (!session || !session.fileData || session.fileData.byteLength < 8) {
             await deleteRecentDocument(docId).catch(() => {});
-            showToast('Removed invalid or unavailable PDF from Library', 'error');
+            showToast(store.appSettings.language === 'fa' ? 'فایل PDF نامعتبر یا غیرقابل دسترس از کتابخانه حذف شد' : 'Removed invalid or unavailable PDF from Library', 'error');
             void this._landingPage?.render();
             return;
           }
@@ -356,14 +359,15 @@ class VeditorApp {
   private openAddTabLanding(): void {
     if (document.getElementById('add-tab-overlay')) return;
 
+    const isFaLang = store.appSettings.language === 'fa';
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.id = 'add-tab-overlay';
     overlay.innerHTML = `
-      <div class="modal-dialog add-tab-dialog" role="dialog" aria-modal="true" aria-label="Add tab">
+      <div class="modal-dialog add-tab-dialog" role="dialog" aria-modal="true" aria-label="${isFaLang ? 'تب جدید' : 'Add tab'}">
         <div class="panel-header">
-          <span>Add tab</span>
-          <button id="close-add-tab-btn" class="icon-btn" title="Close" aria-label="Close">✕</button>
+          <span>${isFaLang ? 'باز کردن سند یا دفتر جدید' : 'Add tab'}</span>
+          <button id="close-add-tab-btn" class="icon-btn" title="${isFaLang ? 'بستن' : 'Close'}" aria-label="${isFaLang ? 'بستن' : 'Close'}">✕</button>
         </div>
         <div id="add-tab-landing" class="add-tab-landing-body"></div>
       </div>
@@ -401,7 +405,7 @@ class VeditorApp {
         const session = await getDocumentSession(docId);
         if (!session || !session.fileData || session.fileData.byteLength < 8) {
           await deleteRecentDocument(docId).catch(() => {});
-          showToast('Removed invalid or unavailable PDF from Library', 'error');
+          showToast(store.appSettings.language === 'fa' ? 'فایل PDF نامعتبر یا غیرقابل دسترس از کتابخانه حذف شد' : 'Removed invalid or unavailable PDF from Library', 'error');
           void this._landingPage?.render();
           return;
         }
@@ -1291,10 +1295,16 @@ class VeditorApp {
     const scratchChunk = p.scratchChunkCanvas;
     if (!annotChunk || !scratchChunk) return;
 
+    const isLinuxDesktop =
+      document.documentElement.classList.contains('platform-linux') ||
+      document.documentElement.classList.contains('platform-desktop');
+    const targetChunkDpi = isLinuxDesktop
+      ? (store.appSettings.targetDPI || 150)
+      : Math.max(store.appSettings.targetDPI || 200, 200);
     const nativeDpr = resolveAdaptiveCanvasDpr(
       chunkRect.width,
       chunkRect.height,
-      Math.max(store.appSettings.targetDPI || 200, 200)
+      targetChunkDpi
     );
     const pw = Math.max(1, Math.round(chunkRect.width * nativeDpr));
     const ph = Math.max(1, Math.round(chunkRect.height * nativeDpr));

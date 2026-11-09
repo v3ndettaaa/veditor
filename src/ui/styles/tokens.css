@@ -51,7 +51,7 @@
   --control-h-sm: 26px;
   --control-px: 10px;
   --control-font: 12px;
-  --header-h: 54px;
+  --header-h: 48px;
   --panel-pad: var(--space-4);
 }
 
@@ -147,7 +147,7 @@ body.density-compact {
   --control-h-sm: 22px;
   --control-px: 8px;
   --control-font: 11.5px;
-  --header-h: 44px;
+  --header-h: 40px;
   --panel-pad: var(--space-3);
 }
 

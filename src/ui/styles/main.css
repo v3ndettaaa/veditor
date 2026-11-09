@@ -54,21 +54,37 @@ body {
   position: relative;
 }
 
+/* Top-edge hover sensor for revealing header in Fullscreen / Focus Mode */
+.header-hover-zone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 10px;
+  z-index: 48;
+  pointer-events: none;
+}
+
+body.is-fullscreen.fullscreen-autohide .header-hover-zone,
+body.focus-mode .header-hover-zone {
+  pointer-events: auto;
+}
+
 /* App Header */
 .app-header {
   height: var(--header-h);
   flex-shrink: 0;
   background: var(--bg-glass);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   padding: 0 var(--space-4);
-  z-index: 40;
-  transition: opacity var(--transition-normal), transform var(--transition-normal);
+  z-index: 45;
+  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .header-left, .header-right {
@@ -96,7 +112,7 @@ body {
   width: 26px;
   height: 26px;
   border-radius: var(--radius-sm);
-  box-shadow: 0 2px 6px var(--accent-glow);
+  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 /* Open Documents Dropdown Bar */
@@ -113,14 +129,14 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: var(--control-h);
+  min-height: 32px;
   max-width: 260px;
   padding: 0 11px;
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 9px;
   font-family: inherit;
-  font-size: var(--control-font);
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--text-primary);
   cursor: pointer;
@@ -181,8 +197,8 @@ body {
   border: 1px solid var(--border-medium);
   border-radius: 12px;
   box-shadow: 0 18px 40px -8px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   z-index: 250;
   display: none;
   flex-direction: column;
@@ -341,8 +357,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--control-h);
-  height: var(--control-h);
+  width: 32px;
+  height: 32px;
   border-radius: 9px;
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -370,7 +386,7 @@ body {
   color: var(--text-secondary);
   min-height: var(--control-h);
   padding: 0 var(--control-px);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--control-font);
   font-weight: 500;
@@ -416,11 +432,37 @@ body {
 }
 
 /*
- * Focus mode (F): hides every piece of chrome so only the document remains.
- * The elements stay in the layout tree - collapsing them would reset the
- * scroll position - so they are faded out and made non-interactive instead.
+ * Fullscreen & Focus mode auto-hiding header:
+ * In Fullscreen or Focus Mode (F), the compact header auto-hides upward so the
+ * document canvas uses the full screen height, and smoothly slides down when
+ * hovering near the top edge of the screen.
  */
-body.focus-mode .app-header,
+body.is-fullscreen.fullscreen-autohide .app-header,
+body.focus-mode .app-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-h);
+  transform: translateY(-105%);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+  box-shadow: var(--shadow-md);
+}
+
+body.is-fullscreen.fullscreen-autohide.header-peek .app-header,
+body.focus-mode.header-peek .app-header,
+body.is-fullscreen.fullscreen-autohide .header-hover-zone:hover + .app-header,
+body.focus-mode .header-hover-zone:hover + .app-header,
+body.is-fullscreen.fullscreen-autohide .app-header:hover,
+body.focus-mode .app-header:hover {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+  overflow: visible;
+}
+
 body.focus-mode .floating-toolbar,
 body.focus-mode .app-sidebar,
 body.focus-mode .app-properties-panel {
@@ -428,17 +470,11 @@ body.focus-mode .app-properties-panel {
   pointer-events: none;
 }
 
-body.focus-mode .app-header {
-  height: 0;
-  overflow: hidden;
-  border-bottom-color: transparent;
-}
-
 body.focus-mode .floating-toolbar {
   transform: translateX(-50%) translateY(-12px);
 }
 
-/* The view pill stays reachable, but recedes until hovered. */
+/* The bottom-right view controls stay reachable in focus mode, receding until hovered. */
 body.focus-mode .floating-view-controls {
   opacity: 0.25;
 }
@@ -1846,13 +1882,14 @@ body.invert-pdf-document .pdf-page-canvas {
   display: none;
 }
 
-/* Floating View Controls */
+/* Floating View Controls (Bottom-Right) */
 .floating-view-controls {
   position: absolute;
   bottom: 20px;
   right: 24px;
   background: var(--bg-glass);
   backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-float);
@@ -1862,12 +1899,6 @@ body.invert-pdf-document .pdf-page-canvas {
   padding: 4px 8px;
   z-index: 25;
   transition: opacity var(--transition-normal), transform var(--transition-normal), padding var(--transition-fast);
-}
-
-/* A bottom-docked toolbar occupies the same strip: lift the zoom controls
-   above it so neither overlays the other. */
-body[data-toolbar-dock='bottom'] .floating-view-controls {
-  bottom: 88px;
 }
 
 .floating-view-controls.is-collapsed {
@@ -2732,6 +2763,8 @@ input.prop-hex-input:focus {
   contain: layout style paint;
 }
 
+html.platform-linux .app-header,
+html.platform-linux .header-docs-menu,
 html.platform-linux .floating-toolbar,
 html.platform-linux .floating-view-controls,
 html.platform-linux .floating-props-bar,
@@ -2739,7 +2772,13 @@ html.platform-linux .tool-popover,
 html.platform-linux .modal-overlay,
 html.platform-linux .pdf-loading-overlay,
 html.platform-linux .context-menu,
-html.platform-linux .toast-item {
+html.platform-linux .toast-item,
+html.platform-desktop .app-header,
+html.platform-desktop .header-docs-menu,
+html.platform-desktop .floating-toolbar,
+html.platform-desktop .floating-view-controls,
+html.platform-desktop .floating-props-bar,
+html.platform-desktop .tool-popover {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }

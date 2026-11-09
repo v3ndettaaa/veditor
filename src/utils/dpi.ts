@@ -71,21 +71,41 @@ export function clampRenderMultiplier(
   return multiplier;
 }
 
+const LINUX_DESKTOP_MAX_DIMENSION = 1680;
+const LINUX_DESKTOP_MAX_PIXELS = 1680 * 1680;
+
+function isLinuxOrDesktopWebView(): boolean {
+  if (typeof document !== 'undefined') {
+    const cl = document.documentElement?.classList;
+    if (cl && (cl.contains('platform-linux') || cl.contains('platform-desktop'))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Smart hardware-friendly backing-store multiplier for live interactive
  * canvases (annotations + scratchpad). Balances crisp 150–200 DPI rendering
- * with a strict 4K dimension/area cap so weak GPUs stay at a locked 60fps.
+ * with a strict 4K dimension/area cap so weak GPUs and Linux WebKitGTK
+ * AppImage builds stay at a locked 60fps matching the browser extension.
  */
 export function resolveAdaptiveCanvasDpr(
   cssWidth: number,
   cssHeight: number,
   targetDPI?: number
 ): number {
-  const rawDpr = Math.min(2.5, Math.max(1.5, getDevicePixelRatio(), resolveRenderDpr(targetDPI)));
-  let mult = clampRenderMultiplier(cssWidth, cssHeight, rawDpr, ADAPTIVE_CANVAS_MAX_DIMENSION);
+  const isLinuxDesktop = isLinuxOrDesktopWebView();
+  const maxDpr = isLinuxDesktop ? 2.0 : 2.5;
+  const minDpr = isLinuxDesktop ? 1.25 : 1.5;
+  const maxDim = isLinuxDesktop ? LINUX_DESKTOP_MAX_DIMENSION : ADAPTIVE_CANVAS_MAX_DIMENSION;
+  const maxPixels = isLinuxDesktop ? LINUX_DESKTOP_MAX_PIXELS : ADAPTIVE_CANVAS_MAX_PIXELS;
+
+  const rawDpr = Math.min(maxDpr, Math.max(minDpr, getDevicePixelRatio(), resolveRenderDpr(targetDPI)));
+  let mult = clampRenderMultiplier(cssWidth, cssHeight, rawDpr, maxDim);
   const area = (cssWidth * mult) * (cssHeight * mult);
-  if (area > ADAPTIVE_CANVAS_MAX_PIXELS && area > 0) {
-    mult *= Math.sqrt(ADAPTIVE_CANVAS_MAX_PIXELS / area);
+  if (area > maxPixels && area > 0) {
+    mult *= Math.sqrt(maxPixels / area);
   }
   return mult;
 }

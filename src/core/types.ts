@@ -467,6 +467,8 @@ export interface AppSettings {
   uiDensity: 'comfortable' | 'compact';
   smoothScroll: boolean;
   invertDocumentOled: boolean;
+  /** Whether the top tab/header bar auto-hides in Fullscreen mode and reveals on top-edge hover. */
+  autoHideHeaderInFullscreen: boolean;
   /**
    * Canvas render resolution in DPI (PDF point grid is 72). Replaces the
    * legacy boolean `retinaRendering`: 72 = 1x, 144 = 2x, etc. When unset the

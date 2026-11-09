@@ -39,7 +39,8 @@ import {
   BoxTransform,
   HandleType,
   getAnnotationSelectionBox,
-  moveAnnotationEndpoint
+  moveAnnotationEndpoint,
+  moveAnnotationVertex
 } from '../annotations/selection';
 import { floatingPropsBar } from '../ui/components/floating-props';
 import { openInlineEditor } from '../ui/components/inline-editor';
@@ -84,6 +85,20 @@ export class PointerHandler {
     merged: BoundingBox;
     startPt: Point;
   } | null = null;
+  /**
+   * When true, dragging a rectangle's corner handle keeps 90° rectangular corners
+   * (resizing the rectangle); when false (default), dragging a corner moves that
+   * individual corner freely (holding Shift always toggles the opposite behavior).
+   */
+  private _rectCornerLockMode: boolean = false;
+
+  public get rectCornerLockMode(): boolean {
+    return this._rectCornerLockMode;
+  }
+
+  public setRectCornerLockMode(locked: boolean): void {
+    this._rectCornerLockMode = locked;
+  }
   /** Region-marquee rubber band (Shift extends the selection). */
   private _marquee: { pageIndex: number; start: Point; current: Point; additive: boolean } | null = null;
   /** Freehand lasso path (the Lasso tool, or Alt+drag in Select). */
@@ -1111,10 +1126,17 @@ export class PointerHandler {
     if (!hit) return false;
 
     const originals = new Map(selected.map(a => [a.id, cloneAnnotation(a)] as [string, Annotation]));
-    // Resizing a rotated annotation works in its unrotated frame.
-    const startPt = singleRot && hit !== 'body' && hit !== 'rot' && hit !== 'start' && hit !== 'end'
-      ? rotatePoint(pt, boxCenter(merged), -singleRot)
-      : { x: pt.x, y: pt.y };
+    const isVertexHandle = typeof hit === 'string' && hit.startsWith('vertex:');
+    // Resizing a rotated annotation works in its unrotated frame; vertex handles work in page space.
+    const startPt =
+      singleRot &&
+      hit !== 'body' &&
+      hit !== 'rot' &&
+      hit !== 'start' &&
+      hit !== 'end' &&
+      !isVertexHandle
+        ? rotatePoint(pt, boxCenter(merged), -singleRot)
+        : { x: pt.x, y: pt.y };
     this._selectDrag = {
       mode: hit === 'body' ? 'move' : hit === 'rot' ? 'rotate' : 'resize',
       handle: hit,
@@ -1388,6 +1410,14 @@ export class PointerHandler {
                 return orig && (orig.type === 'line' || orig.type === 'arrow')
                   ? moveAnnotationEndpoint(orig, handle, lastPt)
                   : a;
+              });
+              doc.lastModifiedAt = Date.now();
+            } else if (typeof drag.handle === 'string' && drag.handle.startsWith('vertex:')) {
+              const vertexIdx = parseInt(drag.handle.slice(7), 10);
+              const keepRect = shiftKey ? !this._rectCornerLockMode : this._rectCornerLockMode;
+              doc.annotations[pageIndex] = doc.annotations[pageIndex].map(a => {
+                const orig = drag.originals.get(a.id);
+                return orig ? moveAnnotationVertex(orig, vertexIdx, lastPt, keepRect) : a;
               });
               doc.lastModifiedAt = Date.now();
             } else if (drag.mode === 'rotate') {
@@ -2129,7 +2159,7 @@ export class PointerHandler {
       const hit = selectionManager.hitTestSelection(
         pt, selected, store.zoom * this.renderDpr()
       );
-      const cursorByHandle: Record<Exclude<HandleType, null>, string> = {
+      const cursorByHandle: Record<string, string> = {
         nw: 'nwse-resize',
         se: 'nwse-resize',
         ne: 'nesw-resize',
@@ -2152,7 +2182,7 @@ export class PointerHandler {
       floatingPropsBar?.setHoverState(isNearOrOver);
 
       if (hit) {
-        canvas.style.cursor = cursorByHandle[hit];
+        canvas.style.cursor = hit.startsWith('vertex:') ? 'crosshair' : (cursorByHandle[hit] || 'pointer');
         return;
       }
     }
@@ -2778,18 +2808,28 @@ export class PointerHandler {
     this._lastPointerX = e.clientX;
     this._lastPointerY = e.clientY;
 
-    // Clamp raw stylus touch/lift spikes into [0.24, 1.0] and pass 'linear' here so
-    // calculateStrokeWidth applies the selected pressureCurve once without double-exponentiating.
+    // Preserve light stylus pressure down to 0.05 so feather-light pen strokes render thin,
+    // and detect Linux/WebKitGTK stylus events that report pointerType='mouse' with real hardware pressure/tilt.
     const clampedRaw = (e.pressure !== undefined && e.pressure > 0)
-      ? Math.max(0.24, Math.min(1.0, e.pressure))
+      ? Math.max(0.05, Math.min(1.0, e.pressure))
       : e.pressure;
+
+    const hasRealHardwarePressure =
+      e.pointerType === 'pen' ||
+      (e.pointerType === 'touch' && e.pressure > 0 && Math.abs(e.pressure - 0.5) > 0.005) ||
+      ((e.tiltX && e.tiltX !== 0) || (e.tiltY && e.tiltY !== 0)) ||
+      (e.pressure > 0 && Math.abs(e.pressure - 0.5) > 0.01 && e.pressure < 1.0);
+
+    const effectivePointerType = hasRealHardwarePressure && e.pointerType !== 'touch'
+      ? 'pen'
+      : e.pointerType;
 
     const mappedPressure = PressureEngine.mapPressure(
       clampedRaw,
       'linear',
       tSettings.pressureSensitivityEnabled !== false,
-      e.pointerType,
-      tSettings.mousePressureSimulation,
+      effectivePointerType,
+      tSettings.mousePressureSimulation === true,
       this._simulatedVelocityPressure
     );
 

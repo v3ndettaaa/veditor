@@ -7,17 +7,19 @@
 
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 import { AppSettings, ThemeMode, LanguageMode, BackgroundPattern, ToolType } from '../../core/types';
 import { pdfEngine } from '../../core/pdf-engine';
 import { viewportManager } from '../../core/viewport';
 import { clearAllStorage } from '../../io/storage';
 import { DEFAULT_ACCENT } from '../theme';
 import { resolveRenderDpr, clampRenderMultiplier } from '../../utils/dpi';
-import { TOOL_SHORT_LABELS } from './toolbar';
+import { TOOL_SHORT_LABELS, getToolShortLabel } from './toolbar';
 import { shortcutManager, DEFAULT_SHORTCUTS, type ShortcutAction } from '../../input/shortcuts';
 import { getAppVersion } from '../../core/app-version';
 import { isDesktop } from '../../core/platform';
+import { showToast } from './toast';
+import { nativeConfirm } from '../../io/native-fs';
 
 type SettingsTab = 'appearance' | 'toolbar' | 'input' | 'shortcuts' | 'viewer' | 'performance' | 'storage' | 'language' | 'about';
 
@@ -35,9 +37,11 @@ const TOOLBAR_ICONS: Record<string, string> = {
   arrow: 'arrow',
   polygon: 'polygon',
   text: 'text',
+  'sticky-note': 'sticky-note',
   stamp: 'stamp',
   'measure-distance': 'measure',
-  signature: 'signature'
+  signature: 'signature',
+  scratchpad: 'scratchpad'
 };
 
 export class SettingsModalComponent {
@@ -179,7 +183,7 @@ export class SettingsModalComponent {
               ${getIconSvg('settings', 18)}
               <span>${t('settings.title')}</span>
             </div>
-            <button id="close-settings-btn" class="icon-btn" title="Close" aria-label="Close settings">
+            <button id="close-settings-btn" class="icon-btn" title="${t('actions.close')}" aria-label="${t('actions.close')}">
               ${getIconSvg('close', 14)}
             </button>
           </div>
@@ -187,42 +191,42 @@ export class SettingsModalComponent {
           <!-- Body with Tabs -->
           <div class="settings-body">
             <!-- Left Tab Navigation -->
-            <nav class="settings-nav" aria-label="Settings sections">
+            <nav class="settings-nav" aria-label="${tr('Settings sections', 'بخش‌های تنظیمات')}">
               <button class="settings-tab-btn ${this._activeTab === 'appearance' ? 'active' : ''}" data-tab="appearance">
                 ${getIconSvg('palette', 15)}
-                <span>Appearance</span>
+                <span>${tr('Appearance', 'ظاهر و پوسته')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'toolbar' ? 'active' : ''}" data-tab="toolbar">
                 ${getIconSvg('sliders', 15)}
-                <span>Toolbar</span>
+                <span>${tr('Toolbar', 'نوار ابزار')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'input' ? 'active' : ''}" data-tab="input">
                 ${getIconSvg('pen', 15)}
-                <span>Pen & Input</span>
+                <span>${tr('Pen & Input', 'قلم و ورودی')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'shortcuts' ? 'active' : ''}" data-tab="shortcuts">
                 ${getIconSvg('command', 15)}
-                <span>Keyboard Shortcuts</span>
+                <span>${tr('Keyboard Shortcuts', 'کلیدهای میانبر')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'viewer' ? 'active' : ''}" data-tab="viewer">
                 ${getIconSvg('eye', 15)}
-                <span>Viewer & Reading</span>
+                <span>${tr('Viewer & Reading', 'نمایش و مطالعه')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'performance' ? 'active' : ''}" data-tab="performance">
                 ${getIconSvg('zap', 15)}
-                <span>Performance</span>
+                <span>${tr('Performance', 'عملکرد و گرافیک')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'storage' ? 'active' : ''}" data-tab="storage">
                 ${getIconSvg('database', 15)}
-                <span>Storage & Backup</span>
+                <span>${tr('Storage & Backup', 'حافظه و بازیابی')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'language' ? 'active' : ''}" data-tab="language">
                 ${getIconSvg('globe', 15)}
-                <span>Language</span>
+                <span>${tr('Language', 'زبان برنامه')}</span>
               </button>
               <button class="settings-tab-btn ${this._activeTab === 'about' ? 'active' : ''}" data-tab="about">
                 ${getIconSvg('info', 15)}
-                <span>About</span>
+                <span>${tr('About', 'درباره برنامه')}</span>
               </button>
             </nav>
 
@@ -243,41 +247,41 @@ export class SettingsModalComponent {
   private renderTabContent(app: typeof store.appSettings, tools: typeof store.toolSettings): string {
     if (this._activeTab === 'appearance') {
       const accents = [
-        { name: 'Indigo', color: DEFAULT_ACCENT },
-        { name: 'Purple', color: '#8b5cf6' },
-        { name: 'Emerald', color: '#10b981' },
-        { name: 'Rose', color: '#f43f5e' },
-        { name: 'Amber', color: '#f59e0b' },
-        { name: 'Cyan', color: '#06b6d4' },
-        { name: 'Blue', color: '#2563eb' },
-        { name: 'Crimson', color: '#dc2626' }
+        { name: tr('Indigo', 'نیلی'), color: DEFAULT_ACCENT },
+        { name: tr('Purple', 'بنفش'), color: '#8b5cf6' },
+        { name: tr('Emerald', 'زمردی'), color: '#10b981' },
+        { name: tr('Rose', 'سرخابی'), color: '#f43f5e' },
+        { name: tr('Amber', 'کهربایی'), color: '#f59e0b' },
+        { name: tr('Cyan', 'فیروزه‌ای'), color: '#06b6d4' },
+        { name: tr('Blue', 'آبی'), color: '#2563eb' },
+        { name: tr('Crimson', 'زرشکی'), color: '#dc2626' }
       ];
 
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">Theme & Visual Styling</div>
+          <div class="settings-section-header">${tr('Theme & Visual Styling', 'پوسته و ظاهر برنامه')}</div>
 
           <!-- Theme -->
           <div class="prop-group">
             <span class="prop-label has-icon">
               ${getIconSvg('sun', 14)}
-              <span>Theme Mode</span>
+              <span>${tr('Theme Mode', 'حالت رنگ‌بندی')}</span>
             </span>
             <div class="settings-grid">
               <button class="secondary-btn ${app.theme === 'dark' ? 'is-selected' : ''}" data-set-theme="dark">
                 ${getIconSvg('moon', 15)}
-                <span>Dark Mode</span>
+                <span>${t('settings.dark')}</span>
               </button>
               <button class="secondary-btn ${app.theme === 'light' ? 'is-selected' : ''}" data-set-theme="light">
                 ${getIconSvg('sun', 15)}
-                <span>Light Mode</span>
+                <span>${t('settings.light')}</span>
               </button>
             </div>
           </div>
 
           <!-- Accent Color -->
           <div class="prop-group">
-            <span class="prop-label">Accent Brand Color</span>
+            <span class="prop-label">${tr('Accent Brand Color', 'رنگ شاخص برنامه')}</span>
             <div class="chip-row">
               ${accents.map(a => `
                 <button type="button"
@@ -287,39 +291,51 @@ export class SettingsModalComponent {
                         aria-pressed="${(app.accentColor || DEFAULT_ACCENT).toLowerCase() === a.color.toLowerCase()}"></button>
               `).join('')}
               <div class="accent-custom">
-                <div class="color-picker-wrapper is-lg" title="Custom Accent Color">
+                <div class="color-picker-wrapper is-lg" title="${tr('Custom Accent Color', 'انتخاب رنگ دلخواه')}">
                   <input type="color" id="custom-accent-picker" class="color-picker-input" value="${app.accentColor || DEFAULT_ACCENT}">
                 </div>
-                <span>Custom</span>
+                <span>${tr('Custom', 'دلخواه')}</span>
               </div>
             </div>
           </div>
 
-          <div class="settings-section-header">Canvas Paper Settings</div>
+          <div class="settings-section-header">${tr('Canvas Paper Settings', 'تنظیمات پس‌زمینه محیط کار')}</div>
 
           <!-- Background Paper Pattern -->
           <div class="prop-group">
-            <span class="prop-label">Paper Background Pattern</span>
+            <span class="prop-label">${tr('Paper Background Pattern', 'الگوی پس‌زمینه صفحات')}</span>
             <select id="pattern-select" class="field">
-              <option value="none" ${app.backgroundPattern === 'none' ? 'selected' : ''}>Blank (Standard PDF Canvas)</option>
-              <option value="grid" ${app.backgroundPattern === 'grid' ? 'selected' : ''}>Square Grid (Math & Technical)</option>
-              <option value="dots" ${app.backgroundPattern === 'dots' ? 'selected' : ''}>Dot Grid (Bullet Journal)</option>
-              <option value="lined" ${app.backgroundPattern === 'lined' ? 'selected' : ''}>Lined Paper (Notes & Ruled)</option>
-              <option value="isometric" ${app.backgroundPattern === 'isometric' ? 'selected' : ''}>Isometric Grid (3D Drafting)</option>
+              <option value="none" ${app.backgroundPattern === 'none' ? 'selected' : ''}>${tr('Blank (Standard PDF Canvas)', 'ساده (بدون الگوی کمکی)')}</option>
+              <option value="grid" ${app.backgroundPattern === 'grid' ? 'selected' : ''}>${tr('Square Grid (Math & Technical)', 'شطرنجی (ریاضی و فنی)')}</option>
+              <option value="dots" ${app.backgroundPattern === 'dots' ? 'selected' : ''}>${tr('Dot Grid (Bullet Journal)', 'نقطه‌ای (بولت‌ژورنال)')}</option>
+              <option value="lined" ${app.backgroundPattern === 'lined' ? 'selected' : ''}>${tr('Lined Paper (Notes & Ruled)', 'خط‌دار (دفتر یادداشت)')}</option>
+              <option value="isometric" ${app.backgroundPattern === 'isometric' ? 'selected' : ''}>${tr('Isometric Grid (3D Drafting)', 'ایزومتریک (طراحی سه‌بعدی)')}</option>
             </select>
           </div>
 
           <!-- UI Density -->
           <div class="prop-group">
-            <span class="prop-label">Interface Layout Density</span>
+            <span class="prop-label">${tr('Interface Layout Density', 'تراکم عناصر رابط کاربری')}</span>
             <div class="settings-grid">
               <button class="secondary-btn ${app.uiDensity !== 'compact' ? 'is-selected' : ''}" data-set-density="comfortable">
-                Comfortable
+                ${tr('Comfortable', 'استاندارد و راحت')}
               </button>
               <button class="secondary-btn ${app.uiDensity === 'compact' ? 'is-selected' : ''}" data-set-density="compact">
-                Compact
+                ${tr('Compact', 'فشرده')}
               </button>
             </div>
+          </div>
+
+          <!-- Auto-Hide Header in Fullscreen -->
+          <div class="setting-card">
+            <div class="setting-info">
+              <div class="setting-title">${t('settings.autoHideFullscreen')}</div>
+              <div class="setting-desc">${t('settings.autoHideFullscreenDesc')}</div>
+            </div>
+            <label class="setting-switch">
+              <input type="checkbox" data-fullscreen-autohide-toggle ${app.autoHideHeaderInFullscreen !== false ? 'checked' : ''}>
+              <span class="setting-slider"></span>
+            </label>
           </div>
         </div>
       `;
@@ -327,27 +343,33 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'toolbar') {
       const layout = store.toolbarLayout;
+      const dockLabels: Record<string, string> = {
+        top: tr('Top', 'بالا'),
+        bottom: tr('Bottom', 'پایین'),
+        left: tr('Left', 'چپ'),
+        right: tr('Right', 'راست')
+      };
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">Toolbar Buttons</div>
+          <div class="settings-section-header">${tr('Toolbar Buttons', 'دکمه‌های نوار ابزار')}</div>
           <div class="settings-callout">
             <span class="settings-callout-icon">${getIconSvg('info', 15)}</span>
-            <span>Tick a tool to show it in the bar, untick to hide it. Use the arrows to move it left or right.</span>
+            <span>${tr('Tick a tool to show it in the bar, untick to hide it. Use the arrows to move it left or right.', 'برای نمایش یا مخفی کردن هر ابزار کلید مقابل آن را تغییر دهید و با فلش‌ها ترتیب چیدمان را تنظیم کنید.')}</span>
           </div>
           <div class="panel-stack" id="toolbar-list">
             ${layout.map((item, idx) => `
               <div class="list-card ${item.visible ? '' : 'is-dimmed'}" data-toolbar-row="${item.id}">
-                <label class="setting-switch" title="Show in toolbar">
+                <label class="setting-switch" title="${tr('Show in toolbar', 'نمایش در نوار ابزار')}">
                   <input type="checkbox" data-toolbar-visible="${item.id}" ${item.visible ? 'checked' : ''}>
                   <span class="setting-slider"></span>
                 </label>
                 <span class="list-card-icon">${getIconSvg(TOOLBAR_ICONS[item.id] ?? 'pen', 15)}</span>
-                <span class="list-card-title" style="flex:1; min-width:0;">${TOOL_SHORT_LABELS[item.id] ?? item.id}</span>
-                <button class="icon-btn is-small" data-toolbar-up="${item.id}" title="Move up (toward bar start)"
+                <span class="list-card-title" style="flex:1; min-width:0;">${getToolShortLabel(item.id)}</span>
+                <button class="icon-btn is-small" data-toolbar-up="${item.id}" title="${tr('Move up (toward bar start)', 'انتقال به بالاتر')}"
                         ${idx === 0 ? 'disabled style="opacity:0.35; cursor:default;"' : ''}>
                   <span aria-hidden="true" style="font-size:14px; font-weight:700;">↑</span>
                 </button>
-                <button class="icon-btn is-small" data-toolbar-down="${item.id}" title="Move down (toward bar end)"
+                <button class="icon-btn is-small" data-toolbar-down="${item.id}" title="${tr('Move down (toward bar end)', 'انتقال به پایین‌تر')}"
                         ${idx === layout.length - 1 ? 'disabled style="opacity:0.35; cursor:default;"' : ''}>
                   <span aria-hidden="true" style="font-size:14px; font-weight:700;">↓</span>
                 </button>
@@ -357,18 +379,17 @@ export class SettingsModalComponent {
           <div class="panel-stack">
             <button id="toolbar-layout-reset-btn" class="secondary-btn is-block">
               ${getIconSvg('rotate', 14)}
-              <span>Reset Toolbar to Defaults</span>
+              <span>${tr('Reset Toolbar to Defaults', 'بازنشانی چیدمان نوار ابزار به پیش‌فرض')}</span>
             </button>
           </div>
-          <div class="settings-section-header">Dock Position</div>
+          <div class="settings-section-header">${tr('Dock Position', 'محل قرارگیری نوار ابزار')}</div>
           <div class="settings-grid is-quad">
             ${(['top', 'bottom', 'left', 'right'] as const).map(edge => `
               <button class="secondary-btn ${app.toolbarDock === edge ? 'is-selected' : ''}" data-set-dock="${edge}">
-                ${edge[0].toUpperCase()}${edge.slice(1)}
+                ${dockLabels[edge]}
               </button>
             `).join('')}
           </div>
-          <div style="font-size:11px; color:var(--text-muted); text-align:center;">Toolbar settings • b9</div>
         </div>
       `;
     }
@@ -376,13 +397,13 @@ export class SettingsModalComponent {
     if (this._activeTab === 'input') {
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">Pressure Sensitivity & Dynamics</div>
+          <div class="settings-section-header">${tr('Pressure Sensitivity & Dynamics', 'حساسیت فشار قلم و پویایی خط')}</div>
 
           <!-- Master Pressure Sensitivity Toggle -->
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">Dynamic Pressure Sensitivity</div>
-              <div class="setting-desc">Vary stroke thickness dynamically with stylus or pointer pressure. When disabled, pen strokes render at fixed, uniform width.</div>
+              <div class="setting-title">${tr('Dynamic Pressure Sensitivity', 'حساسیت پویا به فشار قلم')}</div>
+              <div class="setting-desc">${tr('Vary stroke thickness dynamically with stylus or pointer pressure. When disabled, pen strokes render at fixed, uniform width.', 'تغییر طبیعی ضخامت خط متناسب با فشار قلم نوری یا لمس. در صورت غیرفعال بودن، خطوط با ضخامت کاملاً یکنواخت رسم می‌شوند.')}</div>
             </div>
             <label class="setting-switch">
               <input type="checkbox" id="pressure-master-toggle" ${tools.pressureSensitivityEnabled !== false ? 'checked' : ''}>
@@ -393,8 +414,8 @@ export class SettingsModalComponent {
           <!-- Mouse & Pointer Speed Pressure Simulation -->
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">Simulate Pressure with Pointer Speed</div>
-              <div class="setting-desc">Dynamically simulate natural pressure variations using cursor speed when drawing with a mouse or trackpad.</div>
+              <div class="setting-title">${tr('Simulate Pressure with Pointer Speed', 'شبیه‌سازی فشار با سرعت حرکت ماوس')}</div>
+              <div class="setting-desc">${tr('Dynamically simulate natural pressure variations using cursor speed when drawing with a mouse or trackpad.', 'شبیه‌سازی تغییر ضخامت خط بر اساس سرعت حرکت دست هنگام طراحی با ماوس یا تاچ‌پد.')}</div>
             </div>
             <label class="setting-switch">
               <input type="checkbox" id="mouse-pressure-toggle" ${tools.mousePressureSimulation ? 'checked' : ''}>
@@ -404,43 +425,43 @@ export class SettingsModalComponent {
 
           <!-- Stylus Pressure Calibration Curve -->
           <div class="prop-group">
-            <span class="prop-label">Pressure Response Curve</span>
+            <span class="prop-label">${tr('Pressure Response Curve', 'منحنی پاسخ‌دهی به فشار قلم')}</span>
             <select id="curve-select" class="field">
-              <option value="linear" ${tools.pressureCurve === 'linear' ? 'selected' : ''}>Linear (Standard 1:1 Response)</option>
-              <option value="soft" ${tools.pressureCurve === 'soft' ? 'selected' : ''}>Soft (High Sensitivity for Light Touch)</option>
-              <option value="firm" ${tools.pressureCurve === 'firm' ? 'selected' : ''}>Firm (Calligraphy & Heavy Physical Pressure)</option>
-              <option value="exponential" ${tools.pressureCurve === 'exponential' ? 'selected' : ''}>Exponential (High Dynamic Contrast)</option>
+              <option value="linear" ${tools.pressureCurve === 'linear' ? 'selected' : ''}>${tr('Linear (Standard 1:1 Response)', 'خطی (پاسخ‌دهی استاندارد ۱ به ۱)')}</option>
+              <option value="soft" ${tools.pressureCurve === 'soft' ? 'selected' : ''}>${tr('Soft (High Sensitivity for Light Touch)', 'نرم (حساسیت بالا برای فشارهای ملایم)')}</option>
+              <option value="firm" ${tools.pressureCurve === 'firm' ? 'selected' : ''}>${tr('Firm (Calligraphy & Heavy Physical Pressure)', 'سفت (مناسب خوشنویسی و فشار بیشتر دست)')}</option>
+              <option value="exponential" ${tools.pressureCurve === 'exponential' ? 'selected' : ''}>${tr('Exponential (High Dynamic Contrast)', 'نمایی (کنتراست بالا بین خطوط نازک و ضخیم)')}</option>
             </select>
           </div>
 
           <!-- Pressure Dynamic Range Factor -->
           <div class="prop-group">
-            <span class="prop-label">Pressure Dynamic Thickness Range</span>
+            <span class="prop-label">${tr('Pressure Dynamic Thickness Range', 'دامنه تغییر ضخامت با فشار')}</span>
             <select id="pressure-strength-select" class="field">
-              <option value="light" ${tools.pressureStrength === 'light' ? 'selected' : ''}>Subtle (0.6x - 1.4x Base Width)</option>
-              <option value="balanced" ${tools.pressureStrength === 'balanced' || !tools.pressureStrength ? 'selected' : ''}>Balanced (0.3x - 1.8x Base Width - Recommended)</option>
-              <option value="strong" ${tools.pressureStrength === 'strong' ? 'selected' : ''}>Dramatic (0.1x - 2.4x Base Width)</option>
+              <option value="light" ${tools.pressureStrength === 'light' ? 'selected' : ''}>${tr('Subtle (0.6x - 1.4x Base Width)', 'ملایم (۰.۶ تا ۱.۴ برابر ضخامت پایه)')}</option>
+              <option value="balanced" ${tools.pressureStrength === 'balanced' || !tools.pressureStrength ? 'selected' : ''}>${tr('Balanced (0.3x - 1.8x Base Width - Recommended)', 'متعادل (۰.۳ تا ۱.۸ برابر ضخامت پایه - پیشنهادی)')}</option>
+              <option value="strong" ${tools.pressureStrength === 'strong' ? 'selected' : ''}>${tr('Dramatic (0.1x - 2.4x Base Width)', 'قوی (۰.۱ تا ۲.۴ برابر ضخامت پایه)')}</option>
             </select>
           </div>
 
-          <div class="settings-section-header">Stroke Smoothing & Hardware Handling</div>
+          <div class="settings-section-header">${tr('Stroke Smoothing & Hardware Handling', 'نرم‌سازی خطوط و تنظیمات سخت‌افزار قلم')}</div>
 
           <!-- Stroke Smoothing -->
           <div class="prop-group">
-            <span class="prop-label">Stroke Smoothing & Stabilization</span>
+            <span class="prop-label">${tr('Stroke Smoothing & Stabilization', 'نرم‌سازی و لرزش‌گیر دست‌خط')}</span>
             <select id="smoothing-select" class="field">
-              <option value="none" ${tools.strokeSmoothing === 'none' ? 'selected' : ''}>None (Direct Hardware Input)</option>
-              <option value="subtle" ${tools.strokeSmoothing === 'subtle' ? 'selected' : ''}>Subtle (Low Latency)</option>
-              <option value="medium" ${tools.strokeSmoothing === 'medium' || !tools.strokeSmoothing ? 'selected' : ''}>Medium (Catmull-Rom Centripetal Spline)</option>
-              <option value="high" ${tools.strokeSmoothing === 'high' ? 'selected' : ''}>High (Cinematic Streamline Stabilization)</option>
+              <option value="none" ${tools.strokeSmoothing === 'none' ? 'selected' : ''}>${tr('None (Direct Hardware Input)', 'بدون نرم‌سازی (ورودی مستقیم سخت‌افزار)')}</option>
+              <option value="subtle" ${tools.strokeSmoothing === 'subtle' ? 'selected' : ''}>${tr('Subtle (Low Latency)', 'ملایم (تأخیر بسیار کم)')}</option>
+              <option value="medium" ${tools.strokeSmoothing === 'medium' || !tools.strokeSmoothing ? 'selected' : ''}>${tr('Medium (Catmull-Rom Centripetal Spline)', 'متوسط (منحنی نرم استاندارد - پیشنهادی)')}</option>
+              <option value="high" ${tools.strokeSmoothing === 'high' ? 'selected' : ''}>${tr('High (Cinematic Streamline Stabilization)', 'زیاد (تثبیت و لرزش‌گیری حرفه‌ای خطوط)')}</option>
             </select>
           </div>
 
           <!-- Intelligent Palm Rejection -->
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">Intelligent Palm Rejection</div>
-              <div class="setting-desc">Filters out accidental wrist and palm touches while drawing with an active stylus.</div>
+              <div class="setting-title">${tr('Intelligent Palm Rejection', 'تشخیص هوشمند کف دست (Palm Rejection)')}</div>
+              <div class="setting-desc">${tr('Filters out accidental wrist and palm touches while drawing with an active stylus.', 'نادیده گرفتن برخورد تصادفی مچ و کف دست با صفحه هنگام نوشتن با قلم نوری.')}</div>
             </div>
             <label class="setting-switch">
               <input type="checkbox" id="palm-toggle" ${tools.palmRejectionEnabled ? 'checked' : ''}>
@@ -451,8 +472,8 @@ export class SettingsModalComponent {
           <!-- Stylus Inverted Tip Auto-Eraser -->
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">Stylus Inverted Tip Auto-Eraser</div>
-              <div class="setting-desc">Automatically activates the eraser tool when the physical eraser tail of the stylus touches the glass.</div>
+              <div class="setting-title">${tr('Stylus Inverted Tip Auto-Eraser', 'پاک‌کن خودکار با تهِ قلم نوری')}</div>
+              <div class="setting-desc">${tr('Automatically activates the eraser tool when the physical eraser tail of the stylus touches the glass.', 'فعال شدن خودکار ابزار پاک‌کن هنگام استفاده از سرِ پشتی (پاک‌کن فیزیکی) قلم نوری روی صفحه.')}</div>
             </div>
             <label class="setting-switch">
               <input type="checkbox" id="inverted-eraser-toggle" ${tools.stylusInvertedEraserEnabled !== false ? 'checked' : ''}>
@@ -466,7 +487,7 @@ export class SettingsModalComponent {
     if (this._activeTab === 'shortcuts') {
       const bindings = shortcutManager.all();
       const rows = (Object.keys(DEFAULT_SHORTCUTS) as ShortcutAction[]).map(action => {
-        const label = TOOL_SHORT_LABELS[action] || action;
+        const label = getToolShortLabel(action);
         const key = bindings[action] === 'space' ? 'Space' : bindings[action].toUpperCase();
         return `
           <button type="button" class="secondary-btn shortcut-row" data-rebind="${action}"
@@ -478,13 +499,13 @@ export class SettingsModalComponent {
 
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">Tool Shortcuts</div>
-          <div class="form-hint">Click a shortcut, then press the new key to bind it. Press Esc to cancel. Shortcuts are single keys without Ctrl/Alt modifiers and are saved on this device.</div>
+          <div class="settings-section-header">${tr('Tool Shortcuts', 'میانبرهای ابزارها')}</div>
+          <div class="form-hint">${tr('Click a shortcut, then press the new key to bind it. Press Esc to cancel. Shortcuts are single keys without Ctrl/Alt modifiers and are saved on this device.', 'روی هر ردیف کلیک کنید و کلید جدید را فشار دهید تا ثبت شود (برای انصراف کلید Esc را بزنید). میانبرها روی همین دستگاه ذخیره می‌شوند.')}</div>
           <div class="prop-group" id="shortcut-rows" style="display:flex; flex-direction:column; gap:6px;">
             ${rows}
           </div>
           <div class="form-hint" id="shortcut-conflict" style="color:#f43f5e; min-height:16px;"></div>
-          <button id="shortcuts-reset-btn" class="secondary-btn">Reset to Defaults</button>
+          <button id="shortcuts-reset-btn" class="secondary-btn">${tr('Reset to Defaults', 'بازگردانی میانبرها به حالت پیش‌فرض')}</button>
         </div>
       `;
     }
@@ -492,37 +513,49 @@ export class SettingsModalComponent {
     if (this._activeTab === 'viewer') {
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">Default Document View & Navigation</div>
+          <div class="settings-section-header">${tr('Default Document View & Navigation', 'حالت پیش‌فرض نمایش و پیمایش سند')}</div>
 
           <!-- Default View Mode -->
           <div class="prop-group">
-            <span class="prop-label">Default Page View Layout</span>
+            <span class="prop-label">${tr('Default Page View Layout', 'چیدمان پیش‌فرض نمایش صفحات')}</span>
             <select id="view-mode-select" class="field">
-              <option value="continuous" ${app.defaultViewMode === 'continuous' ? 'selected' : ''}>Continuous Vertical Scroll (Seamless)</option>
-              <option value="single" ${app.defaultViewMode === 'single' ? 'selected' : ''}>Single Page View</option>
-              <option value="two-page" ${app.defaultViewMode === 'two-page' ? 'selected' : ''}>Two-Page Facing Spread (Book Mode)</option>
+              <option value="continuous" ${app.defaultViewMode === 'continuous' ? 'selected' : ''}>${tr('Continuous Vertical Scroll (Seamless)', 'پیمایش عمودی پیوسته (پشت سر هم)')}</option>
+              <option value="single" ${app.defaultViewMode === 'single' ? 'selected' : ''}>${tr('Single Page View', 'نمایش تک‌صفحه‌ای')}</option>
+              <option value="two-page" ${app.defaultViewMode === 'two-page' ? 'selected' : ''}>${tr('Two-Page Facing Spread (Book Mode)', 'نمایش دوصفحه‌ای روبه‌رو (حالت کتاب)')}</option>
             </select>
           </div>
 
           <!-- Default Zoom Preset -->
           <div class="prop-group">
-            <span class="prop-label">Default Zoom Level</span>
+            <span class="prop-label">${tr('Default Zoom Level', 'مقدار بزرگ‌نمایی پیش‌فرض')}</span>
             <select id="zoom-preset-select" class="field">
-              <option value="fitWidth" ${app.defaultZoomMode === 'fitWidth' ? 'selected' : ''}>Fit to Width (Recommended for Laptops & Desktops)</option>
-              <option value="fitPage" ${app.defaultZoomMode === 'fitPage' ? 'selected' : ''}>Fit Whole Page (Recommended for Tablets)</option>
-              <option value="100%" ${app.defaultZoomMode === '100%' ? 'selected' : ''}>100% Native Resolution</option>
-              <option value="125%" ${app.defaultZoomMode === '125%' ? 'selected' : ''}>125% Comfortable Readability</option>
-              <option value="150%" ${app.defaultZoomMode === '150%' ? 'selected' : ''}>150% High Magnification</option>
+              <option value="fitWidth" ${app.defaultZoomMode === 'fitWidth' ? 'selected' : ''}>${tr('Fit to Width (Recommended for Laptops & Desktops)', 'متناسب با عرض صفحه (پیشنهادی برای لپ‌تاپ و دسکتاپ)')}</option>
+              <option value="fitPage" ${app.defaultZoomMode === 'fitPage' ? 'selected' : ''}>${tr('Fit Whole Page (Recommended for Tablets)', 'نمایش کامل صفحه (پیشنهادی برای تبلت)')}</option>
+              <option value="100%" ${app.defaultZoomMode === '100%' ? 'selected' : ''}>${tr('100% Native Resolution', '۱۰۰٪ اندازه واقعی')}</option>
+              <option value="125%" ${app.defaultZoomMode === '125%' ? 'selected' : ''}>${tr('125% Comfortable Readability', '۱۲۵٪ خوانایی راحت')}</option>
+              <option value="150%" ${app.defaultZoomMode === '150%' ? 'selected' : ''}>${tr('150% High Magnification', '۱۵۰٪ بزرگ‌نمایی زیاد')}</option>
             </select>
           </div>
 
-          <div class="settings-section-header">Reading Comfort & Visuals</div>
+          <div class="settings-section-header">${tr('Reading Comfort & Fullscreen', 'راحتی مطالعه و حالت تمام‌صفحه')}</div>
+
+          <!-- Auto-Hide Header in Fullscreen -->
+          <div class="setting-card">
+            <div class="setting-info">
+              <div class="setting-title">${t('settings.autoHideFullscreen')}</div>
+              <div class="setting-desc">${t('settings.autoHideFullscreenDesc')}</div>
+            </div>
+            <label class="setting-switch">
+              <input type="checkbox" data-fullscreen-autohide-toggle ${app.autoHideHeaderInFullscreen !== false ? 'checked' : ''}>
+              <span class="setting-slider"></span>
+            </label>
+          </div>
 
           <!-- Page Shadows Toggle -->
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">Realistic Page Drop Shadows</div>
-              <div class="setting-desc">Renders smooth depth shadows around each page sheet.</div>
+              <div class="setting-title">${tr('Realistic Page Drop Shadows', 'سایه طبیعی دور صفحات')}</div>
+              <div class="setting-desc">${tr('Renders smooth depth shadows around each page sheet.', 'نمایش سایه نرم در اطراف هر برگه برای تفکیک بهتر از پس‌زمینه.')}</div>
             </div>
             <label class="setting-switch">
               <input type="checkbox" id="shadows-toggle" ${app.showPageShadows !== false ? 'checked' : ''}>
@@ -533,8 +566,8 @@ export class SettingsModalComponent {
           <!-- Smooth Scroll Toggle -->
           <div class="setting-card">
             <div class="setting-info">
-              <div class="setting-title">Smooth Scrolling Dynamics</div>
-              <div class="setting-desc">Enables fluid interpolated scrolling when jumping across pages.</div>
+              <div class="setting-title">${tr('Smooth Scrolling Dynamics', 'پیمایش نرم بین صفحات')}</div>
+              <div class="setting-desc">${tr('Enables fluid interpolated scrolling when jumping across pages.', 'حرکت نرم و پیوسته هنگام پرش بین صفحات مختلف.')}</div>
             </div>
             <label class="setting-switch">
               <input type="checkbox" id="smooth-scroll-toggle" ${app.smoothScroll !== false ? 'checked' : ''}>
@@ -553,21 +586,29 @@ export class SettingsModalComponent {
       const cappedScale = clampRenderMultiplier(612, 792, requestedScale);
       const capped = cappedScale < requestedScale - 1e-6;
       const dpiHint = capped
-        ? `Effective backing store: ${(cappedScale).toFixed(2)}× (${Math.round(cappedScale * 72)} DPI). ` +
-          `Capped at 4096 px per axis for pages this size — zoom in further to use the full ${effectiveDpi} DPI.`
-        : `Effective backing store: ${requestedScale.toFixed(2)}× (${effectiveDpi} DPI). Higher values are sharper but use more memory.`;
+        ? tr(
+            `Effective backing store: ${(cappedScale).toFixed(2)}× (${Math.round(cappedScale * 72)} DPI). Capped at 4096 px per axis for pages this size — zoom in further to use the full ${effectiveDpi} DPI.`,
+            `مقیاس رندر مؤثر: ${(cappedScale).toFixed(2)}× (${Math.round(cappedScale * 72)} DPI). برای حفظ سرعت، هر ضلع بوم به ۴۰۹۶ پیکسل محدود شده است؛ با بزرگ‌نمایی بیشتر تمام دقت ${effectiveDpi} DPI اعمال می‌شود.`
+          )
+        : tr(
+            `Effective backing store: ${requestedScale.toFixed(2)}× (${effectiveDpi} DPI). Higher values are sharper but use more memory.`,
+            `مقیاس رندر مؤثر: ${requestedScale.toFixed(2)}× (${effectiveDpi} DPI). مقادیر بالاتر وضوح متن را افزایش می‌دهند اما حافظه بیشتری مصرف می‌کنند.`
+          );
       return `
         <div class="settings-stack">
           <div class="settings-callout is-accent">
             <span class="settings-callout-icon">${getIconSvg('zap', 15)}</span>
-            <span><strong>Extreme efficiency engine active.</strong> Canvases outside the active viewport are automatically recycled and sized to 1x1, reclaiming gigabytes of uncompressed GPU memory when viewing 100+ page books.</span>
+            <span>${tr(
+              '<strong>Extreme efficiency engine active.</strong> Canvases outside the active viewport are automatically recycled and sized to 1x1, reclaiming gigabytes of uncompressed GPU memory when viewing 100+ page books.',
+              '<strong>موتور بهینه‌سازی فوق‌سریع فعال است.</strong> بوم‌های خارج از دید صفحه به‌طور خودکار آزاد می‌شوند تا در کتاب‌های صدها صفحه‌ای، مصرف رم و کارت گرافیک در کمترین حالت ممکن بماند.'
+            )}</span>
           </div>
 
           <!-- Custom render DPI. 72 DPI = the PDF point grid; every step up
                multiplies the backing store, so the effective scale and the
                4096 px per-axis cap are surfaced next to the field. -->
           <div class="prop-group">
-            <span class="prop-label">Canvas Render Resolution (DPI)</span>
+            <span class="prop-label">${tr('Canvas Render Resolution (DPI)', 'وضوح رندر صفحات (DPI)')}</span>
             <div class="dpi-control-row">
               <input type="number" id="target-dpi-input" class="field dpi-number-input"
                      min="72" max="600" step="1" value="${effectiveDpi}">
@@ -582,18 +623,18 @@ export class SettingsModalComponent {
 
           <!-- Preload buffer -->
           <div class="prop-group">
-            <span class="prop-label">Off-screen Page Preload Buffer</span>
+            <span class="prop-label">${tr('Off-screen Page Preload Buffer', 'تعداد صفحات پیش‌بارگذاری خارج از دید')}</span>
             <select id="preload-select" class="field">
-              <option value="1" ${app.maxRenderBufferPages === 1 ? 'selected' : ''}>1 Page Ahead (Ultra-Low Memory Usage)</option>
-              <option value="3" ${app.maxRenderBufferPages === 3 || !app.maxRenderBufferPages ? 'selected' : ''}>3 Pages Ahead (Balanced - Recommended)</option>
-              <option value="5" ${app.maxRenderBufferPages === 5 ? 'selected' : ''}>5 Pages Ahead (Aggressive Preloading for Fast Flipping)</option>
+              <option value="1" ${app.maxRenderBufferPages === 1 ? 'selected' : ''}>${tr('1 Page Ahead (Ultra-Low Memory Usage)', '۱ صفحه جلوتر (کمترین مصرف حافظه)')}</option>
+              <option value="3" ${app.maxRenderBufferPages === 3 || !app.maxRenderBufferPages ? 'selected' : ''}>${tr('3 Pages Ahead (Balanced - Recommended)', '۳ صفحه جلوتر (متعادل - پیشنهادی)')}</option>
+              <option value="5" ${app.maxRenderBufferPages === 5 ? 'selected' : ''}>${tr('5 Pages Ahead (Aggressive Preloading for Fast Flipping)', '۵ صفحه جلوتر (ورق زدن فوق‌سریع)')}</option>
             </select>
           </div>
 
           <div class="prop-group">
             <button id="flush-cache-btn" class="secondary-btn is-block">
               ${getIconSvg('trash', 14)}
-              <span>Flush Render Cache & Force VRAM Reclaim</span>
+              <span>${tr('Flush Render Cache & Force VRAM Reclaim', 'پاک‌سازی کش رندر و آزادسازی حافظه گرافیکی')}</span>
             </button>
           </div>
         </div>
@@ -603,35 +644,38 @@ export class SettingsModalComponent {
     if (this._activeTab === 'storage') {
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">IndexedDB Local Persistence</div>
+          <div class="settings-section-header">${tr('IndexedDB Local Persistence', 'ذخیره‌سازی محلی در دستگاه')}</div>
 
           <!-- Auto-Save Frequency -->
           <div class="prop-group">
-            <span class="prop-label">Auto-Save Annotations Frequency</span>
+            <span class="prop-label">${tr('Auto-Save Annotations Frequency', 'فاصله زمانی ذخیره خودکار یادداشت‌ها')}</span>
             <select id="autosave-select" class="field">
-              <option value="5000" ${app.autoSaveIntervalMs === 5000 ? 'selected' : ''}>Every 5 seconds</option>
-              <option value="15000" ${app.autoSaveIntervalMs === 15000 || !app.autoSaveIntervalMs ? 'selected' : ''}>Every 15 seconds (Recommended)</option>
-              <option value="30000" ${app.autoSaveIntervalMs === 30000 ? 'selected' : ''}>Every 30 seconds</option>
-              <option value="60000" ${app.autoSaveIntervalMs === 60000 ? 'selected' : ''}>Every 1 minute</option>
+              <option value="5000" ${app.autoSaveIntervalMs === 5000 ? 'selected' : ''}>${tr('Every 5 seconds', 'هر ۵ ثانیه')}</option>
+              <option value="15000" ${app.autoSaveIntervalMs === 15000 || !app.autoSaveIntervalMs ? 'selected' : ''}>${tr('Every 15 seconds (Recommended)', 'هر ۱۵ ثانیه (پیشنهادی)')}</option>
+              <option value="30000" ${app.autoSaveIntervalMs === 30000 ? 'selected' : ''}>${tr('Every 30 seconds', 'هر ۳۰ ثانیه')}</option>
+              <option value="60000" ${app.autoSaveIntervalMs === 60000 ? 'selected' : ''}>${tr('Every 1 minute', 'هر ۱ دقیقه')}</option>
             </select>
           </div>
 
           <div class="settings-callout">
             <span class="settings-callout-icon">${getIconSvg('shieldCheck', 15)}</span>
-            <span><strong>Offline storage guarantee.</strong> All PDF documents, markups, layers, signatures, and preferences are stored exclusively on your local machine in browser IndexedDB. Zero cloud uploads, zero tracking.</span>
+            <span>${tr(
+              '<strong>Offline storage guarantee.</strong> All PDF documents, markups, layers, signatures, and preferences are stored exclusively on your local machine in browser IndexedDB. Zero cloud uploads, zero tracking.',
+              '<strong>تضمین حریم خصوصی و عملکرد کاملاً آفلاین.</strong> تمامی فایل‌های PDF، حاشیه‌نویسی‌ها، امضاها و تنظیمات شما صرفاً روی دستگاه خودتان ذخیره می‌شوند و هیچ داده‌ای به سرور ارسال نمی‌گردد.'
+            )}</span>
           </div>
 
-          <div class="settings-section-header">Reset & Recovery</div>
+          <div class="settings-section-header">${tr('Reset & Recovery', 'بازنشانی و پاک‌سازی اطلاعات')}</div>
 
           <div class="panel-stack">
             <button id="reset-settings-btn" class="secondary-btn is-block">
               ${getIconSvg('rotate', 14)}
-              <span>Reset All Settings to Defaults</span>
+              <span>${tr('Reset All Settings to Defaults', 'بازگردانی همه تنظیمات به حالت پیش‌فرض')}</span>
             </button>
 
             <button id="clear-local-db-btn" class="danger-btn is-block">
               ${getIconSvg('trash', 14)}
-              <span>Clear Recent Documents & Annotation Cache</span>
+              <span>${tr('Clear Recent Documents & Annotation Cache', 'پاک کردن لیست فایل‌های اخیر و حافظه پنهان')}</span>
             </button>
           </div>
         </div>
@@ -641,7 +685,7 @@ export class SettingsModalComponent {
     if (this._activeTab === 'language') {
       return `
         <div class="settings-stack">
-          <div class="settings-section-header">Interface Language & Directionality</div>
+          <div class="settings-section-header">${tr('Interface Language & Directionality', 'زبان و جهت چیدمان برنامه')}</div>
 
           <div class="settings-grid">
             <button class="secondary-btn lang-card ${app.language === 'en' ? 'is-selected' : ''}" data-set-lang="en">
@@ -650,7 +694,7 @@ export class SettingsModalComponent {
             </button>
             <button class="secondary-btn lang-card is-fa ${app.language === 'fa' ? 'is-selected' : ''}" data-set-lang="fa">
               <span class="lang-card-name">فارسی</span>
-              <span class="lang-card-desc">راست‌چین کامل (RTL) • وزیرمتن</span>
+              <span class="lang-card-desc">راست‌چین کامل (RTL) • فونت وزیرمتن</span>
             </button>
           </div>
         </div>
@@ -664,33 +708,35 @@ export class SettingsModalComponent {
             ${getIconSvg('pen', 28)}
           </div>
           <div>
-            <div class="about-name">veditor</div>
-            <div class="about-version" id="about-version-text">Version …</div>
+            <div class="about-name">${t('appName')}</div>
+            <div class="about-version" id="about-version-text">${tr('Version …', 'نسخه …')}</div>
           </div>
 
           <p class="about-blurb">
-            Ultra-fast, professional offline PDF annotator and document editor. Engineered for high
-            performance, sub-millisecond drawing latency, and complete local privacy.
+            ${tr(
+              'Ultra-fast, professional offline PDF annotator and document editor. Engineered for high performance, sub-millisecond drawing latency, and complete local privacy.',
+              'ویرایشگر و حاشیه‌نویس حرفه‌ای، فوق‌سریع و کاملاً آفلاین PDF؛ طراحی‌شده برای نوشتن روان با قلم نوری، کمترین تأخیر و حفظ کامل حریم خصوصی روی دستگاه شما.'
+            )}
           </p>
 
           <!-- Official GitHub Link -->
           <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" class="secondary-btn about-repo-link">
             ${getIconSvg('github', 18)}
-            <span>View Source on GitHub</span>
+            <span>${tr('View Source on GitHub', 'مشاهده مخزن پروژه در گیت‌هاب')}</span>
             ${getIconSvg('externalLink', 13)}
           </a>
 
           <div class="about-links">
             <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" class="about-link">
               ${getIconSvg('info', 13)}
-              <span>Report Issue</span>
+              <span>${tr('Report Issue', 'گزارش مشکل یا پیشنهاد')}</span>
             </a>
             <span class="about-link-divider">•</span>
-            <span class="about-license">MIT Licensed</span>
+            <span class="about-license">${tr('MIT Licensed', 'مجوز متن‌باز MIT')}</span>
           </div>
 
           <button id="about-shortcuts-btn" class="primary-btn">
-            View Keyboard Shortcuts (?)
+            ${tr('View Keyboard Shortcuts (?)', 'مشاهده کلیدهای میانبر (؟)')}
           </button>
         </div>
       `;
@@ -887,6 +933,13 @@ export class SettingsModalComponent {
       store.updateAppSettings({ smoothScroll: smoothScrollToggle.checked });
     });
 
+    // Auto-hide header in fullscreen toggle (present in Appearance and Viewer & Reading)
+    this._container.querySelectorAll<HTMLInputElement>('[data-fullscreen-autohide-toggle]').forEach(toggle => {
+      toggle.addEventListener('change', () => {
+        store.updateAppSettings({ autoHideHeaderInFullscreen: toggle.checked });
+      });
+    });
+
     // Target render DPI. Typing is debounced so a three-digit value does not
     // re-render every page three times; `change`/Enter commits immediately.
     const targetDpiInput = this._container.querySelector<HTMLInputElement>('#target-dpi-input');
@@ -931,18 +984,31 @@ export class SettingsModalComponent {
     });
 
     // Reset settings button (subscription render refreshes content in place)
-    this._container.querySelector('#reset-settings-btn')?.addEventListener('click', () => {
-      if (confirm('Reset all application preferences to default values?')) {
+    this._container.querySelector('#reset-settings-btn')?.addEventListener('click', async () => {
+      const ok = await nativeConfirm(
+        tr(
+          'Reset all application preferences to default values?',
+          'آیا تمام تنظیمات برنامه به مقادیر پیش‌فرض بازگردانده شوند؟'
+        )
+      );
+      if (ok) {
         store.resetSettingsToDefault();
+        showToast(tr('Settings reset to defaults', 'تنظیمات به حالت پیش‌فرض بازگشت'), 'success');
       }
     });
 
     // Clear local db & caches button
     this._container.querySelector('#clear-local-db-btn')?.addEventListener('click', async () => {
-      if (confirm('Clear all recent documents, cached annotations, and offline database storage? This cannot be undone.')) {
+      const ok = await nativeConfirm(
+        tr(
+          'Clear all recent documents, cached annotations, and offline database storage? This cannot be undone.',
+          'آیا تمام لیست فایل‌های اخیر و حافظه پنهان یادداشت‌ها پاک شود؟ این عمل قابل بازگشت نیست.'
+        )
+      );
+      if (ok) {
         await clearAllStorage();
         store.resetSettingsToDefault();
-        alert('All offline document caches and settings have been cleared!');
+        showToast(tr('All offline document caches and settings have been cleared!', 'تمامی حافظه‌های پنهان و تنظیمات پاک شدند!'), 'success');
         window.location.reload();
       }
     });
@@ -958,7 +1024,7 @@ export class SettingsModalComponent {
     this._container.querySelector('#flush-cache-btn')?.addEventListener('click', () => {
       pdfEngine.destroy();
       viewportManager.updateLayout(true);
-      alert('Render caches flushed and memory reclaimed!');
+      showToast(tr('Render caches flushed and memory reclaimed!', 'کش رندر پاک‌سازی و حافظه آزاد شد!'), 'success');
     });
 
     // Shortcuts button inside about
@@ -972,9 +1038,11 @@ export class SettingsModalComponent {
     // actual build.
     const versionEl = this._container.querySelector('#about-version-text');
     if (versionEl) {
-      const platformLabel = isDesktop() ? 'Desktop App' : 'Manifest V3 & WebExtensions';
+      const platformLabel = isDesktop()
+        ? tr('Desktop App', 'نسخه دسکتاپ')
+        : tr('Manifest V3 & WebExtensions', 'اکستنشن مرورگر و وب');
       void getAppVersion().then(version => {
-        versionEl.textContent = `Version ${version} \u2022 ${platformLabel}`;
+        versionEl.textContent = `${tr('Version', 'نسخه')} ${version} \u2022 ${platformLabel}`;
       });
     }
 
@@ -1012,7 +1080,12 @@ export class SettingsModalComponent {
             refreshShortcutsPane();
             const hint = this._container.querySelector('#shortcut-conflict');
             if (hint) {
-              hint.textContent = `“${e.key === ' ' ? 'Space' : e.key.toUpperCase()}” is already used by ${TOOL_SHORT_LABELS[conflict] || conflict}.`;
+              const keyLabel = e.key === ' ' ? 'Space' : e.key.toUpperCase();
+              const conflictLabel = getToolShortLabel(conflict);
+              hint.textContent = tr(
+                `“${keyLabel}” is already used by ${conflictLabel}.`,
+                `کلید «${keyLabel}» قبلاً برای «${conflictLabel}» استفاده شده است.`
+              );
             }
             return;
           }

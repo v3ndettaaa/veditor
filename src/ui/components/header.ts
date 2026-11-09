@@ -7,7 +7,7 @@ import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
-import { isFullscreen, toggleFullscreen } from '../fullscreen';
+import { isFullscreen, toggleFullscreen, initFullscreenSync } from '../fullscreen';
 import { showToast } from './toast';
 import { t } from '../i18n';
 import { notebookController } from '../../core/notebook';
@@ -34,8 +34,36 @@ export class HeaderComponent {
     // The "+" button opens the full landing (recents, folders, new file)
     // instead of jumping straight to the file picker.
     this._onAddTabRequested = onAddTabRequested ?? onOpenFileRequested;
+    initFullscreenSync();
     store.subscribe(() => this.render());
     document.addEventListener('fullscreenchange', () => this.render());
+    window.addEventListener('veditor:fullscreenchange', () => this.render());
+
+    // Keep header revealed while hovering directly over the header or hover zone,
+    // and hide it again when the pointer leaves the header in fullscreen / focus mode.
+    const isAutoHideActive = () =>
+      (document.body.classList.contains('is-fullscreen') &&
+        document.body.classList.contains('fullscreen-autohide')) ||
+      document.body.classList.contains('focus-mode');
+
+    this._container.addEventListener('mouseenter', () => {
+      if (isAutoHideActive()) {
+        document.body.classList.add('header-peek');
+      }
+    });
+    this._container.addEventListener('mouseleave', (e: MouseEvent) => {
+      if (this._dropdownOpen) return;
+      if (e.clientY <= 6) return;
+      if (isAutoHideActive()) {
+        document.body.classList.remove('header-peek');
+      }
+    });
+    const hoverZone = document.getElementById('header-hover-zone');
+    hoverZone?.addEventListener('mouseenter', () => {
+      if (isAutoHideActive()) {
+        document.body.classList.add('header-peek');
+      }
+    });
 
     // Close the open documents dropdown when clicking outside or pressing Escape
     document.addEventListener('pointerdown', (e) => {
@@ -70,6 +98,7 @@ export class HeaderComponent {
     const activeDoc = store.activeDocument;
     const tabs = store.documentTabs;
     const lang = store.appSettings.language;
+    const fa = lang === 'fa';
     const theme = store.appSettings.theme;
     const isNotebook = notebookController.isNotebook(activeDoc);
     const fullscreen = isFullscreen();
@@ -90,13 +119,13 @@ export class HeaderComponent {
     this._lastRenderKey = renderKey;
     this._isFullscreen = fullscreen;
 
-    const activeTabName = activeDoc?.name || tabs[0]?.name || 'Documents';
+    const activeTabName = activeDoc?.name || tabs[0]?.name || t('header.documents');
     const activeDirty = activeDoc ? isDocumentDirty(activeDoc.id) : false;
 
     this._container.innerHTML = `
       <div class="header-left">
-        <button id="header-sidebar-btn" class="header-btn" title="Toggle Sidebar" ${!activeDoc ? 'style="display:none;"' : ''}>
-          ${getIconSvg('sidebar', 16)}
+        <button id="header-sidebar-btn" class="header-btn" title="${t('header.toggleSidebar')}" ${!activeDoc ? 'style="display:none;"' : ''}>
+          ${getIconSvg('sidebar')}
         </button>
 
         <div class="header-logo" id="header-logo-btn">
@@ -110,21 +139,21 @@ export class HeaderComponent {
                   class="header-docs-trigger ${this._dropdownOpen ? 'is-open' : ''}"
                   aria-haspopup="listbox"
                   aria-expanded="${this._dropdownOpen ? 'true' : 'false'}"
-                  title="${escapeHtml(activeTabName)} (${tabs.length} open)">
-            <span class="doc-tab-icon">${getIconSvg('fileText', 14)}</span>
+                  title="${escapeHtml(activeTabName)} (${tabs.length} ${fa ? 'باز' : 'open'})">
+            <span class="doc-tab-icon">${getIconSvg('fileText', 15)}</span>
             <span class="doc-tab-title">${escapeHtml(activeTabName)}</span>
-            ${activeDirty ? '<span class="doc-tab-dirty" title="Unsaved changes">●</span>' : ''}
-            <span class="header-docs-count" title="${tabs.length} open PDF${tabs.length === 1 ? '' : 's'}">${tabs.length}</span>
-            <span class="header-docs-chevron">${getIconSvg('chevronDown', 13)}</span>
+            ${activeDirty ? `<span class="doc-tab-dirty" title="${t('header.unsavedChanges')}">●</span>` : ''}
+            <span class="header-docs-count" title="${tabs.length} ${fa ? 'پی‌دی‌اف باز' : `open PDF${tabs.length === 1 ? '' : 's'}`}">${tabs.length}</span>
+            <span class="header-docs-chevron">${getIconSvg('chevronDown', 14)}</span>
           </button>
 
-          <button type="button" id="header-add-tab-btn" class="doc-tab-add" title="Open PDF in new tab">
-            ${getIconSvg('plus', 14)}
+          <button type="button" id="header-add-tab-btn" class="doc-tab-add" title="${t('header.openInNewTab')}">
+            ${getIconSvg('plus', 15)}
           </button>
 
-          <div id="header-docs-menu" class="header-docs-menu ${this._dropdownOpen ? 'is-open' : ''}" role="listbox" aria-label="Open documents">
+          <div id="header-docs-menu" class="header-docs-menu ${this._dropdownOpen ? 'is-open' : ''}" role="listbox" aria-label="${t('header.openDocuments')}">
             <div class="header-docs-menu-header">
-              <span>${lang === 'fa' ? 'پی‌دی‌اف‌های باز' : 'Open Documents'}</span>
+              <span>${t('header.openDocuments')}</span>
               <span class="badge">${tabs.length}</span>
             </div>
             <div class="header-docs-menu-list">
@@ -142,10 +171,10 @@ export class HeaderComponent {
                     <span class="doc-tab-icon">${getIconSvg('fileText', 14)}</span>
                     <div class="header-docs-item-info">
                       <span class="doc-tab-title">${escapeHtml(tab.name)}</span>
-                      ${pagesCount > 0 ? `<span class="header-docs-item-meta">${pagesCount} ${lang === 'fa' ? 'صفحه' : (pagesCount === 1 ? 'page' : 'pages')}</span>` : ''}
+                      ${pagesCount > 0 ? `<span class="header-docs-item-meta">${pagesCount} ${fa ? 'صفحه' : (pagesCount === 1 ? 'page' : 'pages')}</span>` : ''}
                     </div>
-                    ${dirty ? '<span class="doc-tab-dirty" title="Unsaved changes">●</span>' : ''}
-                    <button type="button" class="doc-tab-close" data-close-tab="${escapeHtml(tab.id)}" title="Close Tab" aria-label="Close ${escapeHtml(tab.name)}">
+                    ${dirty ? `<span class="doc-tab-dirty" title="${t('header.unsavedChanges')}">●</span>` : ''}
+                    <button type="button" class="doc-tab-close" data-close-tab="${escapeHtml(tab.id)}" title="${t('header.closeTab')}" aria-label="${t('header.closeTab')} ${escapeHtml(tab.name)}">
                       ${getIconSvg('close', 12)}
                     </button>
                   </div>
@@ -155,10 +184,10 @@ export class HeaderComponent {
             ${tabs.length > 1 ? `
               <div class="header-docs-menu-footer">
                 <button type="button" class="header-docs-footer-btn" id="header-docs-close-others">
-                  ${lang === 'fa' ? 'بستن بقیه تب‌ها' : 'Close Others'}
+                  ${t('header.closeOthers')}
                 </button>
                 <button type="button" class="header-docs-footer-btn is-danger" id="header-docs-close-all">
-                  ${lang === 'fa' ? 'بستن همه' : 'Close All'}
+                  ${t('header.closeAll')}
                 </button>
               </div>
             ` : ''}
@@ -169,47 +198,47 @@ export class HeaderComponent {
       <div class="header-right">
         ${isNotebook ? `
           <button id="header-paper-btn" class="header-btn" title="${t('notebook.paperTitle')}">
-            ${getIconSvg('paper', 14)}
+            ${getIconSvg('paper', 15)}
             <span>${t('notebook.paperBtn')}</span>
           </button>
           <button id="header-add-page-btn" class="header-btn" title="${t('notebook.addPageTitle')}">
-            ${getIconSvg('plus', 14)}
+            ${getIconSvg('plus', 15)}
             <span>${t('notebook.addPage')}</span>
           </button>
-          <div class="toolbar-separator" style="height:18px;"></div>
+          <div class="toolbar-separator" style="height:20px;"></div>
         ` : ''}
 
-        <button id="header-save-btn" class="header-btn primary" ${!activeDoc ? 'style="display:none;"' : ''} title="Save (Ctrl+S)">
-          ${getIconSvg('save', 14)}
-          <span>Save</span>
+        <button id="header-save-btn" class="header-btn primary" ${!activeDoc ? 'style="display:none;"' : ''} title="${t('header.saveTooltip')}">
+          ${getIconSvg('save', 15)}
+          <span>${t('actions.save')}</span>
         </button>
 
-        <button id="header-saveas-btn" class="header-btn" ${!activeDoc ? 'style="display:none;"' : ''} title="Save As (Ctrl+Shift+S)">
-          ${getIconSvg('saveAll', 14)}
-          <span>Save As</span>
+        <button id="header-saveas-btn" class="header-btn" ${!activeDoc ? 'style="display:none;"' : ''} title="${t('header.saveAsTooltip')}">
+          ${getIconSvg('saveAll', 15)}
+          <span>${t('actions.saveAs')}</span>
         </button>
 
-        <div class="toolbar-separator" style="height:18px; ${!activeDoc ? 'display:none;' : ''}"></div>
+        <div class="toolbar-separator" style="height:20px; ${!activeDoc ? 'display:none;' : ''}"></div>
 
-        <button id="header-palette-btn" class="header-btn" title="Command Palette (Cmd+K)">
-          ${getIconSvg('command', 15)}
+        <button id="header-palette-btn" class="header-btn" title="${t('header.commandPaletteTooltip')}">
+          ${getIconSvg('command', 16)}
         </button>
 
-        <button id="header-lang-btn" class="header-btn" title="Switch Language">
-          ${getIconSvg('globe', 15)}
+        <button id="header-lang-btn" class="header-btn" title="${t('header.switchLanguage')}">
+          ${getIconSvg('globe', 16)}
           <span class="header-language-label">${lang === 'en' ? 'FA' : 'EN'}</span>
         </button>
 
         <button id="header-fullscreen-btn" class="header-btn" title="${t('view.fullscreen')}" aria-pressed="${fullscreen ? 'true' : 'false'}">
-          ${getIconSvg(fullscreen ? 'compress' : 'expand', 15)}
+          ${getIconSvg(fullscreen ? 'compress' : 'expand', 16)}
         </button>
 
-        <button id="header-theme-btn" class="header-btn" title="Toggle Dark/Light Mode">
-          ${getIconSvg(theme === 'dark' ? 'sun' : 'moon', 15)}
+        <button id="header-theme-btn" class="header-btn" title="${t('header.toggleTheme')}">
+          ${getIconSvg(theme === 'dark' ? 'sun' : 'moon', 16)}
         </button>
 
         <button id="header-settings-btn" class="header-btn" title="${t('settings.title')}">
-          ${getIconSvg('settings', 15)}
+          ${getIconSvg('settings', 16)}
         </button>
       </div>
     `;
@@ -230,11 +259,16 @@ export class HeaderComponent {
 
     this._container.querySelector('#header-add-page-btn')?.addEventListener('click', async () => {
       if (notebookController.atPageLimit()) {
-        showToast('This notebook has reached its page limit.', 'error');
+        showToast(fa ? 'این دفترچه به حداکثر تعداد صفحات رسیده است.' : 'This notebook has reached its page limit.', 'error');
         return;
       }
       const added = await notebookController.addPages(1);
-      if (added) showToast(`Page ${store.activeDocument?.pageCount} added`, 'success');
+      if (added) {
+        showToast(
+          fa ? `صفحه ${store.activeDocument?.pageCount} اضافه شد` : `Page ${store.activeDocument?.pageCount} added`,
+          'success'
+        );
+      }
     });
 
     this._container.querySelector('#header-save-btn')?.addEventListener('click', async () => {
@@ -255,12 +289,14 @@ export class HeaderComponent {
       store.updateAppSettings({ language: lang === 'en' ? 'fa' : 'en' });
     });
 
-    this._container.querySelector('#header-fullscreen-btn')?.addEventListener('click', async () => {
+    this._container.querySelector('#header-fullscreen-btn')?.addEventListener('click', async (e) => {
+      (e.currentTarget as HTMLElement | null)?.blur?.();
+      document.body.classList.remove('header-peek');
       try {
         await toggleFullscreen();
       } catch (err) {
         console.error('Fullscreen unavailable:', err);
-        showToast('Fullscreen is unavailable in this browser context', 'error');
+        showToast(fa ? 'حالت تمام‌صفحه در این محیط در دسترس نیست' : 'Fullscreen is unavailable in this browser context', 'error');
       }
     });
 
@@ -333,29 +369,29 @@ export class HeaderComponent {
     const isActive = store.activeDocument?.id === tabId;
     const entries: MenuEntry[] = [
       {
-        kind: 'action', id: 'switch', label: 'Switch to tab', icon: 'fileText', disabled: isActive,
+        kind: 'action', id: 'switch', label: t('header.switchToTab'), icon: 'fileText', disabled: isActive,
         run: () => store.switchDocumentTab(tabId)
       },
       { kind: 'separator' },
       {
-        kind: 'action', id: 'save', label: 'Save', icon: 'save', disabled: !isActive,
+        kind: 'action', id: 'save', label: t('actions.save'), icon: 'save', disabled: !isActive,
         run: () => { void saveActiveDocument(); }
       },
       {
-        kind: 'action', id: 'save-as', label: 'Save As\u2026', icon: 'saveAll', disabled: !isActive,
+        kind: 'action', id: 'save-as', label: `${t('actions.saveAs')}\u2026`, icon: 'saveAll', disabled: !isActive,
         run: () => { void saveActiveDocumentAs(); }
       },
       { kind: 'separator' },
       {
-        kind: 'action', id: 'close', label: 'Close', icon: 'close',
+        kind: 'action', id: 'close', label: t('actions.close'), icon: 'close',
         run: () => { void this.closeTabWithConfirm(tabId); }
       },
       {
-        kind: 'action', id: 'close-others', label: 'Close others', icon: 'close', disabled: tabs.length <= 1,
+        kind: 'action', id: 'close-others', label: t('header.closeOthers'), icon: 'close', disabled: tabs.length <= 1,
         run: () => { void this.closeTabsWithConfirm(tabs.filter(t => t.id !== tabId).map(t => t.id)); }
       },
       {
-        kind: 'action', id: 'close-all', label: 'Close all', icon: 'close', danger: true,
+        kind: 'action', id: 'close-all', label: t('header.closeAll'), icon: 'close', danger: true,
         run: () => { void this.closeTabsWithConfirm(tabs.map(t => t.id)); }
       }
     ];
@@ -363,8 +399,13 @@ export class HeaderComponent {
   }
 
   private async closeTabWithConfirm(tabId: string): Promise<void> {
+    const fa = store.appSettings.language === 'fa';
     if (isDocumentDirty(tabId)) {
-      const ok = await nativeConfirm('This document has unsaved changes. Close without saving?');
+      const ok = await nativeConfirm(
+        fa
+          ? 'این سند دارای تغییرات ذخیره‌نشده است. بدون ذخیره‌سازی بسته شود؟'
+          : 'This document has unsaved changes. Close without saving?'
+      );
       if (!ok) return;
     }
     forgetFileHandle(tabId);
@@ -372,9 +413,14 @@ export class HeaderComponent {
   }
 
   private async closeTabsWithConfirm(tabIds: string[]): Promise<void> {
+    const fa = store.appSettings.language === 'fa';
     const dirtyCount = tabIds.filter(isDocumentDirty).length;
     if (dirtyCount > 0) {
-      const ok = await nativeConfirm(`${dirtyCount} document${dirtyCount > 1 ? 's' : ''} have unsaved changes. Close without saving?`);
+      const ok = await nativeConfirm(
+        fa
+          ? `${dirtyCount} سند دارای تغییرات ذخیره‌نشده هستند. بدون ذخیره‌سازی بسته شوند؟`
+          : `${dirtyCount} document${dirtyCount > 1 ? 's' : ''} have unsaved changes. Close without saving?`
+      );
       if (!ok) return;
     }
     for (const tabId of tabIds) {
@@ -390,6 +436,7 @@ export class HeaderComponent {
   private openPaperDialog(): void {
     const doc = store.activeDocument;
     if (!doc?.notebook) return;
+    const fa = store.appSettings.language === 'fa';
 
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -401,11 +448,11 @@ export class HeaderComponent {
       onClose: () => host.remove(),
       onSubmit: async ({ paper, pageSize }) => {
         try {
-          showToast('Applying paper…', 'progress');
+          showToast(fa ? 'در حال اعمال کاغذ…' : 'Applying paper…', 'progress');
           await notebookController.restyle(paper, pageSize);
-          showToast('Paper updated', 'success');
+          showToast(fa ? 'طرح کاغذ به‌روزرسانی شد' : 'Paper updated', 'success');
         } catch (err: any) {
-          showToast(`Could not apply paper: ${err.message}`, 'error');
+          showToast(fa ? `خطا در اعمال کاغذ: ${err.message}` : `Could not apply paper: ${err.message}`, 'error');
         } finally {
           host.remove();
         }

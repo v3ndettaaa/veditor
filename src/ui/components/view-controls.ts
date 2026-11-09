@@ -7,7 +7,7 @@
 import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
 import { getIconSvg } from '../../utils/icons';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 
 export class ViewControlsComponent {
   private _container: HTMLElement;
@@ -17,6 +17,8 @@ export class ViewControlsComponent {
   private _collapsedRendered: boolean = false;
   /** Document the bound listeners / clamped totals belong to. */
   private _boundDocId: string | null = null;
+  /** Language the current DOM was built for. */
+  private _lastLang: 'en' | 'fa' = store.appSettings.language;
   /** Set while Enter commits, so the ensuing blur doesn't commit twice. */
   private _enterCommitted: boolean = false;
 
@@ -45,11 +47,10 @@ export class ViewControlsComponent {
       return;
     }
 
-    // A new / switched document changes the page count: bound listeners close
-    // over the old total, so force a full rebuild + rebind instead of the
-    // selective-update path (stale clamps sent jumps to the wrong page).
-    if (this._boundDocId !== null && this._boundDocId !== doc.id) {
+    // A new / switched document or language change invalidates cached DOM/tooltips
+    if ((this._boundDocId !== null && this._boundDocId !== doc.id) || this._lastLang !== store.appSettings.language) {
       this._isInitialized = false;
+      this._lastLang = store.appSettings.language;
     }
 
     this._invertDocument = typeof store.appSettings.invertDocumentOled === 'boolean'
@@ -71,7 +72,7 @@ export class ViewControlsComponent {
         return;
       }
       this._container.innerHTML = `
-        <button id="view-expand-btn" class="view-btn" title="Expand zoom controls">
+        <button id="view-expand-btn" class="view-btn" title="${tr('Expand zoom & page controls', 'باز کردن کنترل‌های بزرگ‌نمایی و صفحات')}">
           ${getIconSvg('zoomIn', 15)}
           <span id="view-expand-label" style="font-size:11px; font-weight:700;">${zoomPct}%</span>
         </button>
@@ -98,7 +99,7 @@ export class ViewControlsComponent {
     const inputWidth = Math.max(34, (String(totalPages).length + 1) * 9 + 10);
 
     this._container.innerHTML = `
-      <button id="view-prev-page" class="view-btn" ${currentPage <= 1 ? 'disabled style="opacity:0.4;"' : ''} title="Previous Page">
+      <button id="view-prev-page" class="view-btn" ${currentPage <= 1 ? 'disabled style="opacity:0.4;"' : ''} title="${tr('Previous Page', 'صفحه قبل')}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
 
@@ -109,8 +110,8 @@ export class ViewControlsComponent {
           inputmode="numeric"
           pattern="[0-9]*"
           value="${currentPage}"
-          title="Type page number and press Enter to jump (1-${totalPages})"
-          aria-label="Current page number"
+          title="${tr(`Type page number and press Enter to jump (1-${totalPages})`, `شماره صفحه را وارد کرده و کلید Enter را بزنید (۱ تا ${totalPages})`)}"
+          aria-label="${tr('Current page number', 'شماره صفحه فعلی')}"
           style="
             width: ${inputWidth}px;
             height: 24px;
@@ -130,13 +131,13 @@ export class ViewControlsComponent {
         <span id="view-total-pages" style="font-size:12px; font-weight:600; color:var(--text-secondary); min-width:14px; text-align:center;">${totalPages}</span>
       </div>
 
-      <button id="view-next-page" class="view-btn" ${currentPage >= totalPages ? 'disabled style="opacity:0.4;"' : ''} title="Next Page">
+      <button id="view-next-page" class="view-btn" ${currentPage >= totalPages ? 'disabled style="opacity:0.4;"' : ''} title="${tr('Next Page', 'صفحه بعد')}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
 
       <div class="toolbar-separator" style="height:16px;"></div>
 
-      <button id="view-zoom-out" class="view-btn" title="Zoom Out (Ctrl -)">
+      <button id="view-zoom-out" class="view-btn" title="${tr('Zoom Out (Ctrl -)', 'کوچک‌نمایی (Ctrl -)')}">
         ${getIconSvg('zoomOut', 15)}
       </button>
 
@@ -146,12 +147,12 @@ export class ViewControlsComponent {
         type="text"
         inputmode="decimal"
         value="${zoomPct}%"
-        title="Type zoom % (20-800) and press Enter"
-        aria-label="Zoom percent"
+        title="${tr('Type zoom % (20-800) and press Enter', 'درصد بزرگ‌نمایی (۲۰ تا ۸۰۰) را وارد کرده و Enter بزنید')}"
+        aria-label="${tr('Zoom percent', 'درصد بزرگ‌نمایی')}"
         style="background:transparent; border:1px solid transparent; border-radius:4px; outline:none; width:52px;"
       />
 
-      <button id="view-zoom-in" class="view-btn" title="Zoom In (Ctrl +)">
+      <button id="view-zoom-in" class="view-btn" title="${tr('Zoom In (Ctrl +)', 'بزرگ‌نمایی (Ctrl +)')}">
         ${getIconSvg('zoomIn', 15)}
       </button>
 
@@ -168,12 +169,12 @@ export class ViewControlsComponent {
       <div class="toolbar-separator" style="height:16px;"></div>
 
       <!-- Rotate CCW -->
-      <button id="view-rotate-ccw" class="view-btn" title="Rotate 90° Counter-Clockwise">
+      <button id="view-rotate-ccw" class="view-btn" title="${tr('Rotate 90° Counter-Clockwise', 'چرخش ۹۰ درجه پادساعت‌گرد')}">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
       </button>
 
       <!-- Rotate CW -->
-      <button id="view-rotate-cw" class="view-btn" title="Rotate 90° Clockwise (Shift+Click to rotate all)">
+      <button id="view-rotate-cw" class="view-btn" title="${tr('Rotate 90° Clockwise (Shift+Click to rotate all)', 'چرخش ۹۰ درجه ساعت‌گرد (Shift+کلیک برای چرخش همه صفحات)')}">
         ${getIconSvg('rotate', 15)}
         <span id="view-rotate-badge" style="position:absolute; bottom:2px; right:4px; font-size:8px; font-weight:700; color:var(--accent); ${currentRot === 0 ? 'display:none;' : ''}">${currentRot}°</span>
       </button>
@@ -181,13 +182,13 @@ export class ViewControlsComponent {
       <div class="toolbar-separator" style="height:16px;"></div>
 
       <!-- OLED Dark Document Inversion Toggle -->
-      <button id="view-invert-doc" class="view-btn ${this._invertDocument ? 'active' : ''}" title="Toggle Dark OLED Document Reading Mode">
+      <button id="view-invert-doc" class="view-btn ${this._invertDocument ? 'active' : ''}" title="${tr('Toggle Dark OLED Document Reading Mode', 'حالت مطالعه تاریک OLED برای صفحات سند')}">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z"/></svg>
       </button>
 
       <div class="toolbar-separator" style="height:16px;"></div>
 
-      <button id="view-collapse-btn" class="view-btn" title="Collapse zoom controls">
+      <button id="view-collapse-btn" class="view-btn" title="${tr('Collapse zoom controls', 'جمع کردن کنترل‌های بزرگ‌نمایی')}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
     `;

@@ -8,6 +8,32 @@ export const en = {
   importData: 'Import Annotations',
   undo: 'Undo',
   redo: 'Redo',
+  actions: {
+    undo: 'Undo',
+    redo: 'Redo',
+    save: 'Save',
+    saveAs: 'Save As',
+    cancel: 'Cancel',
+    close: 'Close',
+    delete: 'Delete',
+    duplicate: 'Duplicate'
+  },
+  header: {
+    toggleSidebar: 'Toggle Sidebar',
+    documents: 'Documents',
+    openDocuments: 'Open Documents',
+    openInNewTab: 'Open PDF in new tab',
+    unsavedChanges: 'Unsaved changes',
+    closeTab: 'Close Tab',
+    closeOthers: 'Close Others',
+    closeAll: 'Close All',
+    switchToTab: 'Switch to tab',
+    saveTooltip: 'Save (Ctrl+S)',
+    saveAsTooltip: 'Save As (Ctrl+Shift+S)',
+    commandPaletteTooltip: 'Command Palette (Cmd+K)',
+    switchLanguage: 'Switch Language',
+    toggleTheme: 'Toggle Dark/Light Mode'
+  },
   tools: {
     select: 'Select & Transform (V)',
     lasso: 'Lasso Select (Q)',
@@ -112,7 +138,9 @@ export const en = {
     grid: 'Grid Paper',
     dots: 'Dot Grid',
     lined: 'Lined Notebook',
-    isometric: 'Isometric'
+    isometric: 'Isometric',
+    autoHideFullscreen: 'Auto-Hide Tab Bar in Fullscreen',
+    autoHideFullscreenDesc: 'Automatically hide the top tab bar in fullscreen mode and reveal it when hovering near the top edge'
   },
   notebook: {
     new: 'New Notebook',

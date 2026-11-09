@@ -253,6 +253,7 @@ export class SidePanelsComponent {
   }
 
   private renderOutlineTreeHtml(items: PDFBookmarkItem[], depth = 0): string {
+    const isFa = store.appSettings.language === 'fa';
     return items.map((item) => {
       const hasPage = typeof item.pageIndex === 'number' && Number.isFinite(item.pageIndex);
       const hasChildren = Boolean(item.items && item.items.length > 0);
@@ -265,7 +266,7 @@ export class SidePanelsComponent {
                   style="padding-inline-start:${padStart}px;"
                   ${hasPage ? `data-bookmark-page="${item.pageIndex}"` : 'disabled'}>
             <span class="list-card-icon">${getIconSvg(hasChildren ? 'bookOpen' : 'book', 13)}</span>
-            <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(item.title || 'Untitled section')}</span>
+            <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(item.title || (isFa ? 'بخش بدون عنوان' : 'Untitled section'))}</span>
             ${hasPage ? `<span class="bookmark-page-pill">${item.pageIndex! + 1}</span>` : ''}
           </button>
           ${hasChildren ? `<div class="outline-tree-children">${this.renderOutlineTreeHtml(item.items!, depth + 1)}</div>` : ''}
@@ -274,11 +275,33 @@ export class SidePanelsComponent {
     }).join('');
   }
 
+  private localizeHistoryDescription(desc: string, lang: 'en' | 'fa'): string {
+    if (lang !== 'fa') return desc;
+    return desc
+      .replace(/^Add\s+(.+)$/i, 'افزودن $1')
+      .replace(/^Modify\s+(.+)$/i, 'ویرایش $1')
+      .replace(/^Delete\s+(\d+)\s+annotations?$/i, 'حذف $1 مورد')
+      .replace(/^Move\s+\/\s+Transform\s+annotations?$/i, 'جابه‌جایی و تغییر اندازه')
+      .replace(/^Slice\s+stroke$/i, 'برش خط با پاک‌کن')
+      .replace(/\bpen\b/gi, ' دست‌خط')
+      .replace(/\bhighlighter\b/gi, ' هایلایت')
+      .replace(/\brectangle\b/gi, ' مستطیل')
+      .replace(/\bellipse\b/gi, ' دایره/بیضی')
+      .replace(/\bline\b/gi, ' خط')
+      .replace(/\barrow\b/gi, ' پیکان')
+      .replace(/\bpolygon\b/gi, ' چندضلعی')
+      .replace(/\bfreeform-shape\b/gi, ' شکل آزاد')
+      .replace(/\btext\b/gi, ' کادر متن')
+      .replace(/\bsticky-note\b/gi, ' یادداشت چسبان')
+      .replace(/\bstamp\b/gi, ' مهر/تصویر')
+      .replace(/\bsignature\b/gi, ' امضا');
+  }
+
   private renderTabContent(el: HTMLElement, tab: string) {
     const doc = store.activeDocument;
     const lang = store.appSettings.language;
     if (!doc) {
-      el.innerHTML = `<div class="empty-note">No document active</div>`;
+      el.innerHTML = `<div class="empty-note">${lang === 'fa' ? 'هیچ سندی باز نیست' : 'No document active'}</div>`;
       return;
     }
 
@@ -321,8 +344,8 @@ export class SidePanelsComponent {
           <div class="bookmark-add-box">
             <input type="text" id="custom-bookmark-input" class="field bookmark-add-input" dir="auto"
                    placeholder="${lang === 'fa' ? `عنوان نشانک (صفحه ${curPage})…` : `Bookmark title (Page ${curPage})…`}"
-                   aria-label="Bookmark title">
-            <button type="button" class="primary-btn is-sm bookmark-add-btn" id="add-page-bookmark-btn" title="Bookmark current page">
+                   aria-label="${lang === 'fa' ? 'عنوان نشانک' : 'Bookmark title'}">
+            <button type="button" class="primary-btn is-sm bookmark-add-btn" id="add-page-bookmark-btn" title="${lang === 'fa' ? 'نشانه‌گذاری صفحه فعلی' : 'Bookmark current page'}">
               ${getIconSvg('bookmarkPlus', 14)}
               <span>${lang === 'fa' ? `افزودن ص ${curPage}` : `+ Page ${curPage}`}</span>
             </button>
@@ -340,7 +363,7 @@ export class SidePanelsComponent {
                   <span class="list-card-icon" style="color:var(--accent);">${getIconSvg('bookmark', 13)}</span>
                   <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(ub.title)}</span>
                   <span class="bookmark-page-pill">${ub.pageIndex + 1}</span>
-                  <button type="button" class="bookmark-delete-btn" data-remove-bookmark="${escapeHtml(ub.id)}" title="Remove bookmark" aria-label="Remove bookmark">
+                  <button type="button" class="bookmark-delete-btn" data-remove-bookmark="${escapeHtml(ub.id)}" title="${lang === 'fa' ? 'حذف نشانک' : 'Remove bookmark'}" aria-label="${lang === 'fa' ? 'حذف نشانک' : 'Remove bookmark'}">
                     ${getIconSvg('close', 11)}
                   </button>
                 </div>
@@ -414,16 +437,16 @@ export class SidePanelsComponent {
             <input type="search" id="pdf-search-input" class="sidebar-search-input" dir="auto"
                    value="${escapeHtml(store.searchQuery)}"
                    placeholder="${lang === 'fa' ? 'جستجوی متن در سند…' : 'Search text in document…'}"
-                   aria-label="Search text in document">
+                   aria-label="${lang === 'fa' ? 'جستجوی متن در سند' : 'Search text in document'}">
             <span id="search-status-bar" class="sidebar-search-count"></span>
             <div class="sidebar-search-actions">
-              <button type="button" class="sidebar-search-nav-btn" id="pdf-search-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">
+              <button type="button" class="sidebar-search-nav-btn" id="pdf-search-prev" title="${lang === 'fa' ? 'نتیجه قبلی (Shift+Enter)' : 'Previous match (Shift+Enter)'}" aria-label="${lang === 'fa' ? 'نتیجه قبلی' : 'Previous match'}">
                 ${getIconSvg('chevronUp', 14)}
               </button>
-              <button type="button" class="sidebar-search-nav-btn" id="pdf-search-next" title="Next match (Enter)" aria-label="Next match">
+              <button type="button" class="sidebar-search-nav-btn" id="pdf-search-next" title="${lang === 'fa' ? 'نتیجه بعدی (Enter)' : 'Next match (Enter)'}" aria-label="${lang === 'fa' ? 'نتیجه بعدی' : 'Next match'}">
                 ${getIconSvg('chevronDown', 14)}
               </button>
-              <button type="button" class="sidebar-search-nav-btn is-clear" id="pdf-search-clear" title="Clear search (Esc)" aria-label="Clear search">
+              <button type="button" class="sidebar-search-nav-btn is-clear" id="pdf-search-clear" title="${lang === 'fa' ? 'پاک کردن جستجو (Esc)' : 'Clear search (Esc)'}" aria-label="${lang === 'fa' ? 'پاک کردن جستجو' : 'Clear search'}">
                 ${getIconSvg('close', 13)}
               </button>
             </div>
@@ -519,7 +542,7 @@ export class SidePanelsComponent {
               <div class="list-card history-item-card ${h.isCurrent ? 'is-current' : ''}">
                 <span class="list-card-icon">${getIconSvg('clock', 13)}</span>
                 <div style="flex:1; min-width:0;">
-                  <div class="list-card-title" dir="auto">${escapeHtml(h.description)}</div>
+                  <div class="list-card-title" dir="auto">${escapeHtml(this.localizeHistoryDescription(h.description, lang))}</div>
                   <span class="list-card-meta">${new Date(h.timestamp).toLocaleTimeString()}</span>
                 </div>
               </div>

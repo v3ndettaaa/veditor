@@ -22,6 +22,8 @@ import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { PDFFolder, RecentDocItem, NotebookSpec } from '../../core/types';
 import { NotebookDialogComponent } from './notebook-dialog';
+import { store } from '../../core/store';
+import { tr } from '../i18n';
 
 export interface LandingPageCallbacks {
   onOpenFile: () => void;
@@ -36,6 +38,15 @@ type LibrarySortBy = 'recent' | 'name' | 'pages';
 const VIEW_MODE_STORAGE_KEY = 'veditor_library_view_mode';
 const SORT_BY_STORAGE_KEY = 'veditor_library_sort_by';
 
+const FOLDER_ICON_LABELS_FA: Record<string, string> = {
+  folder: 'پوشه',
+  book: 'کتاب',
+  briefcase: 'کار و پروژه',
+  star: 'ستاره',
+  tag: 'برچسب',
+  code: 'کد و فنی'
+};
+
 export class LandingPageComponent {
   private _container: HTMLElement;
   private _callbacks: LandingPageCallbacks;
@@ -49,11 +60,22 @@ export class LandingPageComponent {
   private _showCreateFolderModal: boolean = false;
   private _selectedFolderColor: string = '#6366f1';
   private _selectedFolderIcon: string = 'folder';
+  private _lastLang: 'en' | 'fa' = store.appSettings.language;
 
   constructor(container: HTMLElement, callbacks: LandingPageCallbacks) {
     this._container = container;
     this._callbacks = callbacks;
     this.loadPreferences();
+    store.subscribe(() => {
+      if (store.appSettings.language !== this._lastLang) {
+        this._lastLang = store.appSettings.language;
+        const host = this._container as HTMLElement & { __landingInstance?: LandingPageComponent };
+        host.__landingInstance = undefined;
+        if (this._container.isConnected && this._container.style.display !== 'none') {
+          void this.render();
+        }
+      }
+    });
   }
 
   private loadPreferences(): void {
@@ -82,6 +104,7 @@ export class LandingPageComponent {
       this._recentDocs = await getRecentDocuments();
     } catch (_) {}
 
+    this._lastLang = store.appSettings.language;
     this.ensureShellMounted();
     this.updateLibraryDOM();
     this.updateFolderModalDOM();
@@ -106,29 +129,32 @@ export class LandingPageComponent {
           <div class="landing-hero">
             <div class="landing-kicker">
               ${getIconSvg('shieldCheck', 14)}
-              <span>Private Offline Workspace</span>
+              <span>${tr('Private Offline Workspace', 'میزکار خصوصی و کاملاً آفلاین')}</span>
               <span aria-hidden="true">&middot;</span>
-              <span>Zero Cloud Uploads</span>
+              <span>${tr('Zero Cloud Uploads', 'بدون هیچ آپلود ابری')}</span>
             </div>
-            <h1 class="landing-title">Your PDFs.<br><span>Engineered for ink.</span></h1>
+            <h1 class="landing-title">${tr('Your PDFs.<br><span>Engineered for ink.</span>', 'اسناد PDF شما.<br><span>مهندسی‌شده برای نوشتن روان.</span>')}</h1>
             <p class="landing-subtitle">
-              Read, annotate, sign, and organize documents and custom notebooks in a high-frame-rate workspace built for stylus, mouse, and touch.
+              ${tr(
+                'Read, annotate, sign, and organize documents and custom notebooks in a high-frame-rate workspace built for stylus, mouse, and touch.',
+                'مطالعه، حاشیه‌نویسی، امضا و سازمان‌دهی کتاب‌ها و دفترهای یادداشت سفارشی در محیطی فوق‌سریع و بهینه‌شده برای قلم نوری، ماوس و لمس.'
+              )}
             </p>
 
-            <div class="landing-metrics-strip" aria-label="Workspace capabilities">
+            <div class="landing-metrics-strip" aria-label="${tr('Workspace capabilities', 'قابلیت‌های میزکار')}">
               <div class="landing-metric-item">
                 <span class="landing-metric-val">120 Hz</span>
-                <span class="landing-metric-label">Coalesced spline ink</span>
+                <span class="landing-metric-label">${tr('Coalesced spline ink', 'رسم برداری فوق‌نرم')}</span>
               </div>
               <div class="landing-metric-divider" aria-hidden="true"></div>
               <div class="landing-metric-item">
-                <span class="landing-metric-val">500+ pg</span>
-                <span class="landing-metric-label">Virtualized rendering</span>
+                <span class="landing-metric-val">${tr('500+ pg', '+۵۰۰ صفحه')}</span>
+                <span class="landing-metric-label">${tr('Virtualized rendering', 'رندر مجازی بدون لگ')}</span>
               </div>
               <div class="landing-metric-divider" aria-hidden="true"></div>
               <div class="landing-metric-item">
                 <span class="landing-metric-val">100%</span>
-                <span class="landing-metric-label">Local IndexedDB vault</span>
+                <span class="landing-metric-label">${tr('Local IndexedDB vault', 'ذخیره‌سازی امن محلی')}</span>
               </div>
             </div>
           </div>
@@ -142,50 +168,50 @@ export class LandingPageComponent {
                 <span class="dropzone-icon-plus">${getIconSvg('plus', 11, 2.5)}</span>
               </div>
             </div>
-            <div class="dropzone-prompt">Open a PDF or start a notebook</div>
-            <div class="dropzone-hint">Drag and drop any PDF file here, or choose an action below</div>
+            <div class="dropzone-prompt">${tr('Open a PDF or start a notebook', 'یک فایل PDF باز کنید یا دفتر یادداشت بسازید')}</div>
+            <div class="dropzone-hint">${tr('Drag and drop any PDF file here, or choose an action below', 'فایل PDF را اینجا بکشید و رها کنید، یا یکی از گزینه‌های زیر را انتخاب کنید')}</div>
 
             <div class="dropzone-actions" id="dropzone-actions-group">
               <button class="primary-btn is-lg" id="landing-open-btn">
                 ${getIconSvg('folder', 16)}
-                <span>Choose PDF</span>
+                <span>${tr('Choose PDF', 'انتخاب فایل PDF')}</span>
               </button>
 
-              <button class="secondary-btn is-lg" id="landing-notebook-btn" title="Create a customizable ruled, grid, or dotted notebook">
+              <button class="secondary-btn is-lg" id="landing-notebook-btn" title="${tr('Create a customizable ruled, grid, or dotted notebook', 'ساخت دفتر یادداشت سفارشی خط‌دار، شطرنجی یا نقطه‌ای')}">
                 ${getIconSvg('notebook', 16)}
-                <span>New notebook</span>
+                <span>${tr('New notebook', 'دفتر یادداشت جدید')}</span>
               </button>
 
-              <button class="secondary-btn is-lg" id="landing-sample-btn" title="Explore veditor with an interactive sample PDF">
+              <button class="secondary-btn is-lg" id="landing-sample-btn" title="${tr('Explore veditor with an interactive sample PDF', 'آشنایی با امکانات برنامه از طریق فایل PDF نمونه')}">
                 ${getIconSvg('sparkles', 16)}
-                <span>Try sample</span>
+                <span>${tr('Try sample', 'امتحان فایل نمونه')}</span>
               </button>
             </div>
 
             <div class="dropzone-quick-templates" id="dropzone-quick-templates">
-              <span class="dropzone-quick-label">Quick paper:</span>
-              <button type="button" class="dropzone-template-btn" data-quick-preset="ruled" title="Create Ruled Notebook">
+              <span class="dropzone-quick-label">${tr('Quick paper:', 'کاغذ سریع:')}</span>
+              <button type="button" class="dropzone-template-btn" data-quick-preset="ruled" title="${tr('Create Ruled Notebook', 'ساخت دفتر خط‌دار')}">
                 ${getIconSvg('linedPage', 12)}
-                <span>Ruled</span>
+                <span>${tr('Ruled', 'خط‌دار')}</span>
               </button>
-              <button type="button" class="dropzone-template-btn" data-quick-preset="graph" title="Create Graph Grid Notebook">
+              <button type="button" class="dropzone-template-btn" data-quick-preset="graph" title="${tr('Create Graph Grid Notebook', 'ساخت دفتر شطرنجی')}">
                 ${getIconSvg('gridPage', 12)}
-                <span>Grid</span>
+                <span>${tr('Grid', 'شطرنجی')}</span>
               </button>
-              <button type="button" class="dropzone-template-btn" data-quick-preset="bullet" title="Create Dot Grid Journal">
+              <button type="button" class="dropzone-template-btn" data-quick-preset="bullet" title="${tr('Create Dot Grid Journal', 'ساخت دفتر نقطه‌ای')}">
                 ${getIconSvg('dotsPage', 12)}
-                <span>Dots</span>
+                <span>${tr('Dots', 'نقطه‌ای')}</span>
               </button>
-              <button type="button" class="dropzone-template-btn" data-quick-preset="dark" title="Create Night Dark Notebook">
+              <button type="button" class="dropzone-template-btn" data-quick-preset="dark" title="${tr('Create Night Dark Notebook', 'ساخت دفتر کاغذ تیره شب')}">
                 ${getIconSvg('moon', 12)}
-                <span>Night</span>
+                <span>${tr('Night', 'تیره (شب)')}</span>
               </button>
             </div>
           </div>
         </div>
 
         <!-- Document Library Studio -->
-        <section class="landing-section library-studio" aria-label="Document Library">
+        <section class="landing-section library-studio" aria-label="${tr('Document Library', 'کتابخانه اسناد')}">
           <div id="landing-library-body"></div>
         </section>
 
@@ -198,70 +224,88 @@ export class LandingPageComponent {
             <div class="feature-icon-badge" style="background:rgba(99,102,241,0.12); color:#818cf8;">
               ${getIconSvg('pen', 20)}
             </div>
-            <div class="feature-box-title">Stylus & Pressure Dynamics</div>
-            <p class="feature-box-desc">Sub-pixel coalesced pointer events, natural tilt & speed sensitivity, Catmull-Rom spline smoothing, and configurable response curves.</p>
+            <div class="feature-box-title">${tr('Stylus & Pressure Dynamics', 'پشتیبانی کامل از قلم نوری و فشار')}</div>
+            <p class="feature-box-desc">${tr(
+              'Sub-pixel coalesced pointer events, natural tilt & speed sensitivity, Catmull-Rom spline smoothing, and configurable response curves.',
+              'دریافت دقیق نقاط زیرپیکسلی، حساسیت واقعی فشار قلم نوری، نرم‌سازی منحنی‌های Catmull-Rom و منحنی‌های پاسخ‌دهی قابل تنظیم.'
+            )}</p>
           </div>
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(16,185,129,0.12); color:#34d399;">
               ${getIconSvg('zap', 20)}
             </div>
-            <div class="feature-box-title">Zero-Flicker Double Buffering</div>
-            <p class="feature-box-desc">Offscreen canvas rendering pipeline delivers continuous scrolling and instant page switching across 500+ page technical books.</p>
+            <div class="feature-box-title">${tr('Zero-Flicker Double Buffering', 'رندر دوگانه بدون پرش تصویر')}</div>
+            <p class="feature-box-desc">${tr(
+              'Offscreen canvas rendering pipeline delivers continuous scrolling and instant page switching across 500+ page technical books.',
+              'خط لوله رندر بوم خارج از صفحه، اسکرول پیوسته و جابه‌جایی آنی صفحات را در کتاب‌های سنگین بالای ۵۰۰ صفحه تضمین می‌کند.'
+            )}</p>
           </div>
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(244,114,182,0.12); color:#f472b6;">
               ${getIconSvg('eraser', 20)}
             </div>
-            <div class="feature-box-title">Precision Segment Eraser</div>
-            <p class="feature-box-desc">Switch seamlessly between whole Stroke Erasing, Object Erasing, or surgical Pixel Slicing that divides ink strokes at exact contact points.</p>
+            <div class="feature-box-title">${tr('Precision Segment Eraser', 'پاک‌کن دقیق نقطه‌ای و بخشی')}</div>
+            <p class="feature-box-desc">${tr(
+              'Switch seamlessly between whole Stroke Erasing, Object Erasing, or surgical Pixel Slicing that divides ink strokes at exact contact points.',
+              'امکان جابه‌جایی سریع بین پاک کردن کل خط، پاک کردن شکل یا برش دقیق پیکسلی که خطوط جوهر را دقیقاً در محل تماس تقسیم می‌کند.'
+            )}</p>
           </div>
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(59,130,246,0.12); color:#60a5fa;">
               ${getIconSvg('shieldCheck', 20)}
             </div>
-            <div class="feature-box-title">100% Private & Offline</div>
-            <p class="feature-box-desc">Runs entirely inside your local sandbox. Zero server uploads, zero analytics, zero external requests. Your documents stay on your machine.</p>
+            <div class="feature-box-title">${tr('100% Private & Offline', '۱۰۰٪ خصوصی و بدون نیاز به اینترنت')}</div>
+            <p class="feature-box-desc">${tr(
+              'Runs entirely inside your local sandbox. Zero server uploads, zero analytics, zero external requests. Your documents stay on your machine.',
+              'تمام پردازش‌ها درون دستگاه شما انجام می‌شود؛ بدون ارسال به سرور، بدون ردیابی و بدون درخواست خارجی. اسناد شما فقط روی سیستم خودتان می‌ماند.'
+            )}</p>
           </div>
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(245,158,11,0.12); color:#fbbf24;">
               ${getIconSvg('stamp', 20)}
             </div>
-            <div class="feature-box-title">Vector-Perfect PDF Export</div>
-            <p class="feature-box-desc">Save annotations directly into native PDF streams so your ink, shapes, and sticky notes stay razor-sharp at any magnification.</p>
+            <div class="feature-box-title">${tr('Vector-Perfect PDF Export', 'خروجی PDF با کیفیت کاملاً برداری')}</div>
+            <p class="feature-box-desc">${tr(
+              'Save annotations directly into native PDF streams so your ink, shapes, and sticky notes stay razor-sharp at any magnification.',
+              'ذخیره مستقیم دست‌خط‌ها، اشکال و یادداشت‌ها درون ساختار استاندارد PDF تا در هر بزرگ‌نمایی کاملاً شفاف و باکیفیت باقی بمانند.'
+            )}</p>
           </div>
 
           <div class="feature-box">
             <div class="feature-icon-badge" style="background:rgba(139,92,246,0.12); color:#a78bfa;">
               ${getIconSvg('command', 20)}
             </div>
-            <div class="feature-box-title">Keyboard-First Workflow</div>
-            <p class="feature-box-desc">Single-key tool shortcuts, customizable keybindings, instant zoom presets, per-tab Undo/Redo stacks, and Command Palette.</p>
+            <div class="feature-box-title">${tr('Keyboard-First Workflow', 'جریان کاری سریع با میانبرهای صفحه‌کلید')}</div>
+            <p class="feature-box-desc">${tr(
+              'Single-key tool shortcuts, customizable keybindings, instant zoom presets, per-tab Undo/Redo stacks, and Command Palette.',
+              'میانبرهای تک‌کلیدی برای تمام ابزارها، قابلیت شخصی‌سازی کلیدها، تاریخچه مستقل واگرد/ازنو برای هر تب و پالت فرمان سریع.'
+            )}</p>
           </div>
         </div>
 
         <!-- Shortcuts Quick Cheat Sheet -->
         <div class="shortcuts-sheet">
           <div class="shortcuts-sheet-header">
-            <span>Keyboard Shortcuts Reference</span>
-            <span class="shortcuts-sheet-sub">All tool keys can be customized in Settings</span>
+            <span>${tr('Keyboard Shortcuts Reference', 'راهنمای سریع میانبرهای صفحه‌کلید')}</span>
+            <span class="shortcuts-sheet-sub">${tr('All tool keys can be customized in Settings', 'تمام کلیدهای میانبر در بخش تنظیمات قابل تغییر هستند')}</span>
           </div>
           <div class="shortcuts-sheet-grid">
-            <div class="shortcut-item"><span>Select & Transform</span> <kbd class="shortcut-kbd">V</kbd></div>
-            <div class="shortcut-item"><span>Freehand Pen</span> <kbd class="shortcut-kbd">P</kbd></div>
-            <div class="shortcut-item"><span>Highlighter</span> <kbd class="shortcut-kbd">H</kbd></div>
-            <div class="shortcut-item"><span>Eraser</span> <kbd class="shortcut-kbd">E</kbd></div>
-            <div class="shortcut-item"><span>Rectangle</span> <kbd class="shortcut-kbd">R</kbd></div>
-            <div class="shortcut-item"><span>Polygon</span> <kbd class="shortcut-kbd">G</kbd></div>
-            <div class="shortcut-item"><span>Text Box</span> <kbd class="shortcut-kbd">T</kbd></div>
-            <div class="shortcut-item"><span>Scratchpad</span> <kbd class="shortcut-kbd">N</kbd></div>
-            <div class="shortcut-item"><span>Undo / Redo</span> <kbd class="shortcut-kbd">Ctrl+Z / Y</kbd></div>
-            <div class="shortcut-item"><span>Open File</span> <kbd class="shortcut-kbd">Ctrl+O</kbd></div>
-            <div class="shortcut-item"><span>Save PDF</span> <kbd class="shortcut-kbd">Ctrl+S</kbd></div>
-            <div class="shortcut-item"><span>Command Palette</span> <kbd class="shortcut-kbd">Ctrl+K</kbd></div>
+            <div class="shortcut-item"><span>${tr('Select & Transform', 'انتخاب و تغییر شکل')}</span> <kbd class="shortcut-kbd">V</kbd></div>
+            <div class="shortcut-item"><span>${tr('Freehand Pen', 'قلم آزاد')}</span> <kbd class="shortcut-kbd">P</kbd></div>
+            <div class="shortcut-item"><span>${tr('Highlighter', 'ماژیک هایلایت')}</span> <kbd class="shortcut-kbd">H</kbd></div>
+            <div class="shortcut-item"><span>${tr('Eraser', 'پاک‌کن')}</span> <kbd class="shortcut-kbd">E</kbd></div>
+            <div class="shortcut-item"><span>${tr('Rectangle', 'مستطیل')}</span> <kbd class="shortcut-kbd">R</kbd></div>
+            <div class="shortcut-item"><span>${tr('Polygon', 'چندضلعی')}</span> <kbd class="shortcut-kbd">G</kbd></div>
+            <div class="shortcut-item"><span>${tr('Text Box', 'کادر متن')}</span> <kbd class="shortcut-kbd">T</kbd></div>
+            <div class="shortcut-item"><span>${tr('Scratchpad', 'چرک‌نویس')}</span> <kbd class="shortcut-kbd">N</kbd></div>
+            <div class="shortcut-item"><span>${tr('Undo / Redo', 'واگرد / ازنو')}</span> <kbd class="shortcut-kbd">Ctrl+Z / Y</kbd></div>
+            <div class="shortcut-item"><span>${tr('Open File', 'باز کردن فایل')}</span> <kbd class="shortcut-kbd">Ctrl+O</kbd></div>
+            <div class="shortcut-item"><span>${tr('Save PDF', 'ذخیره PDF')}</span> <kbd class="shortcut-kbd">Ctrl+S</kbd></div>
+            <div class="shortcut-item"><span>${tr('Command Palette', 'پالت فرمان')}</span> <kbd class="shortcut-kbd">Ctrl+K</kbd></div>
           </div>
         </div>
       </div>
@@ -288,10 +332,10 @@ export class LandingPageComponent {
               <span class="landing-section-icon">${getIconSvg('bookOpen', 17)}</span>
               <div>
                 <div class="library-heading-row">
-                  <span>Document Library</span>
+                  <span>${tr('Document Library', 'کتابخانه اسناد')}</span>
                   <span class="library-total-summary" id="library-total-summary"></span>
                 </div>
-                <small>Pick up right where you left off — organized locally on your device</small>
+                <small>${tr('Pick up right where you left off — organized locally on your device', 'ادامه مطالعه دقیقاً از آخرین صفحه — سازمان‌دهی‌شده روی دستگاه شما')}</small>
               </div>
             </div>
 
@@ -303,9 +347,9 @@ export class LandingPageComponent {
                   type="search"
                   id="library-search-input"
                   class="library-search-input"
-                  placeholder="Search documents or folders…"
+                  placeholder="${tr('Search documents or folders…', 'جستجوی نام سند یا پوشه…')}"
                   value="${escapeHtml(this._searchQuery)}"
-                  aria-label="Search documents in library"
+                  aria-label="${tr('Search documents in library', 'جستجوی اسناد در کتابخانه')}"
                   autocomplete="off"
                   spellcheck="false"
                 />
@@ -313,8 +357,8 @@ export class LandingPageComponent {
                   type="button"
                   id="library-search-clear"
                   class="library-search-clear"
-                  title="Clear search"
-                  aria-label="Clear search"
+                  title="${tr('Clear search', 'پاک کردن جستجو')}"
+                  aria-label="${tr('Clear search', 'پاک کردن جستجو')}"
                   ${this._searchQuery ? '' : 'hidden'}
                 >
                   ${getIconSvg('close', 12)}
@@ -322,38 +366,38 @@ export class LandingPageComponent {
               </div>
 
               <!-- Sort Selector -->
-              <div class="library-sort-wrap" title="Sort documents">
+              <div class="library-sort-wrap" title="${tr('Sort documents', 'مرتب‌سازی اسناد')}">
                 <span class="library-sort-icon">${getIconSvg('sort', 13)}</span>
-                <select id="library-sort-select" class="field library-sort-select" aria-label="Sort documents">
-                  <option value="recent" ${this._sortBy === 'recent' ? 'selected' : ''}>Sort: Recent</option>
-                  <option value="name" ${this._sortBy === 'name' ? 'selected' : ''}>Sort: Name (A–Z)</option>
-                  <option value="pages" ${this._sortBy === 'pages' ? 'selected' : ''}>Sort: Page count</option>
+                <select id="library-sort-select" class="field library-sort-select" aria-label="${tr('Sort documents', 'مرتب‌سازی اسناد')}">
+                  <option value="recent" ${this._sortBy === 'recent' ? 'selected' : ''}>${tr('Sort: Recent', 'مرتب‌سازی: اخیر')}</option>
+                  <option value="name" ${this._sortBy === 'name' ? 'selected' : ''}>${tr('Sort: Name (A–Z)', 'مرتب‌سازی: نام (الفبایی)')}</option>
+                  <option value="pages" ${this._sortBy === 'pages' ? 'selected' : ''}>${tr('Sort: Page count', 'مرتب‌سازی: تعداد صفحات')}</option>
                 </select>
               </div>
 
               <!-- View Mode Toggle (Gallery Cards vs Compact List) -->
-              <div class="library-view-toggle" role="group" aria-label="Library view mode">
+              <div class="library-view-toggle" role="group" aria-label="${tr('Library view mode', 'حالت نمایش کتابخانه')}">
                 <button
                   type="button"
                   class="library-view-btn ${this._viewMode === 'grid' ? 'active' : ''}"
                   data-library-view="grid"
-                  title="Gallery Card View"
-                  aria-label="Gallery Card View"
+                  title="${tr('Gallery Card View', 'نمای شبکه‌ای (کارت‌ها)')}"
+                  aria-label="${tr('Gallery Card View', 'نمای شبکه‌ای (کارت‌ها)')}"
                   aria-pressed="${this._viewMode === 'grid'}"
                 >
                   ${getIconSvg('gridView', 14)}
-                  <span>Cards</span>
+                  <span>${tr('Cards', 'کارت‌ها')}</span>
                 </button>
                 <button
                   type="button"
                   class="library-view-btn ${this._viewMode === 'list' ? 'active' : ''}"
                   data-library-view="list"
-                  title="Compact List View"
-                  aria-label="Compact List View"
+                  title="${tr('Compact List View', 'نمای فهرستی فشرده')}"
+                  aria-label="${tr('Compact List View', 'نمای فهرستی فشرده')}"
                   aria-pressed="${this._viewMode === 'list'}"
                 >
                   ${getIconSvg('listView', 14)}
-                  <span>List</span>
+                  <span>${tr('List', 'فهرست')}</span>
                 </button>
               </div>
             </div>
@@ -394,18 +438,21 @@ export class LandingPageComponent {
     const uncategorizedCount = this._recentDocs.filter(d => !d.folderId).length;
 
     if (summaryEl) {
-      summaryEl.textContent = `${allCount} ${allCount === 1 ? 'document' : 'documents'} · ${this._folders.length} ${this._folders.length === 1 ? 'folder' : 'folders'}`;
+      summaryEl.textContent = tr(
+        `${allCount} ${allCount === 1 ? 'document' : 'documents'} · ${this._folders.length} ${this._folders.length === 1 ? 'folder' : 'folders'}`,
+        `${allCount} سند · ${this._folders.length} پوشه`
+      );
     }
 
     folderBar.innerHTML = `
       <div class="folder-pills-scroll">
         <button type="button" class="folder-tab-pill ${this._activeFolderId === 'all' ? 'active' : ''}" data-folder-pill="all">
-          <span>All Files</span>
+          <span>${tr('All Files', 'همه فایل‌ها')}</span>
           <span class="folder-count">${allCount}</span>
         </button>
 
         <button type="button" class="folder-tab-pill ${this._activeFolderId === 'uncategorized' ? 'active' : ''}" data-folder-pill="uncategorized">
-          <span>Uncategorized</span>
+          <span>${tr('Uncategorized', 'بدون دسته‌بندی')}</span>
           <span class="folder-count">${uncategorizedCount}</span>
         </button>
 
@@ -423,9 +470,9 @@ export class LandingPageComponent {
         }).join('')}
       </div>
 
-      <button type="button" class="folder-new-btn" id="open-new-folder-modal-btn" title="Create a new folder category">
+      <button type="button" class="folder-new-btn" id="open-new-folder-modal-btn" title="${tr('Create a new folder category', 'ساخت پوشه دسته‌بندی جدید')}">
         ${getIconSvg('folderPlus', 14)}
-        <span>New Folder</span>
+        <span>${tr('New Folder', 'پوشه جدید')}</span>
       </button>
     `;
 
@@ -490,7 +537,7 @@ export class LandingPageComponent {
   private renderDocumentCover(doc: RecentDocItem, folder?: PDFFolder): string {
     const accentColor = folder?.color || '#6366f1';
     const pageBadge = doc.pageCount && doc.pageCount > 0
-      ? `<span class="cover-page-count">${doc.pageCount} ${doc.pageCount === 1 ? 'p' : 'pp'}</span>`
+      ? `<span class="cover-page-count">${tr(`${doc.pageCount} ${doc.pageCount === 1 ? 'p' : 'pp'}`, `${doc.pageCount} ص`)}</span>`
       : '';
 
     if (doc.thumbnailDataUrl) {
@@ -549,11 +596,11 @@ export class LandingPageComponent {
           </span>
           <span><strong>${escapeHtml(activeFolder.name)}</strong></span>
           <span aria-hidden="true">&middot;</span>
-          <span class="tabular-nums">${filteredDocs.length} ${filteredDocs.length === 1 ? 'document' : 'documents'}</span>
+          <span class="tabular-nums">${tr(`${filteredDocs.length} ${filteredDocs.length === 1 ? 'document' : 'documents'}`, `${filteredDocs.length} سند`)}</span>
         </div>
-        <button type="button" class="folder-danger-btn" id="delete-current-folder-btn" data-del-folder="${escapeHtml(activeFolder.id)}" title="Delete this folder category">
+        <button type="button" class="folder-danger-btn" id="delete-current-folder-btn" data-del-folder="${escapeHtml(activeFolder.id)}" title="${tr('Delete this folder category', 'حذف این پوشه دسته‌بندی')}">
           ${getIconSvg('trash', 13)}
-          <span>Delete Folder</span>
+          <span>${tr('Delete Folder', 'حذف پوشه')}</span>
         </button>
       </div>
     ` : '';
@@ -568,30 +615,30 @@ export class LandingPageComponent {
           </div>
           <div class="folder-empty-title">
             ${hasSearch
-              ? `No documents match “${escapeHtml(this._searchQuery.trim())}”`
+              ? tr(`No documents match “${escapeHtml(this._searchQuery.trim())}”`, `هیچ سندی با «${escapeHtml(this._searchQuery.trim())}» مطابقت ندارد`)
               : activeFolder
-                ? `No documents in “${escapeHtml(activeFolder.name)}” yet`
-                : 'Your document library is ready'}
+                ? tr(`No documents in “${escapeHtml(activeFolder.name)}” yet`, `هنوز سندی در پوشه «${escapeHtml(activeFolder.name)}» وجود ندارد`)
+                : tr('Your document library is ready', 'کتابخانه اسناد شما آماده است')}
           </div>
           <p class="folder-empty-desc">
             ${hasSearch
-              ? 'Try a different keyword or clear the search filter to see all files.'
-              : 'Open a PDF from your device, start a fresh notebook, or assign existing files to this folder.'}
+              ? tr('Try a different keyword or clear the search filter to see all files.', 'عبارت دیگری را جستجو کنید یا فیلتر جستجو را پاک کنید تا همه فایل‌ها نمایش داده شوند.')
+              : tr('Open a PDF from your device, start a fresh notebook, or assign existing files to this folder.', 'یک فایل PDF از دستگاه خود باز کنید، یک دفتر یادداشت جدید بسازید یا فایل‌های موجود را به این پوشه منتقل کنید.')}
           </p>
           <div class="folder-empty-actions">
             ${hasSearch ? `
               <button type="button" class="secondary-btn" id="empty-clear-search-btn">
                 ${getIconSvg('close', 13)}
-                <span>Clear Search</span>
+                <span>${tr('Clear Search', 'پاک کردن جستجو')}</span>
               </button>
             ` : `
               <button type="button" class="primary-btn" id="empty-open-pdf-btn">
                 ${getIconSvg('folder', 14)}
-                <span>Choose PDF</span>
+                <span>${tr('Choose PDF', 'انتخاب فایل PDF')}</span>
               </button>
               <button type="button" class="secondary-btn" id="empty-new-notebook-btn">
                 ${getIconSvg('notebook', 14)}
-                <span>New Notebook</span>
+                <span>${tr('New Notebook', 'دفتر یادداشت جدید')}</span>
               </button>
             `}
           </div>
@@ -622,13 +669,13 @@ export class LandingPageComponent {
                       class="field recent-rename-input"
                       data-rename-input="${escapeHtml(doc.id)}"
                       value="${escapeHtml(cleanDisplayName)}"
-                      aria-label="Rename document"
+                      aria-label="${tr('Rename document', 'تغییر نام سند')}"
                     />
                   ` : `
                     <div class="recent-card-name" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</div>
                   `}
                   <div class="recent-card-meta">
-                    <span class="tabular-nums">${doc.pageCount ? `${doc.pageCount} ${doc.pageCount === 1 ? 'page' : 'pages'}` : 'PDF document'}</span>
+                    <span class="tabular-nums">${doc.pageCount ? tr(`${doc.pageCount} ${doc.pageCount === 1 ? 'page' : 'pages'}`, `${doc.pageCount} صفحه`) : tr('PDF document', 'سند PDF')}</span>
                     <span aria-hidden="true">&middot;</span>
                     <span class="tabular-nums">${this.formatRelativeTime(doc.lastOpenedAt)}</span>
                     ${docFolder ? `
@@ -642,16 +689,16 @@ export class LandingPageComponent {
                 </div>
 
                 <div class="recent-card-actions">
-                  <select class="recent-folder-select" data-doc-assign="${escapeHtml(doc.id)}" title="Assign folder category" aria-label="Assign folder category">
-                    <option value="none" ${!doc.folderId ? 'selected' : ''}>Uncategorized</option>
+                  <select class="recent-folder-select" data-doc-assign="${escapeHtml(doc.id)}" title="${tr('Assign folder category', 'تخصیص به پوشه')}" aria-label="${tr('Assign folder category', 'تخصیص به پوشه')}">
+                    <option value="none" ${!doc.folderId ? 'selected' : ''}>${tr('Uncategorized', 'بدون دسته‌بندی')}</option>
                     ${this._folders.map(f => `
                       <option value="${escapeHtml(f.id)}" ${doc.folderId === f.id ? 'selected' : ''}>${escapeHtml(f.name)}</option>
                     `).join('')}
                   </select>
-                  <button type="button" class="recent-action-btn" data-rename-doc="${escapeHtml(doc.id)}" title="Rename document" aria-label="Rename document">
+                  <button type="button" class="recent-action-btn" data-rename-doc="${escapeHtml(doc.id)}" title="${tr('Rename document', 'تغییر نام سند')}" aria-label="${tr('Rename document', 'تغییر نام سند')}">
                     ${getIconSvg('edit', 13)}
                   </button>
-                  <button type="button" class="recent-remove-btn" data-remove-recent="${escapeHtml(doc.id)}" title="Remove from library" aria-label="Remove from library">
+                  <button type="button" class="recent-remove-btn" data-remove-recent="${escapeHtml(doc.id)}" title="${tr('Remove from library', 'حذف از کتابخانه')}" aria-label="${tr('Remove from library', 'حذف از کتابخانه')}">
                     ${getIconSvg('trash', 13)}
                   </button>
                 </div>
@@ -673,10 +720,10 @@ export class LandingPageComponent {
                 <div class="recent-card-cover">
                   ${this.renderDocumentCover(doc, docFolder)}
                   <div class="recent-card-floating-actions">
-                    <button type="button" class="recent-floating-btn" data-rename-doc="${escapeHtml(doc.id)}" title="Rename document" aria-label="Rename document">
+                    <button type="button" class="recent-floating-btn" data-rename-doc="${escapeHtml(doc.id)}" title="${tr('Rename document', 'تغییر نام سند')}" aria-label="${tr('Rename document', 'تغییر نام سند')}">
                       ${getIconSvg('edit', 13)}
                     </button>
-                    <button type="button" class="recent-floating-btn is-danger" data-remove-recent="${escapeHtml(doc.id)}" title="Remove from library" aria-label="Remove from library">
+                    <button type="button" class="recent-floating-btn is-danger" data-remove-recent="${escapeHtml(doc.id)}" title="${tr('Remove from library', 'حذف از کتابخانه')}" aria-label="${tr('Remove from library', 'حذف از کتابخانه')}">
                       ${getIconSvg('trash', 13)}
                     </button>
                   </div>
@@ -690,13 +737,13 @@ export class LandingPageComponent {
                         class="field recent-rename-input"
                         data-rename-input="${escapeHtml(doc.id)}"
                         value="${escapeHtml(cleanDisplayName)}"
-                        aria-label="Rename document"
+                        aria-label="${tr('Rename document', 'تغییر نام سند')}"
                       />
                     ` : `
                       <div class="recent-card-name" data-title-dbl="${escapeHtml(doc.id)}" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</div>
                     `}
                     <div class="recent-card-meta">
-                      <span class="tabular-nums">${doc.pageCount ? `${doc.pageCount} ${doc.pageCount === 1 ? 'page' : 'pages'}` : 'PDF'}</span>
+                      <span class="tabular-nums">${doc.pageCount ? tr(`${doc.pageCount} ${doc.pageCount === 1 ? 'page' : 'pages'}`, `${doc.pageCount} صفحه`) : 'PDF'}</span>
                       <span aria-hidden="true">&middot;</span>
                       <span class="tabular-nums">${this.formatRelativeTime(doc.lastOpenedAt)}</span>
                     </div>
@@ -705,8 +752,8 @@ export class LandingPageComponent {
                   <div class="recent-card-footer recent-card-actions">
                     <div class="recent-folder-select-wrap">
                       <span class="recent-folder-dot" style="background:${docFolder ? docFolder.color : 'var(--text-muted)'};"></span>
-                      <select class="recent-folder-select" data-doc-assign="${escapeHtml(doc.id)}" title="Change Folder Category" aria-label="Change Folder Category">
-                        <option value="none" ${!doc.folderId ? 'selected' : ''}>Uncategorized</option>
+                      <select class="recent-folder-select" data-doc-assign="${escapeHtml(doc.id)}" title="${tr('Change Folder Category', 'تغییر پوشه دسته‌بندی')}" aria-label="${tr('Change Folder Category', 'تغییر پوشه دسته‌بندی')}">
+                        <option value="none" ${!doc.folderId ? 'selected' : ''}>${tr('Uncategorized', 'بدون دسته‌بندی')}</option>
                         ${this._folders.map(f => `
                           <option value="${escapeHtml(f.id)}" ${doc.folderId === f.id ? 'selected' : ''}>${escapeHtml(f.name)}</option>
                         `).join('')}
@@ -957,40 +1004,40 @@ export class LandingPageComponent {
 
     slot.innerHTML = `
       <div class="modal-overlay" id="new-folder-modal-overlay">
-        <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="Create category folder">
+        <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="${tr('Create category folder', 'ساخت پوشه دسته‌بندی')}">
           <div class="panel-header">
             <span class="panel-header-title">
               ${getIconSvg('folderPlus', 16)}
-              Create Category Folder
+              ${tr('Create Category Folder', 'ساخت پوشه دسته‌بندی')}
             </span>
-            <button id="close-folder-modal-btn" class="icon-btn is-small" title="Close" aria-label="Close">
+            <button id="close-folder-modal-btn" class="icon-btn is-small" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">
               ${getIconSvg('close', 14)}
             </button>
           </div>
 
           <div class="form-dialog-body">
             <div class="form-field">
-              <label class="form-label" for="folder-name-input">Folder Name</label>
+              <label class="form-label" for="folder-name-input">${tr('Folder Name', 'نام پوشه')}</label>
               <input type="text" id="folder-name-input" class="field"
-                     placeholder="e.g. Mathematics, Contracts, Research" autofocus />
+                     placeholder="${tr('e.g. Mathematics, Contracts, Research', 'مثلاً: ریاضیات، قراردادها، پژوهش')}" autofocus />
             </div>
 
             <div class="form-field">
-              <span class="form-label">Folder Color</span>
+              <span class="form-label">${tr('Folder Color', 'رنگ پوشه')}</span>
               <div class="chip-row">
                 ${folderColors.map(color => `
                   <button type="button"
                           class="color-swatch is-square ${this._selectedFolderColor === color ? 'active' : ''}"
                           data-pick-folder-color="${color}"
                           style="background-color:${color};"
-                          title="${color}" aria-label="Colour ${color}"
+                          title="${color}" aria-label="${tr(`Colour ${color}`, `رنگ ${color}`)}"
                           aria-pressed="${this._selectedFolderColor === color}"></button>
                 `).join('')}
               </div>
             </div>
 
             <div class="form-field">
-              <span class="form-label">Folder Icon</span>
+              <span class="form-label">${tr('Folder Icon', 'آیکون پوشه')}</span>
               <div class="chip-row">
                 ${folderIcons.map(icon => `
                   <button type="button"
@@ -998,15 +1045,15 @@ export class LandingPageComponent {
                           data-pick-folder-icon="${icon}"
                           aria-pressed="${this._selectedFolderIcon === icon}">
                     ${getIconSvg(icon, 15)}
-                    ${icon}
+                    ${tr(icon, FOLDER_ICON_LABELS_FA[icon] || icon)}
                   </button>
                 `).join('')}
               </div>
             </div>
 
             <div class="form-actions">
-              <button id="cancel-folder-btn" class="secondary-btn">Cancel</button>
-              <button id="submit-folder-btn" class="primary-btn">Create Folder</button>
+              <button id="cancel-folder-btn" class="secondary-btn">${tr('Cancel', 'انصراف')}</button>
+              <button id="submit-folder-btn" class="primary-btn">${tr('Create Folder', 'ایجاد پوشه')}</button>
             </div>
           </div>
         </div>
@@ -1191,9 +1238,9 @@ export class LandingPageComponent {
 
   private formatRelativeTime(timestamp: number): string {
     const diffSec = Math.floor((Date.now() - timestamp) / 1000);
-    if (diffSec < 60) return 'Just now';
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-    return `${Math.floor(diffSec / 86400)}d ago`;
+    if (diffSec < 60) return tr('Just now', 'همین الان');
+    if (diffSec < 3600) return tr(`${Math.floor(diffSec / 60)}m ago`, `${Math.floor(diffSec / 60)} دقیقه پیش`);
+    if (diffSec < 86400) return tr(`${Math.floor(diffSec / 3600)}h ago`, `${Math.floor(diffSec / 3600)} ساعت پیش`);
+    return tr(`${Math.floor(diffSec / 86400)}d ago`, `${Math.floor(diffSec / 86400)} روز پیش`);
   }
 }

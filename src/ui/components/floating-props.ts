@@ -15,6 +15,7 @@ import { textTool } from '../../annotations/tools/text';
 import { STICKY_NOTE_COLORS, stickyNoteTool } from '../../annotations/tools/sticky-note';
 import { pointerHandler } from '../../input/pointer-handler';
 import { showToast } from './toast';
+import { tr } from '../i18n';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
 
@@ -216,6 +217,13 @@ export class FloatingPropsBarComponent {
     const first = selected[0] as any;
     const isShape = selected.some(a => ['rectangle', 'ellipse', 'polygon', 'freeform-shape'].includes(a.type));
     const hasCornerShape = selected.some(a => ['rectangle', 'polygon', 'freeform-shape'].includes(a.type));
+    const isSingleRect = selected.length === 1 && first.type === 'rectangle';
+    const isSingleQuadPoly =
+      selected.length === 1 &&
+      first.type === 'polygon' &&
+      Array.isArray(first.points) &&
+      first.points.length === 4;
+    const rectLockActive = pointerHandler.rectCornerLockMode;
     const currentCornerRadius = Math.max(0, Math.min(48, Math.round(Number.isFinite(first.cornerRadius) ? first.cornerRadius : 0)));
     const isSingleText = selected.length === 1 && first.type === 'text';
     const isSingleSticky = selected.length === 1 && first.type === 'sticky-note';
@@ -239,18 +247,18 @@ export class FloatingPropsBarComponent {
     const swatchColors = isAllSticky
       ? STICKY_NOTE_COLORS
       : [
-          { hex: '#0f172a', label: 'Black' },
-          { hex: '#6366f1', label: 'Indigo' },
-          { hex: '#10b981', label: 'Emerald' },
-          { hex: '#f59e0b', label: 'Amber' },
-          { hex: '#f43f5e', label: 'Rose' }
+          { hex: '#0f172a', label: tr('Black', 'مشکی') },
+          { hex: '#6366f1', label: tr('Indigo', 'نیلی') },
+          { hex: '#10b981', label: tr('Emerald', 'زمردی') },
+          { hex: '#f59e0b', label: tr('Amber', 'کهربایی') },
+          { hex: '#f43f5e', label: tr('Rose', 'سرخابی') }
         ];
 
     this._container.innerHTML = `
       <div class="props-bar-inner">
         <!-- Color Preview & Quick Swatches -->
         <div class="props-bar-group">
-          <label class="props-color-bubble-wrap" title="${isAllSticky ? 'Note paper color' : (isShape ? 'Border / Stroke color' : 'Pick color')}">
+          <label class="props-color-bubble-wrap" title="${isAllSticky ? tr('Note paper color', 'رنگ کاغذ یادداشت') : (isShape ? tr('Border / Stroke color', 'رنگ کادر شکل') : tr('Pick color', 'انتخاب رنگ'))}">
             <span class="props-color-bubble" style="background-color: ${currentColor}"></span>
             <input type="color" class="props-native-color-picker" id="fp-color-picker" value="${this.ensureHex(currentColor)}">
           </label>
@@ -265,60 +273,74 @@ export class FloatingPropsBarComponent {
 
         <!-- Width / Size Stepper -->
         <div class="props-bar-group">
-          <button class="props-icon-btn" id="fp-width-dec" title="Decrease size">−</button>
+          <button class="props-icon-btn" id="fp-width-dec" title="${tr('Decrease size', 'کاهش اندازه')}">−</button>
           <span class="props-size-badge" id="fp-width-readout">${currentWidth}px</span>
-          <button class="props-icon-btn" id="fp-width-inc" title="Increase size">+</button>
+          <button class="props-icon-btn" id="fp-width-inc" title="${tr('Increase size', 'افزایش اندازه')}">+</button>
         </div>
 
         ${isShape ? `
           <div class="props-bar-divider"></div>
           <div class="props-bar-group props-slider-group">
-            <button class="props-pill-btn ${hasFill ? 'active' : ''}" id="fp-fill-toggle" title="Toggle interior fill">
-              Fill
+            <button class="props-pill-btn ${hasFill ? 'active' : ''}" id="fp-fill-toggle" title="${tr('Toggle interior fill', 'فعال/غیرفعال کردن رنگ داخل شکل')}">
+              ${tr('Fill', 'داخل')}
             </button>
-            <label class="props-color-bubble-wrap" title="Fill color">
+            <label class="props-color-bubble-wrap" title="${tr('Fill color', 'رنگ داخل شکل')}">
               <span class="props-color-bubble" id="fp-fill-color-bubble" style="background-color: ${currentFillColor}; width: 16px; height: 16px; opacity: ${hasFill ? Math.max(0.25, currentFillOpacity / 100) : 0.35};"></span>
               <input type="color" class="props-native-color-picker" id="fp-fill-color-picker" value="${this.ensureHex(currentFillColor)}">
             </label>
             <input type="range" class="props-range-slider fp-live-input" id="fp-fill-opacity-slider"
                    min="0" max="100" step="1" value="${hasFill ? currentFillOpacity : 0}"
                    style="--slider-pct:${hasFill ? currentFillOpacity : 0}%"
-                   title="Fill opacity (0-100%, outline stays solid)" aria-label="Shape fill opacity slider">
-            <div class="props-num-badge" title="Type fill opacity percentage (0-100%)">
+                   title="${tr('Fill opacity (0-100%, outline stays solid)', 'شفافیت داخل شکل (۰ تا ۱۰۰٪، کادر ثابت می‌ماند)')}" aria-label="${tr('Shape fill opacity slider', 'شفافیت داخل شکل')}">
+            <div class="props-num-badge" title="${tr('Type fill opacity percentage (0-100%)', 'درصد شفافیت داخل شکل (۰ تا ۱۰۰٪)')}">
               <input type="number" class="props-num-input fp-live-input" id="fp-fill-opacity-input"
                      min="0" max="100" step="1" value="${hasFill ? currentFillOpacity : 0}"
-                     aria-label="Shape fill opacity percentage">
+                     aria-label="${tr('Shape fill opacity percentage', 'درصد شفافیت داخل شکل')}">
               <span class="props-num-unit">%</span>
             </div>
           </div>
           ${hasCornerShape ? `
             <div class="props-bar-divider"></div>
             <div class="props-bar-group props-slider-group">
-              <span class="props-slider-label" title="Corner radius (0 = sharp, up to 48px)">Corner</span>
+              <span class="props-slider-label" title="${tr('Corner radius (0 = sharp, up to 48px)', 'گردی گوشه‌ها (۰ = تیز، تا ۴۸ پیکسل)')}">${tr('Corner', 'گوشه')}</span>
               <input type="range" class="props-range-slider fp-live-input" id="fp-corner-radius-slider"
                      min="0" max="48" step="1" value="${currentCornerRadius}"
                      style="--slider-pct:${Math.round((currentCornerRadius / 48) * 100)}%"
-                     title="Corner radius (0 = sharp, up to 48px)" aria-label="Shape corner radius slider">
-              <div class="props-num-badge" title="Type corner radius in px (0-48)">
+                     title="${tr('Corner radius (0 = sharp, up to 48px)', 'گردی گوشه‌ها (۰ = تیز، تا ۴۸ پیکسل)')}" aria-label="${tr('Shape corner radius slider', 'شعاع گردی گوشه')}">
+              <div class="props-num-badge" title="${tr('Type corner radius in px (0-48)', 'شعاع گردی گوشه به پیکسل (۰ تا ۴۸)')}">
                 <input type="number" class="props-num-input fp-live-input" id="fp-corner-radius-input"
                        min="0" max="48" step="1" value="${currentCornerRadius}"
-                       aria-label="Shape corner radius">
+                       aria-label="${tr('Shape corner radius', 'شعاع گردی گوشه')}">
                 <span class="props-num-unit">px</span>
               </div>
+              ${isSingleRect ? `
+                <button class="props-pill-btn ${rectLockActive ? 'active' : ''}" id="fp-rect-corner-mode-btn"
+                        title="${rectLockActive
+                          ? tr('Corner drag keeps 90° rectangle (click for Free Corner, or hold Shift while dragging)', 'کشیدن گوشه مستطیل ۹۰ درجه را حفظ می‌کند (برای جابه‌جایی آزاد گوشه کلیک کنید یا Shift را نگه دارید)')
+                          : tr('Corner drag moves single vertex freely (click to lock 90° Rectangle, or hold Shift while dragging)', 'کشیدن گوشه فقط همان رأس را آزادانه جابه‌جا می‌کند (برای قفل مستطیل ۹۰ درجه کلیک کنید یا Shift را نگه دارید)')}">
+                  ${rectLockActive ? tr('90° Rect', 'مستطیل ۹۰°') : tr('Free Vertex', 'گوشه آزاد')}
+                </button>
+              ` : ''}
+              ${isSingleQuadPoly ? `
+                <button class="props-pill-btn" id="fp-make-rect-btn"
+                        title="${tr('Snap 4 vertices back into a 90° rectangle', 'تبدیل دوباره ۴ گوشه به مستطیل صاف ۹۰ درجه')}">
+                  ${tr('Make 90° Rect', 'تبدیل به مستطیل ۹۰°')}
+                </button>
+              ` : ''}
             </div>
           ` : ''}
         ` : `
           <div class="props-bar-divider"></div>
           <div class="props-bar-group props-slider-group">
-            <span class="props-slider-label">Opacity</span>
+            <span class="props-slider-label">${tr('Opacity', 'شفافیت')}</span>
             <input type="range" class="props-range-slider fp-live-input" id="fp-opacity-slider"
                    min="5" max="100" step="1" value="${currentOpacity}"
                    style="--slider-pct:${Math.round(((currentOpacity - 5) / 95) * 100)}%"
-                   title="Opacity (5-100%)" aria-label="Annotation opacity slider">
-            <div class="props-num-badge" title="Type opacity percentage (5-100%)">
+                   title="${tr('Opacity (5-100%)', 'شفافیت (۵ تا ۱۰۰٪)')}" aria-label="${tr('Annotation opacity slider', 'شفافیت')}">
+            <div class="props-num-badge" title="${tr('Type opacity percentage (5-100%)', 'درصد شفافیت (۵ تا ۱۰۰٪)')}">
               <input type="number" class="props-num-input fp-live-input" id="fp-opacity-input"
                      min="5" max="100" step="1" value="${currentOpacity}"
-                     aria-label="Annotation opacity percentage">
+                     aria-label="${tr('Annotation opacity percentage', 'درصد شفافیت')}">
               <span class="props-num-unit">%</span>
             </div>
           </div>
@@ -327,8 +349,8 @@ export class FloatingPropsBarComponent {
         ${isSingleText ? `
           <div class="props-bar-divider"></div>
           <div class="props-bar-group">
-            <button class="props-pill-btn" id="fp-edit-text-btn" title="Double-click or click to edit text">
-              Edit Text
+            <button class="props-pill-btn" id="fp-edit-text-btn" title="${tr('Double-click or click to edit text', 'ویرایش متن')}">
+              ${tr('Edit Text', 'ویرایش متن')}
             </button>
           </div>
         ` : ''}
@@ -336,16 +358,16 @@ export class FloatingPropsBarComponent {
         ${isSingleSticky ? `
           <div class="props-bar-divider"></div>
           <div class="props-bar-group">
-            <label class="props-color-bubble-wrap" title="Text color">
+            <label class="props-color-bubble-wrap" title="${tr('Text color', 'رنگ متن یادداشت')}">
               <span class="props-color-bubble" style="background-color: ${first.textColor || '#3b2f1e'}; width: 16px; height: 16px;"></span>
               <input type="color" class="props-native-color-picker" id="fp-note-textcolor-picker" value="${this.ensureHex(first.textColor || '#3b2f1e')}">
             </label>
             ${!first.collapsed ? `
-              <button class="props-pill-btn" id="fp-edit-note-btn" title="Edit note text">
-                Edit Text
+              <button class="props-pill-btn" id="fp-edit-note-btn" title="${tr('Edit note text', 'ویرایش متن یادداشت')}">
+                ${tr('Edit Text', 'ویرایش متن')}
               </button>
             ` : ''}
-            <button class="props-icon-btn" id="fp-note-collapse-btn" title="${first.collapsed ? 'Expand note' : 'Collapse note to icon'}">
+            <button class="props-icon-btn" id="fp-note-collapse-btn" title="${first.collapsed ? tr('Expand note', 'باز کردن یادداشت') : tr('Collapse note to icon', 'جمع کردن یادداشت به آیکون')}">
               ${getIconSvg(first.collapsed ? 'expand' : 'compress', 14)}
             </button>
           </div>
@@ -355,13 +377,13 @@ export class FloatingPropsBarComponent {
 
         <!-- Actions: Duplicate, Lock, Delete -->
         <div class="props-bar-group">
-          <button class="props-icon-btn" id="fp-duplicate-btn" title="Duplicate (Ctrl+D)">
+          <button class="props-icon-btn" id="fp-duplicate-btn" title="${tr('Duplicate (Ctrl+D)', 'تکثیر (Ctrl+D)')}">
             ${getIconSvg('plus', 14)}
           </button>
-          <button class="props-icon-btn ${isLocked ? 'active' : ''}" id="fp-lock-btn" title="${isLocked ? 'Unlock' : 'Lock'}">
+          <button class="props-icon-btn ${isLocked ? 'active' : ''}" id="fp-lock-btn" title="${isLocked ? tr('Unlock', 'باز کردن قفل') : tr('Lock', 'قفل کردن')}">
             ${getIconSvg(isLocked ? 'lock' : 'unlock', 14)}
           </button>
-          <button class="props-icon-btn is-danger" id="fp-delete-btn" title="Delete">
+          <button class="props-icon-btn is-danger" id="fp-delete-btn" title="${tr('Delete', 'حذف')}">
             ${getIconSvg('trash', 14)}
           </button>
         </div>
@@ -575,6 +597,29 @@ export class FloatingPropsBarComponent {
       if (Number.isFinite(val)) applyCornerRadiusLive(val);
     });
 
+    // Rectangle corner-drag mode toggle (Free Vertex vs 90° Rect)
+    this._container.querySelector('#fp-rect-corner-mode-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pointerHandler.setRectCornerLockMode(!pointerHandler.rectCornerLockMode);
+      this.renderContent();
+    });
+
+    // Convert 4-vertex polygon back to a clean 90° rectangle
+    this._container.querySelector('#fp-make-rect-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const first = selected[0];
+      if (!first || first.type !== 'polygon') return;
+      const next = {
+        ...first,
+        type: 'rectangle' as const,
+        points: undefined,
+        updatedAt: Date.now()
+      };
+      history.execute(new ModifyAnnotationCommand(first.pageIndex, first, next));
+      window.app?.repaintAllRenderedAnnotations();
+      this.renderContent();
+    });
+
     // Edit Text button
     this._container.querySelector('#fp-edit-text-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -738,16 +783,16 @@ export class FloatingPropsBarComponent {
     if (!sel) return;
 
     const highlightSwatches = [
-      { hex: '#fde047', rgba: 'rgba(250, 204, 21, 0.38)', label: 'Highlight Yellow' },
-      { hex: '#86efac', rgba: 'rgba(74, 222, 128, 0.38)', label: 'Highlight Green' },
-      { hex: '#93c5fd', rgba: 'rgba(96, 165, 250, 0.38)', label: 'Highlight Blue' },
-      { hex: '#f9a8d4', rgba: 'rgba(244, 114, 182, 0.38)', label: 'Highlight Pink' },
-      { hex: '#fdba74', rgba: 'rgba(251, 146, 60, 0.38)', label: 'Highlight Orange' }
+      { hex: '#fde047', rgba: 'rgba(250, 204, 21, 0.38)', label: tr('Highlight Yellow', 'هایلایت زرد') },
+      { hex: '#86efac', rgba: 'rgba(74, 222, 128, 0.38)', label: tr('Highlight Green', 'هایلایت سبز') },
+      { hex: '#93c5fd', rgba: 'rgba(96, 165, 250, 0.38)', label: tr('Highlight Blue', 'هایلایت آبی') },
+      { hex: '#f9a8d4', rgba: 'rgba(244, 114, 182, 0.38)', label: tr('Highlight Pink', 'هایلایت صورتی') },
+      { hex: '#fdba74', rgba: 'rgba(251, 146, 60, 0.38)', label: tr('Highlight Orange', 'هایلایت نارنجی') }
     ];
 
     this._container.innerHTML = `
       <div class="props-bar-inner">
-        <div class="props-bar-group" title="Highlight selected text">
+        <div class="props-bar-group" title="${tr('Highlight selected text', 'هایلایت کردن متن انتخاب‌شده')}">
           <div class="props-swatch-strip">
             ${highlightSwatches.map(sw => `
               <button class="props-mini-swatch" data-sel-highlight="${sw.rgba}" style="background: ${sw.hex};" title="${sw.label}"></button>
@@ -758,22 +803,22 @@ export class FloatingPropsBarComponent {
         <div class="props-bar-divider"></div>
 
         <div class="props-bar-group">
-          <button class="props-pill-btn" id="fp-sel-underline" title="Underline selected text">
+          <button class="props-pill-btn" id="fp-sel-underline" title="${tr('Underline selected text', 'خط زیر متن انتخاب‌شده')}">
             <span style="text-decoration: underline; font-weight: 600;">U</span>
           </button>
-          <button class="props-pill-btn" id="fp-sel-strike" title="Strikethrough selected text">
+          <button class="props-pill-btn" id="fp-sel-strike" title="${tr('Strikethrough selected text', 'خط خورده کردن متن انتخاب‌شده')}">
             <span style="text-decoration: line-through; font-weight: 600;">S</span>
           </button>
-          <button class="props-pill-btn" id="fp-sel-note" title="Add Sticky Note for selected text">
-            ${getIconSvg('stickyNote', 13)} Note
+          <button class="props-pill-btn" id="fp-sel-note" title="${tr('Add Sticky Note for selected text', 'افزودن یادداشت چسبان برای متن انتخاب‌شده')}">
+            ${getIconSvg('stickyNote', 13)} ${tr('Note', 'یادداشت')}
           </button>
         </div>
 
         <div class="props-bar-divider"></div>
 
         <div class="props-bar-group">
-          <button class="props-pill-btn" id="fp-sel-copy" title="Copy selected text (Ctrl+C)">
-            ${getIconSvg('copy', 13)} Copy
+          <button class="props-pill-btn" id="fp-sel-copy" title="${tr('Copy selected text (Ctrl+C)', 'کپی کردن متن انتخاب‌شده (Ctrl+C)')}">
+            ${getIconSvg('copy', 13)} ${tr('Copy', 'کپی')}
           </button>
         </div>
       </div>
@@ -937,7 +982,7 @@ export class FloatingPropsBarComponent {
         document.execCommand('copy');
         ta.remove();
       }
-      showToast('Copied text to clipboard', 'success');
+      showToast(tr('Copied text to clipboard', 'متن در کلیپ‌بورد کپی شد'), 'success');
       store.setTextSelection(null);
       this.hideImmediate();
       window.app?.repaintAllRenderedAnnotations();

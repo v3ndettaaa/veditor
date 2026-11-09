@@ -26,6 +26,9 @@
 </head>
 <body class="theme-dark">
   <div id="app-root" class="app-container">
+    <!-- Top-edge hover sensor to reveal compact header in Fullscreen / Focus Mode -->
+    <div id="header-hover-zone" class="header-hover-zone" aria-hidden="true"></div>
+
     <!-- Top Navigation & Tab Bar -->
     <header id="app-header" class="app-header"></header>
 
@@ -47,7 +50,7 @@
           </div>
         </div>
 
-        <!-- Floating Quick Zoom & View Pill -->
+        <!-- Floating Quick Zoom & View Pill (Bottom-Right) -->
         <div id="app-view-controls" class="floating-view-controls"></div>
 
         <!-- Floating Scratchpad / Draft Overlay -->

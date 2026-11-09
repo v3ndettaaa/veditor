@@ -9,7 +9,7 @@ import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../.
 import { selectionManager } from '../../annotations/selection';
 import { normalizeHighlighterColor } from '../../annotations/spline';
 import { getIconSvg } from '../../utils/icons';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 import { Annotation } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
 import { stickyNoteTool } from '../../annotations/tools/sticky-note';
@@ -105,7 +105,7 @@ export class PropertiesPanelComponent {
     this._container.innerHTML = `
       <div class="panel-header">
         <span>${t('properties.title')} <span class="badge is-accent">${selectedAnnotations.length}</span></span>
-        <button id="close-props-btn" class="icon-btn" title="Clear selection" aria-label="Clear selection">
+        <button id="close-props-btn" class="icon-btn" title="${tr('Clear selection', 'لغو انتخاب')}" aria-label="${tr('Clear selection', 'لغو انتخاب')}">
           ${getIconSvg('close', 14)}
         </button>
       </div>
@@ -125,13 +125,13 @@ export class PropertiesPanelComponent {
         <!-- Stroke Color Picker -->
         <div class="prop-group">
           <div class="prop-label-row">
-            <span class="prop-label">${hasShape ? 'Stroke Color' : t('properties.color')}</span>
+            <span class="prop-label">${hasShape ? tr('Stroke Color', 'رنگ کادر شکل') : t('properties.color')}</span>
             <input type="text" class="prop-color-value prop-hex-input" id="prop-color-val"
                    value="${strokeCol}"
-                   spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Stroke color hex">
+                   spellcheck="false" maxlength="7" title="${tr('Type any hex color', 'کد رنگ هگزادسیمال را وارد کنید')}" aria-label="${tr('Stroke color hex', 'کد رنگ خط')}">
           </div>
           <div class="prop-color-row">
-            <div class="color-picker-wrapper is-lg" title="Color">
+            <div class="color-picker-wrapper is-lg" title="${t('properties.color')}">
               <input type="color" id="prop-color-picker" class="color-picker-input" value="${strokeCol}">
             </div>
             <div class="color-swatches-group" style="flex-wrap:wrap;">
@@ -147,17 +147,17 @@ export class PropertiesPanelComponent {
         ${hasShape ? `
           <div class="prop-group">
             <div class="prop-label-row">
-              <span class="prop-label">Fill Color</span>
+              <span class="prop-label">${tr('Fill Color', 'رنگ داخل شکل')}</span>
               <input type="text" class="prop-color-value prop-hex-input" id="prop-fill-val"
                      value="${firstFillColor === 'transparent' ? '' : firstFillColor}"
-                     placeholder="None" spellcheck="false" maxlength="7"
-                     title="Type any hex fill color, empty = none" aria-label="Fill color hex">
+                     placeholder="${tr('None', 'بی‌رنگ')}" spellcheck="false" maxlength="7"
+                     title="${tr('Type any hex fill color, empty = none', 'کد رنگ داخل شکل (خالی = بی‌رنگ)')}" aria-label="${tr('Fill color hex', 'کد رنگ داخل شکل')}">
             </div>
             <div class="prop-color-row">
-              <button id="prop-no-fill-btn" class="color-swatch gn-nofill-swatch ${firstFillColor === 'transparent' ? 'active' : ''}" title="No Fill">
+              <button id="prop-no-fill-btn" class="color-swatch gn-nofill-swatch ${firstFillColor === 'transparent' ? 'active' : ''}" title="${tr('No Fill', 'بدون رنگ داخلی')}">
                 ${getIconSvg('noFill', 14)}
               </button>
-              <div class="color-picker-wrapper is-lg" title="Fill Color">
+              <div class="color-picker-wrapper is-lg" title="${tr('Fill Color', 'رنگ داخل شکل')}">
                 <input type="color" id="prop-fill-picker" class="color-picker-input" value="${firstFillColor === 'transparent' ? '#ffffff' : firstFillColor}">
               </div>
               <div class="color-swatches-group" style="flex-wrap:wrap;">
@@ -168,11 +168,11 @@ export class PropertiesPanelComponent {
               </div>
             </div>
             <div class="prop-label-row" style="margin-top: 10px;">
-              <span class="prop-label">Fill Opacity</span>
+              <span class="prop-label">${tr('Fill Opacity', 'شفافیت داخل شکل')}</span>
               <div class="gn-num-badge">
                 <input type="number" class="prop-value prop-num-input" id="prop-fill-opacity-val"
                        min="0" max="100" step="1" value="${Math.round(((firstAnn as any).fillOpacity ?? 1) * 100)}"
-                       title="Fill opacity (0-100%, outline stays solid)" aria-label="Fill opacity percentage">
+                       title="${tr('Fill opacity (0-100%, outline stays solid)', 'شفافیت داخل شکل (۰ تا ۱۰۰٪، کادر ثابت می‌ماند)')}" aria-label="${tr('Fill opacity percentage', 'درصد شفافیت داخل شکل')}">
                 <span class="gn-unit">%</span>
               </div>
             </div>
@@ -180,7 +180,7 @@ export class PropertiesPanelComponent {
               <input type="range" id="prop-fill-opacity-slider" class="gn-range-slider"
                      min="0" max="100" step="1" value="${Math.round(((firstAnn as any).fillOpacity ?? 1) * 100)}"
                      style="--slider-pct:${sliderPercent(Math.round(((firstAnn as any).fillOpacity ?? 1) * 100), 0, 100)}%"
-                     aria-label="Fill opacity slider">
+                     aria-label="${tr('Fill opacity slider', 'شفافیت داخل شکل')}">
             </div>
           </div>
         ` : ''}
@@ -188,11 +188,11 @@ export class PropertiesPanelComponent {
         <!-- Stroke Width / Font Size Slider + Input -->
         <div class="prop-group">
           <div class="prop-label-row">
-            <span class="prop-label">${isTextAnn ? 'Font Size' : t('properties.strokeWidth')}</span>
+            <span class="prop-label">${isTextAnn ? tr('Font Size', 'اندازه قلم') : t('properties.strokeWidth')}</span>
             <div class="gn-num-badge">
               <input type="number" class="prop-value prop-num-input" id="prop-width-val"
                      min="0.5" max="120" step="0.5" value="${widthVal}"
-                     title="Type any size" aria-label="${t('properties.strokeWidth')}">
+                     title="${tr('Type any size', 'اندازه را وارد کنید')}" aria-label="${t('properties.strokeWidth')}">
               <span class="gn-unit">px</span>
             </div>
           </div>
@@ -200,18 +200,18 @@ export class PropertiesPanelComponent {
             <input type="range" id="prop-width-slider" class="gn-range-slider"
                    min="0.5" max="${widthMax}" step="0.5" value="${Math.min(widthMax, widthVal)}"
                    style="--slider-pct:${sliderPercent(Math.min(widthMax, widthVal), 0.5, widthMax)}%"
-                   aria-label="Width slider">
+                   aria-label="${t('properties.strokeWidth')}">
           </div>
         </div>
 
         ${hasCornerRadius ? `
           <div class="prop-group">
             <div class="prop-label-row">
-              <span class="prop-label">Corner Radius</span>
+              <span class="prop-label">${tr('Corner Radius', 'گردی گوشه‌ها')}</span>
               <div class="gn-num-badge">
                 <input type="number" class="prop-value prop-num-input" id="prop-corner-radius-val"
                        min="0" max="48" step="1" value="${cornerRadiusVal}"
-                       title="Corner radius (0 = sharp, up to 48px)" aria-label="Corner radius">
+                       title="${tr('Corner radius (0 = sharp, up to 48px)', 'گردی گوشه‌ها (۰ = تیز، تا ۴۸ پیکسل)')}" aria-label="${tr('Corner radius', 'گردی گوشه‌ها')}">
                 <span class="gn-unit">px</span>
               </div>
             </div>
@@ -219,7 +219,7 @@ export class PropertiesPanelComponent {
               <input type="range" id="prop-corner-radius-slider" class="gn-range-slider"
                      min="0" max="48" step="1" value="${cornerRadiusVal}"
                      style="--slider-pct:${sliderPercent(cornerRadiusVal, 0, 48)}%"
-                     aria-label="Corner radius slider">
+                     aria-label="${tr('Corner radius slider', 'شعاع گردی گوشه‌ها')}">
             </div>
           </div>
         ` : ''}
@@ -231,7 +231,7 @@ export class PropertiesPanelComponent {
             <div class="gn-num-badge">
               <input type="number" class="prop-value prop-num-input" id="prop-opacity-val"
                      min="1" max="100" step="1" value="${opacityPct}"
-                     title="Type any opacity (1-100%)" aria-label="${t('properties.opacity')}">
+                     title="${tr('Type any opacity (1-100%)', 'درصد شفافیت را وارد کنید (۱ تا ۱۰۰٪)')}" aria-label="${t('properties.opacity')}">
               <span class="gn-unit">%</span>
             </div>
           </div>
@@ -239,7 +239,7 @@ export class PropertiesPanelComponent {
             <input type="range" id="prop-opacity-slider" class="gn-range-slider"
                    min="5" max="100" step="1" value="${opacityPct}"
                    style="--slider-pct:${sliderPercent(opacityPct, 5, 100)}%"
-                   aria-label="Opacity slider">
+                   aria-label="${t('properties.opacity')}">
           </div>
         </div>
 
@@ -249,7 +249,7 @@ export class PropertiesPanelComponent {
             <button type="button" class="gn-setting-row" id="prop-outline-switch" aria-pressed="${firstOutline}">
               <span class="gn-setting-label">
                 ${getIconSvg('outlineOn', 15)}
-                <span>Shape Border (Outline)</span>
+                <span>${tr('Shape Border (Outline)', 'خط دور شکل (کادر)')}</span>
               </span>
               <span class="gn-switch ${firstOutline ? 'is-on' : ''}">
                 <span class="gn-switch-thumb"></span>
@@ -261,19 +261,19 @@ export class PropertiesPanelComponent {
         <!-- Alignment (if multi-select) -->
         ${selectedAnnotations.length > 1 ? `
           <div class="prop-group">
-            <span class="prop-label">Alignment</span>
+            <span class="prop-label">${tr('Alignment', 'ترازبندی')}</span>
             <div class="gn-tile-grid cols-3">
-              <button type="button" class="gn-icon-tile is-compact" data-align="left" title="Align Left">
+              <button type="button" class="gn-icon-tile is-compact" data-align="left" title="${tr('Align Left', 'تراز به چپ')}">
                 <span class="gn-tile-icon">${getIconSvg('alignLeft', 18)}</span>
-                <span class="gn-tile-label">Left</span>
+                <span class="gn-tile-label">${tr('Left', 'چپ')}</span>
               </button>
-              <button type="button" class="gn-icon-tile is-compact" data-align="center" title="Align Center">
+              <button type="button" class="gn-icon-tile is-compact" data-align="center" title="${tr('Align Center', 'تراز به وسط')}">
                 <span class="gn-tile-icon">${getIconSvg('alignCenter', 18)}</span>
-                <span class="gn-tile-label">Center</span>
+                <span class="gn-tile-label">${tr('Center', 'وسط')}</span>
               </button>
-              <button type="button" class="gn-icon-tile is-compact" data-align="right" title="Align Right">
+              <button type="button" class="gn-icon-tile is-compact" data-align="right" title="${tr('Align Right', 'تراز به راست')}">
                 <span class="gn-tile-icon">${getIconSvg('alignRight', 18)}</span>
-                <span class="gn-tile-label">Right</span>
+                <span class="gn-tile-label">${tr('Right', 'راست')}</span>
               </button>
             </div>
           </div>
@@ -282,7 +282,7 @@ export class PropertiesPanelComponent {
         ${isStickyNote ? `
           <div class="prop-group">
             <div class="prop-label-row">
-              <span class="prop-label">Text & Ink Color</span>
+              <span class="prop-label">${tr('Text & Ink Color', 'رنگ متن و دست‌خط')}</span>
               <input type="color" id="prop-note-textcolor" class="color-picker-input"
                      style="width:28px; height:28px; border-radius:6px; cursor:pointer;"
                      value="${(firstAnn as any).textColor || '#3b2f1e'}">
@@ -291,12 +291,12 @@ export class PropertiesPanelComponent {
           <div class="prop-group" style="display:flex; gap:8px;">
             <button type="button" id="prop-note-collapse-btn" class="gn-setting-row" style="flex:1; justify-content:center;">
               ${getIconSvg((firstAnn as any).collapsed ? 'expand' : 'compress', 14)}
-              <span>${(firstAnn as any).collapsed ? 'Expand Note' : 'Collapse Note'}</span>
+              <span>${(firstAnn as any).collapsed ? tr('Expand Note', 'باز کردن یادداشت') : tr('Collapse Note', 'جمع کردن یادداشت')}</span>
             </button>
             ${((firstAnn as any).strokes?.length ?? 0) > 0 ? `
               <button type="button" id="prop-note-clear-ink-btn" class="gn-setting-row" style="flex:1; justify-content:center;">
                 ${getIconSvg('eraser', 14)}
-                <span>Clear Ink</span>
+                <span>${tr('Clear Ink', 'پاک کردن دست‌خط')}</span>
               </button>
             ` : ''}
           </div>

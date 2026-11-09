@@ -123,6 +123,129 @@ export function moveAnnotationEndpoint(ann: ShapeAnnotation, handle: 'start' | '
   };
 }
 
+/**
+ * Returns true if the annotation uses contour/vertex selection instead of a generic outer box.
+ */
+export function isVertexSelectionShape(ann: Annotation): boolean {
+  return (
+    ann.type === 'polygon' ||
+    ann.type === 'freeform-shape' ||
+    ann.type === 'line' ||
+    ann.type === 'arrow' ||
+    ann.type === 'rectangle' ||
+    ann.type === 'measure-distance' ||
+    ann.type === 'measure-angle' ||
+    ann.type === 'measure-area'
+  );
+}
+
+/**
+ * Returns the page-space vertices (with rotation applied) for any vertex-editable shape.
+ */
+export function getAnnotationVertices(ann: Annotation): Point[] | null {
+  if (ann.locked) return null;
+  const center = boxCenter(ann.box);
+  const rot = ann.rotation || 0;
+
+  if (
+    ann.type === 'polygon' ||
+    ann.type === 'freeform-shape' ||
+    ann.type === 'line' ||
+    ann.type === 'arrow' ||
+    ann.type === 'measure-distance' ||
+    ann.type === 'measure-angle' ||
+    ann.type === 'measure-area'
+  ) {
+    const pts = (ann as { points?: Point[] }).points;
+    if (!Array.isArray(pts) || pts.length < 2) return null;
+    return pts.map(p => (rot ? rotatePoint(p, center, rot) : { x: p.x, y: p.y }));
+  }
+
+  if (ann.type === 'rectangle') {
+    const pts = (ann as ShapeAnnotation).points;
+    if (Array.isArray(pts) && pts.length >= 3) {
+      return pts.map(p => (rot ? rotatePoint(p, center, rot) : { x: p.x, y: p.y }));
+    }
+    const b = ann.box;
+    const corners: Point[] = [
+      { x: b.x, y: b.y },
+      { x: b.x + b.width, y: b.y },
+      { x: b.x + b.width, y: b.y + b.height },
+      { x: b.x, y: b.y + b.height }
+    ];
+    return corners.map(p => (rot ? rotatePoint(p, center, rot) : p));
+  }
+
+  return null;
+}
+
+/**
+ * Moves a single vertex of a shape annotation to `target` in page coordinates.
+ * For `rectangle`:
+ * - When `keepRectangular` is false (default free-corner drag), converts the rectangle
+ *   into a 4-vertex `polygon` so that single corner moves independently.
+ * - When `keepRectangular` is true (e.g. Shift held or rectangle-lock mode enabled),
+ *   resizes the two adjacent edges while keeping 90-degree rectangular corners.
+ */
+export function moveAnnotationVertex(
+  ann: Annotation,
+  vertexIndex: number,
+  target: Point,
+  keepRectangular: boolean = false
+): Annotation {
+  const vertices = getAnnotationVertices(ann);
+  if (!vertices || vertexIndex < 0 || vertexIndex >= vertices.length) return ann;
+  if (distance(vertices[vertexIndex], target) < 1e-9) return ann;
+
+  if ((ann.type === 'line' || ann.type === 'arrow') && vertices.length === 2) {
+    return moveAnnotationEndpoint(ann as ShapeAnnotation, vertexIndex === 0 ? 'start' : 'end', target);
+  }
+
+  if (ann.type === 'rectangle') {
+    const shapeAnn = ann as ShapeAnnotation;
+    if (keepRectangular) {
+      const center = boxCenter(ann.box);
+      const rot = ann.rotation || 0;
+      const localTarget = rot ? rotatePoint(target, center, -rot) : target;
+      const b = ann.box;
+      const oppCorners: Point[] = [
+        { x: b.x + b.width, y: b.y + b.height }, // opposite of 0 (NW) is SE
+        { x: b.x, y: b.y + b.height },           // opposite of 1 (NE) is SW
+        { x: b.x, y: b.y },                      // opposite of 2 (SE) is NW
+        { x: b.x + b.width, y: b.y }             // opposite of 3 (SW) is NE
+      ];
+      const anchor = oppCorners[vertexIndex] || oppCorners[0];
+      const nextBox = normalizeDragBox(anchor, localTarget, 8);
+      return {
+        ...shapeAnn,
+        box: nextBox,
+        updatedAt: Date.now()
+      };
+    }
+
+    // Free corner move: convert rectangle into a 4-vertex polygon with that corner moved
+    const nextPoints = vertices.map((p, i) => (i === vertexIndex ? { x: target.x, y: target.y } : { x: p.x, y: p.y }));
+    return {
+      ...shapeAnn,
+      type: 'polygon',
+      points: nextPoints,
+      box: computePointsBoundingBox(nextPoints, shapeAnn.strokeWidth),
+      rotation: 0,
+      updatedAt: Date.now()
+    };
+  }
+
+  const nextPoints = vertices.map((p, i) => (i === vertexIndex ? { x: target.x, y: target.y } : { x: p.x, y: p.y }));
+  const strokeW = (ann as { strokeWidth?: number }).strokeWidth ?? 2;
+  return {
+    ...ann,
+    points: nextPoints,
+    box: computePointsBoundingBox(nextPoints, strokeW),
+    rotation: 0,
+    updatedAt: Date.now()
+  } as Annotation;
+}
+
 export interface BoxTransform {
   dx: number;
   dy: number;
@@ -228,7 +351,21 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   return next as T;
 }
 
-export type HandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rot' | 'body' | 'start' | 'end' | null;
+export type HandleType =
+  | 'nw'
+  | 'n'
+  | 'ne'
+  | 'e'
+  | 'se'
+  | 's'
+  | 'sw'
+  | 'w'
+  | 'rot'
+  | 'body'
+  | 'start'
+  | 'end'
+  | `vertex:${number}`
+  | null;
 
 export class SelectionManager {
   private _handleSize = 8;
@@ -236,14 +373,101 @@ export class SelectionManager {
 
   public hitTestSelection(point: Point, annotations: Annotation[], scale: number = 1.0): HandleType {
     if (annotations.length === 0 || annotations.some(ann => ann.locked)) return null;
-    const endpoints = annotations.length === 1 ? getAnnotationEndpoints(annotations[0]) : null;
-    if (endpoints) {
-      const startDistance = distance(point, endpoints[0]);
-      const endDistance = distance(point, endpoints[1]);
-      if (Math.min(startDistance, endDistance) <= 10 / scale) {
-        return startDistance <= endDistance ? 'start' : 'end';
+
+    if (annotations.length === 1) {
+      const ann = annotations[0];
+      const safeScale = Math.max(scale, 0.25);
+
+      // 1. Two-point line / arrow endpoint handles ('start' and 'end')
+      const endpoints = getAnnotationEndpoints(ann);
+      if (endpoints) {
+        const startDistance = distance(point, endpoints[0]);
+        const endDistance = distance(point, endpoints[1]);
+        if (Math.min(startDistance, endDistance) <= 10 / safeScale) {
+          return startDistance <= endDistance ? 'start' : 'end';
+        }
+        const strokePad = Math.max(8 / safeScale, ((ann as ShapeAnnotation).strokeWidth || 2) * 0.75);
+        if (distanceToSegment(point, endpoints[0], endpoints[1]) <= strokePad) {
+          return 'body';
+        }
+        return null;
+      }
+
+      // 2. Vertex-based shapes (polygon, freeform-shape, multi-point line/arrow, rectangle, measure-*)
+      if (isVertexSelectionShape(ann)) {
+        const vertices = getAnnotationVertices(ann);
+        if (vertices && vertices.length >= 2) {
+          const grabRadius = 10.5 / safeScale;
+          let bestIdx = -1;
+          let bestDist = grabRadius;
+          for (let i = 0; i < vertices.length; i++) {
+            const d = distance(point, vertices[i]);
+            if (d <= bestDist) {
+              bestDist = d;
+              bestIdx = i;
+            }
+          }
+          if (bestIdx !== -1) {
+            return `vertex:${bestIdx}`;
+          }
+
+          const box = ann.box;
+          const rot = ann.rotation || 0;
+          const local = rot ? rotatePoint(point, boxCenter(box), -rot) : point;
+          const cx = box.x + box.width / 2;
+          const cy = box.y + box.height / 2;
+
+          // Rotation handle above shape
+          const rotPt: Point = { x: cx, y: box.y - this._rotHandleDistance };
+          if (distance(local, rotPt) <= 10 / safeScale) {
+            return 'rot';
+          }
+
+          // For rectangles, keep the 4 edge-midpoint handles (n, e, s, w) active so
+          // users can also resize width/height directly from the sides
+          if (ann.type === 'rectangle' && box.width >= 24 && box.height >= 24) {
+            const edgeHandles: Record<'n' | 'e' | 's' | 'w', Point> = {
+              n: { x: cx, y: box.y },
+              e: { x: box.x + box.width, y: cy },
+              s: { x: cx, y: box.y + box.height },
+              w: { x: box.x, y: cy }
+            };
+            for (const [k, pt] of Object.entries(edgeHandles) as Array<['n' | 'e' | 's' | 'w', Point]>) {
+              if (distance(local, pt) <= 9.5 / safeScale) {
+                return k;
+              }
+            }
+          }
+
+          // Contour / interior body hit-test
+          const strokePad = Math.max(8 / safeScale, ((ann as any).strokeWidth || 2) * 0.75);
+          if (ann.type === 'rectangle') {
+            if (isPointInBox(local, box)) return 'body';
+            return null;
+          }
+
+          const isClosed =
+            ann.type === 'polygon' ||
+            ann.type === 'freeform-shape' ||
+            ann.type === 'measure-area';
+          for (let i = 0; i + 1 < vertices.length; i++) {
+            if (distanceToSegment(point, vertices[i], vertices[i + 1]) <= strokePad) {
+              return 'body';
+            }
+          }
+          if (isClosed && vertices.length >= 3) {
+            if (distanceToSegment(point, vertices[vertices.length - 1], vertices[0]) <= strokePad) {
+              return 'body';
+            }
+            if (isPointInPolygon(point, vertices)) {
+              return 'body';
+            }
+          }
+          return null;
+        }
       }
     }
+
     return this.hitTestHandles(
       point,
       mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox)),
@@ -328,9 +552,48 @@ export class SelectionManager {
       const selBox = getAnnotationSelectionBox(ann);
       // Rotated annotations hit-test in their unrotated frame.
       const local = ann.rotation ? rotatePoint(point, boxCenter(selBox), -ann.rotation) : point;
-      if (isPointInBox(local, selBox)) {
-        return ann;
+      if (!isPointInBox(local, selBox)) continue;
+
+      if (
+        ann.type === 'line' ||
+        ann.type === 'arrow' ||
+        ann.type === 'polygon' ||
+        ann.type === 'freeform-shape' ||
+        ann.type === 'measure-distance' ||
+        ann.type === 'measure-angle' ||
+        ann.type === 'measure-area'
+      ) {
+        const vertices = getAnnotationVertices(ann);
+        if (vertices && vertices.length >= 2) {
+          const pad = Math.max(10, ((ann as any).strokeWidth || 2) + 6);
+          let hitEdge = false;
+          for (let j = 0; j < vertices.length; j++) {
+            if (distance(point, vertices[j]) <= pad) {
+              hitEdge = true;
+              break;
+            }
+            if (j + 1 < vertices.length && distanceToSegment(point, vertices[j], vertices[j + 1]) <= pad) {
+              hitEdge = true;
+              break;
+            }
+          }
+          const isClosed =
+            ann.type === 'polygon' ||
+            ann.type === 'freeform-shape' ||
+            ann.type === 'measure-area';
+          if (!hitEdge && isClosed && vertices.length >= 3) {
+            if (
+              distanceToSegment(point, vertices[vertices.length - 1], vertices[0]) <= pad ||
+              isPointInPolygon(point, vertices)
+            ) {
+              hitEdge = true;
+            }
+          }
+          if (!hitEdge) continue;
+        }
       }
+
+      return ann;
     }
     return null;
   }
@@ -464,12 +727,26 @@ export class SelectionManager {
   }
 
   /**
-   * Renders the merged selection box for the given annotations.
+   * Renders the selection highlight for the given annotations.
+   * Single geometric shapes render contour-hugging dashed outlines and direct
+   * circular vertex handles on their actual corners/vertices (never an outer box).
    */
   public render(ctx: CanvasRenderingContext2D, annotations: Annotation[], scale: number = 1.0): void {
     if (annotations.length === 0) return;
-    // A lone rotated annotation gets a rotated box; groups use the merged
-    // axis-aligned box.
+
+    if (annotations.length === 1) {
+      const ann = annotations[0];
+      if (isVertexSelectionShape(ann)) {
+        this.renderVertexSelection(ctx, ann, scale);
+        return;
+      }
+      if (ann.type === 'ellipse') {
+        this.renderEllipseSelection(ctx, ann, scale);
+        return;
+      }
+    }
+
+    // Multi-selection or box-based annotations (text, stamp, sticky-note, pen strokes)
     const rotation = annotations.length === 1 ? annotations[0].rotation || 0 : 0;
     this.renderSelectionBox(
       ctx,
@@ -477,24 +754,236 @@ export class SelectionManager {
       scale,
       rotation
     );
-    const endpoints = annotations.length === 1 && !annotations[0].locked
-      ? getAnnotationEndpoints(annotations[0])
-      : null;
-    if (endpoints) {
+  }
+
+  /**
+   * Renders a contour-hugging selection highlight and draggable vertex handles
+   * directly on the corners/vertices of a shape annotation.
+   */
+  private renderVertexSelection(
+    ctx: CanvasRenderingContext2D,
+    ann: Annotation,
+    scale: number = 1.0
+  ): void {
+    const vertices = getAnnotationVertices(ann) || getAnnotationEndpoints(ann);
+    if (!vertices || vertices.length === 0) return;
+
+    ctx.save();
+    ctx.scale(scale, scale);
+
+    // 1. Dashed contour highlight directly along the shape's geometry
+    const isClosed =
+      ann.type === 'polygon' ||
+      ann.type === 'freeform-shape' ||
+      ann.type === 'rectangle' ||
+      ann.type === 'measure-area';
+
+    ctx.save();
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.moveTo(vertices[0].x, vertices[0].y);
+    for (let i = 1; i < vertices.length; i++) {
+      ctx.lineTo(vertices[i].x, vertices[i].y);
+    }
+    if (isClosed && vertices.length >= 3) {
+      ctx.closePath();
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    if (ann.locked) {
+      ctx.restore();
+      return;
+    }
+
+    // 2. Rotation stem & handle + side handles for rectangles (in rotated frame)
+    const endpoints = getAnnotationEndpoints(ann);
+    if (!endpoints) {
+      const box = ann.box;
+      const rot = ann.rotation || 0;
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      const rotDist = this._rotHandleDistance;
+      const minDim = Math.min(box.width, box.height);
+      const hs = Math.max(5, Math.min(this._handleSize, minDim / 4));
+
       ctx.save();
-      ctx.scale(scale, scale);
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#4f46e5';
-      ctx.lineWidth = 1.8 / scale;
-      for (const point of endpoints) {
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 5 / scale, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+      if (rot) {
+        ctx.translate(cx, cy);
+        ctx.rotate(rot);
+        ctx.translate(-cx, -cy);
       }
+
+      // Rotation stem and handle
+      ctx.beginPath();
+      ctx.setLineDash([]);
+      ctx.moveTo(cx, box.y);
+      ctx.lineTo(cx, box.y - rotDist);
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
+      ctx.shadowBlur = 4;
+      ctx.shadowOffsetY = 1;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+
+      ctx.fillStyle = '#4f46e5';
+      ctx.beginPath();
+      ctx.arc(cx, box.y - rotDist, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // For rectangles, also render subtle edge-midpoint handles (n, e, s, w)
+      // so both free-corner dragging (via corner circles) and 90-degree edge resizing work seamlessly
+      if (ann.type === 'rectangle' && box.width >= 24 && box.height >= 24) {
+        const edgeHandles = [
+          { x: cx, y: box.y, w: 10, h: 4 },
+          { x: box.x + box.width, y: cy, w: 4, h: 10 },
+          { x: cx, y: box.y + box.height, w: 10, h: 4 },
+          { x: box.x, y: cy, w: 4, h: 10 }
+        ];
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#4f46e5';
+        ctx.lineWidth = 1.4;
+        for (const eh of edgeHandles) {
+          ctx.beginPath();
+          if ((ctx as any).roundRect) {
+            (ctx as any).roundRect(eh.x - eh.w / 2, eh.y - eh.h / 2, eh.w, eh.h, 2);
+          } else {
+            ctx.rect(eh.x - eh.w / 2, eh.y - eh.h / 2, eh.w, eh.h);
+          }
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       ctx.restore();
     }
+
+    // 3. Circular draggable vertex handles on every corner / vertex of the shape
+    ctx.save();
+    ctx.setLineDash([]);
+    const outerRadius = 7.5;
+    const handleRadius = 5.2;
+    for (const pt of vertices) {
+      // Soft halo for clear visual affordance
+      ctx.fillStyle = 'rgba(79, 70, 229, 0.16)';
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, outerRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crisp white vertex circle with indigo ring
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.9;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, handleRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Precision center dot
+      ctx.fillStyle = '#4f46e5';
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  /**
+   * Renders a contour-hugging dashed selection border directly on an ellipse's perimeter
+   * instead of an outer rectangular bounding box.
+   */
+  private renderEllipseSelection(
+    ctx: CanvasRenderingContext2D,
+    ann: Annotation,
+    scale: number = 1.0
+  ): void {
+    const box = ann.box;
+    const rotation = ann.rotation || 0;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const rx = Math.max(1, box.width / 2);
+    const ry = Math.max(1, box.height / 2);
+    const minDim = Math.min(box.width, box.height);
+    const hs = Math.max(5, Math.min(this._handleSize, minDim / 4));
+    const rotDist = this._rotHandleDistance;
+
+    ctx.save();
+    ctx.scale(scale, scale);
+    if (rotation) {
+      ctx.translate(cx, cy);
+      ctx.rotate(rotation);
+      ctx.translate(-cx, -cy);
+    }
+
+    // Dashed contour hugging the ellipse itself
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (ann.locked) {
+      ctx.restore();
+      return;
+    }
+
+    // Rotation stem and handle from top cardinal point
+    ctx.beginPath();
+    ctx.setLineDash([]);
+    ctx.moveTo(cx, box.y);
+    ctx.lineTo(cx, box.y - rotDist);
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Cardinal & corner handles
+    const handles: Point[] = [
+      { x: cx, y: box.y },
+      { x: box.x + box.width, y: cy },
+      { x: cx, y: box.y + box.height },
+      { x: box.x, y: cy },
+      { x: box.x, y: box.y },
+      { x: box.x + box.width, y: box.y },
+      { x: box.x + box.width, y: box.y + box.height },
+      { x: box.x, y: box.y + box.height }
+    ];
+    for (const h of handles) {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 4.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   /**

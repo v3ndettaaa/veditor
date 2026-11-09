@@ -18,7 +18,8 @@ const OWNED_CLASSES = [
   'theme-light',
   'density-compact',
   'no-page-shadows',
-  'focus-mode'
+  'focus-mode',
+  'fullscreen-autohide'
 ];
 
 export interface AppearanceOverrides {
@@ -47,6 +48,11 @@ function applyAppearance(settings: AppSettings, overrides: AppearanceOverrides =
   if (settings.uiDensity === 'compact') body.classList.add('density-compact');
   if (!settings.showPageShadows) body.classList.add('no-page-shadows');
   if (overrides.focusMode) body.classList.add('focus-mode');
+  if (settings.autoHideHeaderInFullscreen !== false) {
+    body.classList.add('fullscreen-autohide');
+  } else {
+    body.classList.remove('header-peek');
+  }
 }
 
 /**

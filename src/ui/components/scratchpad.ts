@@ -11,7 +11,7 @@
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { showToast } from './toast';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 
 interface PadStroke {
   color: string;
@@ -66,6 +66,7 @@ export class ScratchpadComponent {
   private _padWidth = 4;
   private _padColor = '#f8fafc';
   private _spacePressed = false;
+  private _lastLang: 'en' | 'fa' = store.appSettings.language;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -102,13 +103,13 @@ export class ScratchpadComponent {
     this._container.innerHTML = `
       <div id="scratchpad-panel" class="scratchpad-panel" style="display:none;">
         <div id="scratchpad-header" class="scratchpad-header">
-          <span class="scratchpad-title">${getIconSvg('scratchpad', 14)}<span>${t('tools.scratchpad')}</span></span>
+          <span class="scratchpad-title">${getIconSvg('scratchpad', 14)}<span id="scratchpad-title-text">${t('tools.scratchpad')}</span></span>
           <div class="scratchpad-header-btns">
-            <button id="scratchpad-pen-btn" class="view-btn active" title="Pen">${getIconSvg('pen', 14)}</button>
-            <button id="scratchpad-eraser-btn" class="view-btn" title="Eraser">${getIconSvg('eraser', 14)}</button>
-            <button id="scratchpad-pan-btn" class="view-btn" title="Pan / Scroll">${getIconSvg('hand', 14)}</button>
-            <button id="scratchpad-recenter-btn" class="view-btn" title="Recenter">${getIconSvg('recenter', 14)}</button>
-            <button id="scratchpad-min-btn" class="view-btn" title="Minimize">–</button>
+            <button id="scratchpad-pen-btn" class="view-btn active" title="${tr('Pen', 'قلم')}">${getIconSvg('pen', 14)}</button>
+            <button id="scratchpad-eraser-btn" class="view-btn" title="${tr('Eraser', 'پاک‌کن')}">${getIconSvg('eraser', 14)}</button>
+            <button id="scratchpad-pan-btn" class="view-btn" title="${tr('Pan / Scroll', 'جابه‌جایی بوم')}">${getIconSvg('hand', 14)}</button>
+            <button id="scratchpad-recenter-btn" class="view-btn" title="${tr('Recenter', 'بازگشت به مرکز')}">${getIconSvg('recenter', 14)}</button>
+            <button id="scratchpad-min-btn" class="view-btn" title="${tr('Minimize', 'کوچک کردن')}">–</button>
           </div>
         </div>
         <div class="scratchpad-body">
@@ -121,13 +122,13 @@ export class ScratchpadComponent {
             <button data-pad-w="8" class="pad-pill">8</button>
           </div>
           <div class="scratchpad-actions">
-            <button id="scratchpad-clear-btn" class="header-btn" title="Clear pad">${getIconSvg('trash', 13)}</button>
-            <button id="scratchpad-export-btn" class="header-btn" title="Export as PNG">${getIconSvg('download', 13)}</button>
+            <button id="scratchpad-clear-btn" class="header-btn" title="${tr('Clear pad', 'پاک کردن کل چرک‌نویس')}">${getIconSvg('trash', 13)}</button>
+            <button id="scratchpad-export-btn" class="header-btn" title="${tr('Export as PNG', 'ذخیره به عنوان تصویر PNG')}">${getIconSvg('download', 13)}</button>
           </div>
         </div>
-        <div id="scratchpad-resize-n" class="scratchpad-resize-edge is-n" title="Resize height"></div>
-        <div id="scratchpad-resize-e" class="scratchpad-resize-edge is-e" title="Resize width"></div>
-        <div id="scratchpad-resize" class="scratchpad-resize" title="Resize">
+        <div id="scratchpad-resize-n" class="scratchpad-resize-edge is-n" title="${tr('Resize height', 'تغییر ارتفاع')}"></div>
+        <div id="scratchpad-resize-e" class="scratchpad-resize-edge is-e" title="${tr('Resize width', 'تغییر عرض')}"></div>
+        <div id="scratchpad-resize" class="scratchpad-resize" title="${tr('Resize', 'تغییر اندازه')}">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
             <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
             <line x1="8.5" y1="4.5" x2="4.5" y2="8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
@@ -155,6 +156,17 @@ export class ScratchpadComponent {
   private sync(): void {
     const panel = this.panel;
     if (!panel) return;
+    if (this._lastLang !== store.appSettings.language) {
+      this._lastLang = store.appSettings.language;
+      const titleEl = this._container.querySelector<HTMLElement>('#scratchpad-title-text');
+      if (titleEl) titleEl.textContent = t('tools.scratchpad');
+      this._container.querySelector('#scratchpad-pen-btn')?.setAttribute('title', tr('Pen', 'قلم'));
+      this._container.querySelector('#scratchpad-eraser-btn')?.setAttribute('title', tr('Eraser', 'پاک‌کن'));
+      this._container.querySelector('#scratchpad-pan-btn')?.setAttribute('title', tr('Pan / Scroll', 'جابه‌جایی بوم'));
+      this._container.querySelector('#scratchpad-recenter-btn')?.setAttribute('title', tr('Recenter', 'بازگشت به مرکز'));
+      this._container.querySelector('#scratchpad-clear-btn')?.setAttribute('title', tr('Clear pad', 'پاک کردن کل چرک‌نویس'));
+      this._container.querySelector('#scratchpad-export-btn')?.setAttribute('title', tr('Export as PNG', 'ذخیره به عنوان تصویر PNG'));
+    }
     const doc = store.activeDocument;
     const open = store.scratchpadOpen && !!doc;
     // Minimized keeps the panel docked: only the header strip stays visible, so
@@ -166,7 +178,7 @@ export class ScratchpadComponent {
     const minBtn = this._container.querySelector<HTMLElement>('#scratchpad-min-btn');
     if (minBtn) {
       minBtn.innerHTML = minimized ? getIconSvg('expand', 14) : getIconSvg('compress', 14);
-      minBtn.title = minimized ? 'Restore scratchpad' : 'Minimize';
+      minBtn.title = minimized ? tr('Restore scratchpad', 'بازگردانی چرک‌نویس') : tr('Minimize', 'کوچک کردن');
     }
 
     if (!open) return;
@@ -420,7 +432,7 @@ export class ScratchpadComponent {
       this._panX = 0;
       this._panY = 0;
       this.redraw();
-      showToast('Scratchpad view centered', 'info');
+      showToast(tr('Scratchpad view centered', 'نمای چرک‌نویس به مرکز بازگشت'), 'info');
     });
 
 
@@ -445,8 +457,8 @@ export class ScratchpadComponent {
       this._strokes = [];
       this.persistStrokes();
       this.redraw();
-      showToast('Scratchpad cleared', 'info', 5000, {
-        label: 'Undo',
+      showToast(tr('Scratchpad cleared', 'چرک‌نویس پاک شد'), 'info', 5000, {
+        label: tr('Undo', 'واگرد'),
         onClick: () => {
           this._strokes = cleared;
           this.persistStrokes();
@@ -461,7 +473,7 @@ export class ScratchpadComponent {
       if (!canvas) return;
       canvas.toBlob((blob) => {
         if (!blob) {
-          showToast('Nothing to export', 'error');
+          showToast(tr('Nothing to export', 'موردی برای خروجی گرفتن وجود ندارد'), 'error');
           return;
         }
         const url = URL.createObjectURL(blob);
@@ -472,7 +484,7 @@ export class ScratchpadComponent {
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 10000);
-        showToast('Scratchpad exported as PNG', 'success');
+        showToast(tr('Scratchpad exported as PNG', 'چرک‌نویس با فرمت PNG ذخیره شد'), 'success');
       }, 'image/png');
     });
 

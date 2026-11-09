@@ -9,6 +9,7 @@ import { signatureTool } from '../../annotations/tools/signature';
 import { renderSmoothStroke } from '../../annotations/spline';
 import { StrokePoint } from '../../core/types';
 import { getIconSvg } from '../../utils/icons';
+import { tr } from '../i18n';
 
 export class SignatureDialogComponent {
   private _container: HTMLElement;
@@ -37,13 +38,13 @@ export class SignatureDialogComponent {
 
     this._container.innerHTML = `
       <div class="modal-overlay" id="sig-overlay">
-        <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="Create digital signature">
+        <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="${tr('Create digital signature', 'ساخت امضای دیجیتال')}">
           <div class="panel-header">
             <span class="panel-header-title">
               ${getIconSvg('signature', 16)}
-              Create Digital Signature
+              ${tr('Create Digital Signature', 'ساخت امضای دیجیتال')}
             </span>
-            <button id="close-sig-btn" class="icon-btn is-small" title="Close" aria-label="Close">
+            <button id="close-sig-btn" class="icon-btn is-small" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">
               ${getIconSvg('close', 14)}
             </button>
           </div>
@@ -52,12 +53,12 @@ export class SignatureDialogComponent {
             <div class="sig-pad">
               <canvas id="sig-canvas" width="440" height="180" class="sig-pad-canvas"></canvas>
               <div class="sig-pad-baseline"></div>
-              <span class="sig-pad-hint">Sign above the line</span>
+              <span class="sig-pad-hint">${tr('Sign above the line', 'روی خط چین امضا کنید')}</span>
             </div>
 
             <div class="sig-pad-actions">
-              <button id="clear-sig-btn" class="secondary-btn">Clear Pad</button>
-              <button id="insert-sig-btn" class="primary-btn">Insert Signature</button>
+              <button id="clear-sig-btn" class="secondary-btn">${tr('Clear Pad', 'پاک کردن')}</button>
+              <button id="insert-sig-btn" class="primary-btn">${tr('Insert Signature', 'درج امضا در صفحه')}</button>
             </div>
           </div>
         </div>

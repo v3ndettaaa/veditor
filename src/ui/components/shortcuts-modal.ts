@@ -4,7 +4,7 @@
 
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 
 export class ShortcutsModalComponent {
   private _container: HTMLElement;
@@ -31,58 +31,58 @@ export class ShortcutsModalComponent {
     // Grouped so the reference scans by purpose rather than as one long list.
     const groups: Array<{ title: string; icon: string; items: Array<{ key: string; desc: string }> }> = [
       {
-        title: 'Tools',
+        title: tr('Tools', 'ابزارها'),
         icon: 'pen',
         items: [
-          { key: 'V', desc: 'Select & transform' },
-          { key: 'Q', desc: 'Lasso select' },
-          { key: 'Alt + drag', desc: 'Lasso select from any tool' },
-          { key: 'Space (hold)', desc: 'Hand — drag to pan' },
-          { key: 'Esc', desc: 'Cancel marquee / close dialog' },
-          { key: 'P', desc: 'Freehand pen' },
-          { key: 'H', desc: 'Highlighter' },
-          { key: 'E', desc: 'Eraser' },
-          { key: 'T', desc: 'Text box' },
-          { key: 'M', desc: 'Stamp / image' },
-          { key: 'K', desc: 'Signature' },
-          { key: 'N', desc: 'Scratchpad' }
+          { key: 'V', desc: tr('Select & transform', 'انتخاب و تغییر شکل') },
+          { key: 'Q', desc: tr('Lasso select', 'انتخاب کمند (آزاد)') },
+          { key: 'Alt + drag', desc: tr('Lasso select from any tool', 'انتخاب کمند از درون هر ابزار') },
+          { key: 'Space (hold)', desc: tr('Hand — drag to pan', 'ابزار دست — جابه‌جایی صفحه') },
+          { key: 'Esc', desc: tr('Cancel marquee / close dialog', 'لغو انتخاب / بستن پنجره') },
+          { key: 'P', desc: tr('Freehand pen', 'قلم آزاد') },
+          { key: 'H', desc: tr('Highlighter', 'ماژیک هایلایت') },
+          { key: 'E', desc: tr('Eraser', 'پاک‌کن') },
+          { key: 'T', desc: tr('Text box', 'کادر متن') },
+          { key: 'M', desc: tr('Stamp / image', 'مهر و تصویر') },
+          { key: 'K', desc: tr('Signature', 'امضای دیجیتال') },
+          { key: 'N', desc: tr('Scratchpad', 'چرک‌نویس شناور') }
         ]
       },
       {
-        title: 'Shapes',
+        title: tr('Shapes', 'اشکال هندسی'),
         icon: 'rectangle',
         items: [
-          { key: 'R', desc: 'Rectangle' },
-          { key: 'O', desc: 'Ellipse' },
-          { key: 'L', desc: 'Line' },
-          { key: 'A', desc: 'Arrow' },
-          { key: 'G', desc: 'Polygon' }
+          { key: 'R', desc: tr('Rectangle', 'مستطیل') },
+          { key: 'O', desc: tr('Ellipse', 'دایره / بیضی') },
+          { key: 'L', desc: tr('Line', 'خط صاف') },
+          { key: 'A', desc: tr('Arrow', 'پیکان (فلش)') },
+          { key: 'G', desc: tr('Polygon', 'چندضلعی') }
         ]
       },
       {
-        title: 'View & navigation',
+        title: tr('View & navigation', 'نمایش و پیمایش'),
         icon: 'eye',
         items: [
-          { key: 'Ctrl / Cmd  +', desc: 'Zoom in' },
-          { key: 'Ctrl / Cmd  −', desc: 'Zoom out' },
-          { key: 'Double-click', desc: 'Toggle 200% / fit width' },
-          { key: '0', desc: 'Fit to width' },
-          { key: 'F', desc: 'Toggle focus mode' }
+          { key: 'Ctrl / Cmd  +', desc: tr('Zoom in', 'بزرگ‌نمایی') },
+          { key: 'Ctrl / Cmd  −', desc: tr('Zoom out', 'کوچک‌نمایی') },
+          { key: 'Double-click', desc: tr('Toggle 200% / fit width', 'تغییر بین بزرگ‌نمایی ۲۰۰٪ و عرض صفحه') },
+          { key: '0', desc: tr('Fit to width', 'تنظیم به عرض صفحه') },
+          { key: 'F', desc: tr('Toggle focus mode', 'حالت تمرکز') }
         ]
       },
       {
-        title: 'Editing & app',
+        title: tr('Editing & app', 'ویرایش و برنامه'),
         icon: 'command',
         items: [
-          { key: 'Ctrl / Cmd  Z', desc: 'Undo' },
-          { key: 'Ctrl / Cmd  ⇧ Z', desc: 'Redo' },
-          { key: 'Ctrl / Cmd  S', desc: 'Save' },
-          { key: 'Ctrl / Cmd  ⇧ S', desc: 'Save As' },
-          { key: 'Ctrl / Cmd  D', desc: 'Duplicate selection' },
-          { key: 'Ctrl / Cmd  K', desc: 'Command palette' },
-          { key: '?', desc: 'This reference' },
-          { key: 'Esc', desc: 'Dismiss / deselect' },
-          { key: 'Del / ⌫', desc: 'Delete selection' }
+          { key: 'Ctrl / Cmd  Z', desc: tr('Undo', 'واگرد (Undo)') },
+          { key: 'Ctrl / Cmd  ⇧ Z', desc: tr('Redo', 'ازنو (Redo)') },
+          { key: 'Ctrl / Cmd  S', desc: tr('Save', 'ذخیره در فایل فعلی') },
+          { key: 'Ctrl / Cmd  ⇧ S', desc: tr('Save As', 'ذخیره به نام دیگر') },
+          { key: 'Ctrl / Cmd  D', desc: tr('Duplicate selection', 'تکثیر انتخاب') },
+          { key: 'Ctrl / Cmd  K', desc: tr('Command palette', 'پالت فرمان سریع') },
+          { key: '?', desc: tr('This reference', 'همین راهنمای میانبرها') },
+          { key: 'Esc', desc: tr('Dismiss / deselect', 'لغو انتخاب / بستن') },
+          { key: 'Del / ⌫', desc: tr('Delete selection', 'حذف موارد انتخاب‌شده') }
         ]
       }
     ];
@@ -92,7 +92,7 @@ export class ShortcutsModalComponent {
         <div class="modal-dialog shortcuts-dialog" role="dialog" aria-modal="true" aria-label="${t('shortcuts.title')}">
           <div class="panel-header">
             <span>${t('shortcuts.title')}</span>
-            <button id="close-shortcuts-btn" class="icon-btn" title="Close" aria-label="Close">
+            <button id="close-shortcuts-btn" class="icon-btn" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">
               ${getIconSvg('close', 14)}
             </button>
           </div>

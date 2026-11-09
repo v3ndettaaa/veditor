@@ -4,6 +4,14 @@ import { store } from '../../core/store';
 
 export type TranslationKey = keyof typeof en;
 
+export function isFa(): boolean {
+  return store.appSettings.language === 'fa';
+}
+
+export function tr(enText: string, faText: string): string {
+  return store.appSettings.language === 'fa' ? faText : enText;
+}
+
 /**
  * Looks up a dotted key and substitutes `{name}` placeholders. Unknown keys
  * fall back to the key itself so a missing translation is visible rather than

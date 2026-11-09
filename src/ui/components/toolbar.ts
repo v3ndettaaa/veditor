@@ -8,12 +8,13 @@
 import { store } from '../../core/store';
 import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 import { ToolType, EraserMode, toolbarFamily, ToolbarDock, classifyToolbarDock, ToolOptionKey, SEGMENT_TOOLS } from '../../core/types';
 
 /** Short labels for tools, reused by Settings → Toolbar. */
 export const TOOL_SHORT_LABELS: Record<string, string> = {
   select: 'Select',
+  lasso: 'Lasso',
   hand: 'Hand',
   pen: 'Pen',
   highlighter: 'Highlighter',
@@ -30,6 +31,33 @@ export const TOOL_SHORT_LABELS: Record<string, string> = {
   signature: 'Signature',
   scratchpad: 'Scratchpad'
 };
+
+export const TOOL_SHORT_LABELS_FA: Record<string, string> = {
+  select: 'انتخاب',
+  lasso: 'کمندی',
+  hand: 'دست (جابه‌جایی)',
+  pen: 'قلم',
+  highlighter: 'هایلایتر',
+  eraser: 'پاک‌کن',
+  rectangle: 'مستطیل',
+  ellipse: 'بیضی و دایره',
+  line: 'خط مستقیم',
+  arrow: 'پیکان',
+  polygon: 'چندضلعی',
+  text: 'جعبه متن',
+  'sticky-note': 'یادداشت چسبان',
+  stamp: 'مهر و برچسب',
+  'measure-distance': 'خط‌کش و اندازه‌گیری',
+  signature: 'امضا',
+  scratchpad: 'چرک‌نویس شناور'
+};
+
+export function getToolShortLabel(id: string): string {
+  if (store.appSettings.language === 'fa') {
+    return TOOL_SHORT_LABELS_FA[id] ?? TOOL_SHORT_LABELS[id] ?? id;
+  }
+  return TOOL_SHORT_LABELS[id] ?? id;
+}
 
 /** Parses free-typed numeric input, falling back when empty/invalid. */
 function clampTypedNumber(raw: string, min: number, max: number, fallback: number): number {
@@ -115,6 +143,7 @@ export class ToolbarComponent {
   private _lastHasDoc: boolean = false;
   private _lastLayoutKey: string = '';
   private _lastDock: ToolbarDock | null = null;
+  private _lastLang: string = '';
   private _pinnedTool: string | null = null;
 
   constructor(container: HTMLElement) {
@@ -145,6 +174,7 @@ export class ToolbarComponent {
     const selectedCount = store.selectedAnnotationIds.size;
     const layoutKey = JSON.stringify(store.toolbarLayout);
     const dock = store.appSettings.toolbarDock;
+    const lang = store.appSettings.language;
 
     if (
       hasDoc !== this._lastHasDoc ||
@@ -153,10 +183,12 @@ export class ToolbarComponent {
       canRedo !== this._lastCanRedo ||
       selectedCount !== this._lastSelectedCount ||
       layoutKey !== this._lastLayoutKey ||
-      dock !== this._lastDock
+      dock !== this._lastDock ||
+      lang !== this._lastLang
     ) {
       this._lastHasDoc = hasDoc;
       this._lastLayoutKey = layoutKey;
+      this._lastLang = lang;
       this.render();
     } else {
       this.updateIndicators();
@@ -236,6 +268,7 @@ export class ToolbarComponent {
     this._lastSelectedCount = selectedIds.length;
     this._lastLayoutKey = JSON.stringify(store.toolbarLayout);
     this._lastDock = store.appSettings.toolbarDock;
+    this._lastLang = store.appSettings.language;
 
     const penColors = ['#000000', '#ffffff', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
     const penWidths = [1, 2, 4, 8, 14];
@@ -253,24 +286,24 @@ export class ToolbarComponent {
 
     this._container.innerHTML = `
       <div class="toolbar-main-row">
-        <button type="button" class="toolbar-drag-handle" title="Drag to dock top, bottom, left, or right" aria-label="Drag toolbar to dock">
+        <button type="button" class="toolbar-drag-handle" title="${tr('Drag to dock top, bottom, left, or right', 'بکشید تا نوار ابزار در بالا، پایین، چپ یا راست قرار گیرد')}" aria-label="${tr('Drag toolbar to dock', 'جابه‌جایی نوار ابزار')}">
           ${getIconSvg('moreVertical', 14)}
         </button>
 
         <!-- Selection Tool -->
         <div class="tool-btn-wrapper ${this._pinnedTool === 'select' ? 'is-pinned' : ''}" data-wrapper-tool="select">
-          <button class="tool-btn ${activeTool === 'select' ? 'active' : ''}" data-tool="select" title="${t('tools.select')} (V)">
+          <button class="tool-btn ${activeTool === 'select' ? 'active' : ''}" data-tool="select" title="${t('tools.select')}">
             ${getIconSvg('select')}
           </button>
           ${selectedIds.length > 0 ? `
             <div class="tool-hover-card gn-popover gn-popover-compact">
               <div class="gn-popover-arrow"></div>
               <div class="gn-card-header">
-                <span class="gn-card-title">${selectedIds.length} Selected</span>
+                <span class="gn-card-title">${selectedIds.length} ${tr('Selected', 'مورد انتخاب‌شده')}</span>
               </div>
               <div class="gn-section">
                 <button id="del-selected-btn" class="danger-btn" style="width:100%;">
-                  ${getIconSvg('trash', 14)} Delete Selected
+                  ${getIconSvg('trash', 14)} ${tr('Delete Selected', 'حذف موارد انتخابی')}
                 </button>
               </div>
             </div>
@@ -283,7 +316,7 @@ export class ToolbarComponent {
         </button>
 
         <!-- Lasso Select Tool -->
-        <button class="tool-btn ${activeTool === 'lasso' ? 'active' : ''}" data-tool="lasso" title="${t('tools.lasso')} (Q)">
+        <button class="tool-btn ${activeTool === 'lasso' ? 'active' : ''}" data-tool="lasso" title="${t('tools.lasso')}">
           ${getIconSvg('lasso')}
         </button>
 
@@ -293,7 +326,7 @@ export class ToolbarComponent {
         <div class="toolbar-group">
           <!-- Pen with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'pen' ? 'is-pinned' : ''}" data-wrapper-tool="pen">
-            <button class="tool-btn has-popover ${activeTool === 'pen' ? 'active' : ''}" data-tool="pen" title="${t('tools.pen')} (P)">
+            <button class="tool-btn has-popover ${activeTool === 'pen' ? 'active' : ''}" data-tool="pen" title="${t('tools.pen')}">
               ${getIconSvg('pen')}
               <span class="tool-color-dot pen-dot" style="background-color:${s.penColor};"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
@@ -318,22 +351,22 @@ export class ToolbarComponent {
 
               <!-- Cursor Mode Visual Icon Tiles (replaces plain text buttons) -->
               <div class="gn-section">
-                <div class="gn-tile-grid cols-4" role="group" aria-label="Drawing cursor">
-                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${(s.drawingCursor || 'pen') === 'pen' ? 'active' : ''}" data-drawing-cursor="pen" title="Stylus Pen Cursor">
+                <div class="gn-tile-grid cols-4" role="group" aria-label="${tr('Drawing cursor', 'نشانگر قلم')}">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${(s.drawingCursor || 'pen') === 'pen' ? 'active' : ''}" data-drawing-cursor="pen" title="${tr('Stylus Pen Cursor', 'نشانگر قلم')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorPen', 20)}</span>
-                    <span class="gn-tile-label">Pen</span>
+                    <span class="gn-tile-label">${tr('Pen', 'قلم')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'dot' ? 'active' : ''}" data-drawing-cursor="dot" title="Precision Dot Cursor">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'dot' ? 'active' : ''}" data-drawing-cursor="dot" title="${tr('Precision Dot Cursor', 'نشانگر نقطه‌ای دقیق')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorDot', 20)}</span>
-                    <span class="gn-tile-label">Dot</span>
+                    <span class="gn-tile-label">${tr('Dot', 'نقطه')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'circle' ? 'active' : ''}" data-drawing-cursor="circle" title="Brush Circle Cursor">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'circle' ? 'active' : ''}" data-drawing-cursor="circle" title="${tr('Brush Circle Cursor', 'نشانگر دایره‌ای')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorCircle', 20)}</span>
-                    <span class="gn-tile-label">Circle</span>
+                    <span class="gn-tile-label">${tr('Circle', 'دایره')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'crosshair' ? 'active' : ''}" data-drawing-cursor="crosshair" title="Crosshair Cursor">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn cursor-toggle-btn ${s.drawingCursor === 'crosshair' ? 'active' : ''}" data-drawing-cursor="crosshair" title="${tr('Crosshair Cursor', 'نشانگر به‌علاوه')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorCrosshair', 20)}</span>
-                    <span class="gn-tile-label">Cross</span>
+                    <span class="gn-tile-label">${tr('Cross', 'به‌علاوه')}</span>
                   </button>
                 </div>
               </div>
@@ -343,7 +376,7 @@ export class ToolbarComponent {
               <!-- Stroke Size: Quick Dots + Editable Input + Smooth Slider -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Stroke Size</span>
+                  <span class="gn-section-label">${tr('Stroke Size', 'ضخامت قلم')}</span>
                   <div class="gn-size-header-controls">
                     <div class="size-pills-group gn-dots-strip">
                       ${penWidths.map(w => `
@@ -354,7 +387,7 @@ export class ToolbarComponent {
                     </div>
                     <div class="gn-num-badge">
                       <input type="number" id="hover-pen-width-input" class="size-readout size-type-input pen-readout"
-                             min="1" max="50" step="1" value="${s.penWidth}" title="Type any width (1-50px)" aria-label="Pen width">
+                             min="1" max="50" step="1" value="${s.penWidth}" title="${tr('Type any width (1-50px)', 'وارد کردن ضخامت (۱ تا ۵۰ پیکسل)')}" aria-label="${tr('Pen width', 'ضخامت قلم')}">
                       <span class="gn-unit">px</span>
                     </div>
                   </div>
@@ -362,7 +395,7 @@ export class ToolbarComponent {
                 <div class="gn-slider-wrap">
                   <input type="range" id="hover-pen-width-slider" class="gn-range-slider pen-width-slider"
                          min="1" max="50" step="1" value="${s.penWidth}"
-                         style="--slider-pct:${sliderPercent(s.penWidth, 1, 50)}%" aria-label="Pen width slider">
+                         style="--slider-pct:${sliderPercent(s.penWidth, 1, 50)}%" aria-label="${tr('Pen width slider', 'نوار ضخامت قلم')}">
                 </div>
               </div>
 
@@ -371,15 +404,15 @@ export class ToolbarComponent {
               <!-- Ink Colors -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Ink Color</span>
+                  <span class="gn-section-label">${tr('Ink Color', 'رنگ جوهر')}</span>
                   <input type="text" id="hover-pen-color-hex" class="hex-type-input" value="${s.penColor}"
-                         spellcheck="false" maxlength="7" title="Type any hex color, e.g. #4f46e5" aria-label="Pen color hex">
+                         spellcheck="false" maxlength="7" title="${tr('Type any hex color, e.g. #4f46e5', 'کد هگز رنگ را وارد کنید')}" aria-label="${tr('Pen color hex', 'کد رنگ قلم')}">
                 </div>
                 <div class="color-swatches-group gn-swatch-grid">
                   ${renderDefaultSwatches('pen', 'pen-color', 'pen-swatch', penColors, s.penColor)}
                   ${renderCustomPaletteSwatches('pen-color', 'pen-swatch', s.penColor)}
                   ${renderAddToPaletteButton(s.penColor)}
-                  <div class="color-picker-wrapper" title="Custom color picker">
+                  <div class="color-picker-wrapper" title="${tr('Custom color picker', 'انتخاب رنگ دلخواه')}">
                     <input type="color" id="hover-pen-color-picker" class="color-picker-input" value="${s.penColor}">
                   </div>
                 </div>
@@ -389,7 +422,7 @@ export class ToolbarComponent {
 
           <!-- Highlighter with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'highlighter' ? 'is-pinned' : ''}" data-wrapper-tool="highlighter">
-            <button class="tool-btn has-popover ${activeTool === 'highlighter' ? 'active' : ''}" data-tool="highlighter" title="${t('tools.highlighter')} (H)">
+            <button class="tool-btn has-popover ${activeTool === 'highlighter' ? 'active' : ''}" data-tool="highlighter" title="${t('tools.highlighter')}">
               ${getIconSvg('highlighter')}
               <span class="tool-color-dot hl-dot" style="background-color:${s.highlighterColor}; opacity:0.9;"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
@@ -416,14 +449,14 @@ export class ToolbarComponent {
 
               <!-- Tip Shape Visual Cards -->
               <div class="gn-section">
-                <div class="gn-tile-grid cols-2" role="group" aria-label="Highlighter tip shape">
-                  <button type="button" class="gn-icon-tile mode-toggle-btn hl-tip-btn ${(s.highlighterTipShape || 'round') === 'round' ? 'active' : ''}" data-hl-tip="round" title="Round Marker Tip">
+                <div class="gn-tile-grid cols-2" role="group" aria-label="${tr('Highlighter tip shape', 'شکل نوک هایلایتر')}">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn hl-tip-btn ${(s.highlighterTipShape || 'round') === 'round' ? 'active' : ''}" data-hl-tip="round" title="${tr('Round Marker Tip', 'نوک گرد')}">
                     <span class="gn-tile-icon">${getIconSvg('tipRound', 22)}</span>
-                    <span class="gn-tile-label">Round Tip</span>
+                    <span class="gn-tile-label">${tr('Round Tip', 'نوک گرد')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn hl-tip-btn ${s.highlighterTipShape === 'chisel' ? 'active' : ''}" data-hl-tip="chisel" title="Chisel Marker Tip">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn hl-tip-btn ${s.highlighterTipShape === 'chisel' ? 'active' : ''}" data-hl-tip="chisel" title="${tr('Chisel Marker Tip', 'نوک تخت (ماژیکی)')}">
                     <span class="gn-tile-icon">${getIconSvg('tipChisel', 22)}</span>
-                    <span class="gn-tile-label">Chisel Tip</span>
+                    <span class="gn-tile-label">${tr('Chisel Tip', 'نوک تخت')}</span>
                   </button>
                 </div>
               </div>
@@ -433,7 +466,7 @@ export class ToolbarComponent {
               <!-- Stroke Width Slider + Dots -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Width</span>
+                  <span class="gn-section-label">${tr('Width', 'ضخامت')}</span>
                   <div class="gn-size-header-controls">
                     <div class="size-pills-group gn-dots-strip">
                       ${hlWidths.map(w => `
@@ -444,7 +477,7 @@ export class ToolbarComponent {
                     </div>
                     <div class="gn-num-badge">
                       <input type="number" id="hover-hl-width-input" class="size-readout size-type-input hl-readout"
-                             min="2" max="100" step="1" value="${s.highlighterWidth}" title="Type any width (2-100px)" aria-label="Highlighter width">
+                             min="2" max="100" step="1" value="${s.highlighterWidth}" title="${tr('Type any width (2-100px)', 'وارد کردن ضخامت (۲ تا ۱۰۰ پیکسل)')}" aria-label="${tr('Highlighter width', 'ضخامت هایلایتر')}">
                       <span class="gn-unit">px</span>
                     </div>
                   </div>
@@ -452,14 +485,14 @@ export class ToolbarComponent {
                 <div class="gn-slider-wrap">
                   <input type="range" id="hover-hl-width-slider" class="gn-range-slider hl-width-slider"
                          min="2" max="100" step="1" value="${s.highlighterWidth}"
-                         style="--slider-pct:${sliderPercent(s.highlighterWidth, 2, 100)}%" aria-label="Highlighter width slider">
+                         style="--slider-pct:${sliderPercent(s.highlighterWidth, 2, 100)}%" aria-label="${tr('Highlighter width slider', 'نوار ضخامت هایلایتر')}">
                 </div>
               </div>
 
               <!-- Opacity Notched Slider + Presets -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Opacity</span>
+                  <span class="gn-section-label">${tr('Opacity', 'شفافیت')}</span>
                   <div class="gn-size-header-controls">
                     <div class="size-pills-group">
                       ${[0.25, 0.45, 0.7].map(op => `
@@ -468,7 +501,7 @@ export class ToolbarComponent {
                     </div>
                     <div class="gn-num-badge">
                       <input type="number" id="hover-hl-opacity-input" class="size-readout size-type-input hl-op-readout"
-                             min="10" max="90" step="5" value="${hlOpacityPct}" title="Type opacity (10-90%)" aria-label="Highlighter opacity">
+                             min="10" max="90" step="5" value="${hlOpacityPct}" title="${tr('Type opacity (10-90%)', 'شفافیت (۱۰ تا ۹۰٪)')}" aria-label="${tr('Highlighter opacity', 'شفافیت هایلایتر')}">
                       <span class="gn-unit">%</span>
                     </div>
                   </div>
@@ -476,7 +509,7 @@ export class ToolbarComponent {
                 <div class="gn-slider-wrap gn-slider-notched">
                   <input type="range" id="hover-hl-opacity-slider" class="gn-range-slider hl-opacity-slider"
                          min="10" max="90" step="5" value="${hlOpacityPct}"
-                         style="--slider-pct:${sliderPercent(hlOpacityPct, 10, 90)}%" aria-label="Highlighter opacity slider">
+                         style="--slider-pct:${sliderPercent(hlOpacityPct, 10, 90)}%" aria-label="${tr('Highlighter opacity slider', 'نوار شفافیت هایلایتر')}">
                 </div>
               </div>
 
@@ -485,15 +518,15 @@ export class ToolbarComponent {
               <!-- Tint Color Swatches -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Tint Color</span>
+                  <span class="gn-section-label">${tr('Tint Color', 'رنگ هایلایتر')}</span>
                   <input type="text" id="hover-hl-color-hex" class="hex-type-input" value="${s.highlighterColor}"
-                         spellcheck="false" maxlength="7" title="Type any hex color, e.g. #fef08a" aria-label="Highlighter color hex">
+                         spellcheck="false" maxlength="7" title="${tr('Type any hex color, e.g. #fef08a', 'کد هگز رنگ را وارد کنید')}" aria-label="${tr('Highlighter color hex', 'کد رنگ هایلایتر')}">
                 </div>
                 <div class="color-swatches-group gn-swatch-grid">
                   ${renderDefaultSwatches('highlighter', 'hl-color', 'hl-swatch', hlColors, s.highlighterColor, ' opacity:0.9;')}
                   ${renderCustomPaletteSwatches('hl-color', 'hl-swatch', s.highlighterColor)}
                   ${renderAddToPaletteButton(s.highlighterColor)}
-                  <div class="color-picker-wrapper" title="Custom highlighter color">
+                  <div class="color-picker-wrapper" title="${tr('Custom highlighter color', 'رنگ دلخواه هایلایتر')}">
                     <input type="color" id="hover-hl-color-picker" class="color-picker-input" value="${s.highlighterColor}">
                   </div>
                 </div>
@@ -503,23 +536,23 @@ export class ToolbarComponent {
 
               <!-- Cursor Tiles & Straight-Line Switch -->
               <div class="gn-section">
-                <span class="gn-section-label" style="margin-bottom:6px; display:block;">Cursor & Settings</span>
+                <span class="gn-section-label" style="margin-bottom:6px; display:block;">${tr('Cursor & Settings', 'نشانگر و تنظیمات')}</span>
                 <div class="gn-tile-grid cols-4" style="margin-bottom:8px;">
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${(s.highlighterCursor || 'rectangle') === 'rectangle' ? 'active' : ''}" data-hl-cursor="rectangle" title="Rectangle Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${(s.highlighterCursor || 'rectangle') === 'rectangle' ? 'active' : ''}" data-hl-cursor="rectangle" title="${tr('Rectangle Cursor', 'نشانگر مستطیلی')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorRect', 17)}</span>
-                    <span class="gn-tile-label">Rect</span>
+                    <span class="gn-tile-label">${tr('Rect', 'مستطیل')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'chisel' ? 'active' : ''}" data-hl-cursor="chisel" title="Chisel Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'chisel' ? 'active' : ''}" data-hl-cursor="chisel" title="${tr('Chisel Cursor', 'نشانگر ماژیکی')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorChisel', 17)}</span>
-                    <span class="gn-tile-label">Chisel</span>
+                    <span class="gn-tile-label">${tr('Chisel', 'تخت')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'circle' ? 'active' : ''}" data-hl-cursor="circle" title="Circle Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'circle' ? 'active' : ''}" data-hl-cursor="circle" title="${tr('Circle Cursor', 'نشانگر دایره‌ای')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorCircle', 17)}</span>
-                    <span class="gn-tile-label">Circle</span>
+                    <span class="gn-tile-label">${tr('Circle', 'دایره')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'crosshair' ? 'active' : ''}" data-hl-cursor="crosshair" title="Crosshair Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn hl-cursor-btn ${s.highlighterCursor === 'crosshair' ? 'active' : ''}" data-hl-cursor="crosshair" title="${tr('Crosshair Cursor', 'نشانگر به‌علاوه')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorCrosshair', 17)}</span>
-                    <span class="gn-tile-label">Cross</span>
+                    <span class="gn-tile-label">${tr('Cross', 'به‌علاوه')}</span>
                   </button>
                 </div>
 
@@ -527,7 +560,7 @@ export class ToolbarComponent {
                 <button type="button" class="gn-setting-row" data-hl-straight-toggle aria-pressed="${!!s.highlighterStraightLine}">
                   <span class="gn-setting-label">
                     ${getIconSvg('lineStraight', 16)}
-                    <span>Draw Straight Line</span>
+                    <span>${tr('Draw Straight Line', 'رسم خط مستقیم خودکار')}</span>
                   </span>
                   <span class="gn-switch ${s.highlighterStraightLine ? 'is-on' : ''}">
                     <span class="gn-switch-thumb"></span>
@@ -539,7 +572,7 @@ export class ToolbarComponent {
 
           <!-- Eraser with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'eraser' ? 'is-pinned' : ''}" data-wrapper-tool="eraser">
-            <button class="tool-btn has-popover ${activeTool === 'eraser' ? 'active' : ''}" data-tool="eraser" title="${t('tools.eraser')} (E)">
+            <button class="tool-btn has-popover ${activeTool === 'eraser' ? 'active' : ''}" data-tool="eraser" title="${t('tools.eraser')}">
               ${getIconSvg('eraser')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
@@ -562,18 +595,18 @@ export class ToolbarComponent {
 
               <!-- Eraser Mode Visual Icon Cards -->
               <div class="gn-section">
-                <div class="gn-tile-grid cols-3" role="group" aria-label="Eraser mode">
-                  <button type="button" class="gn-icon-tile mode-toggle-btn eraser-mode-btn ${s.eraserMode === 'stroke' ? 'active' : ''}" data-eraser-mode="stroke" title="Erase Entire Stroke">
+                <div class="gn-tile-grid cols-3" role="group" aria-label="${tr('Eraser mode', 'حالت پاک‌کن')}">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn eraser-mode-btn ${s.eraserMode === 'stroke' ? 'active' : ''}" data-eraser-mode="stroke" title="${tr('Erase Entire Stroke', 'پاک کردن کل خط')}">
                     <span class="gn-tile-icon">${getIconSvg('eraserStroke', 22)}</span>
-                    <span class="gn-tile-label">Stroke</span>
+                    <span class="gn-tile-label">${tr('Stroke', 'خط کامل')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn eraser-mode-btn ${s.eraserMode === 'object' ? 'active' : ''}" data-eraser-mode="object" title="Erase Whole Object">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn eraser-mode-btn ${s.eraserMode === 'object' ? 'active' : ''}" data-eraser-mode="object" title="${tr('Erase Whole Object', 'پاک کردن کل شیء')}">
                     <span class="gn-tile-icon">${getIconSvg('eraserObject', 22)}</span>
-                    <span class="gn-tile-label">Object</span>
+                    <span class="gn-tile-label">${tr('Object', 'شیء')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn eraser-mode-btn ${s.eraserMode === 'pixel' ? 'active' : ''}" data-eraser-mode="pixel" title="Precision Pixel Eraser">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn eraser-mode-btn ${s.eraserMode === 'pixel' ? 'active' : ''}" data-eraser-mode="pixel" title="${tr('Precision Pixel Eraser', 'پاک‌کن نقطه‌ای و دقیق')}">
                     <span class="gn-tile-icon">${getIconSvg('eraserPixel', 22)}</span>
-                    <span class="gn-tile-label">Pixel</span>
+                    <span class="gn-tile-label">${tr('Pixel', 'نقطه‌ای')}</span>
                   </button>
                 </div>
               </div>
@@ -583,13 +616,13 @@ export class ToolbarComponent {
               <!-- Eraser Size Dots + Smooth Slider -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Eraser Size</span>
+                  <span class="gn-section-label">${tr('Eraser Size', 'اندازه پاک‌کن')}</span>
                   <div class="gn-size-header-controls">
                     <div class="size-pills-group gn-dots-strip">
                       ${[
-                        { w: 10, r: 5, label: 'Small (10px)' },
-                        { w: 24, r: 8.5, label: 'Medium (24px)' },
-                        { w: 48, r: 12.5, label: 'Large (48px)' }
+                        { w: 10, r: 5, label: tr('Small (10px)', 'کوچک (۱۰px)') },
+                        { w: 24, r: 8.5, label: tr('Medium (24px)', 'متوسط (۲۴px)') },
+                        { w: 48, r: 12.5, label: tr('Large (48px)', 'بزرگ (۴۸px)') }
                       ].map(item => `
                         <button type="button" class="size-pill eraser-pill gn-dot-btn ${s.eraserWidth === item.w ? 'active' : ''}" data-eraser-width="${item.w}" title="${item.label}">
                           <span class="size-dot" style="width:${item.r}px; height:${item.r}px;"></span>
@@ -598,7 +631,7 @@ export class ToolbarComponent {
                     </div>
                     <div class="gn-num-badge">
                       <input type="number" id="hover-eraser-width-input" class="size-readout size-type-input eraser-readout"
-                             min="4" max="120" step="1" value="${s.eraserWidth}" title="Type any width (4-120px)" aria-label="Eraser width">
+                             min="4" max="120" step="1" value="${s.eraserWidth}" title="${tr('Type any width (4-120px)', 'وارد کردن اندازه (۴ تا ۱۲۰ پیکسل)')}" aria-label="${tr('Eraser width', 'اندازه پاک‌کن')}">
                       <span class="gn-unit">px</span>
                     </div>
                   </div>
@@ -606,7 +639,7 @@ export class ToolbarComponent {
                 <div class="gn-slider-wrap">
                   <input type="range" id="hover-eraser-width-slider" class="gn-range-slider eraser-width-slider"
                          min="4" max="120" step="1" value="${s.eraserWidth}"
-                         style="--slider-pct:${sliderPercent(s.eraserWidth, 4, 120)}%" aria-label="Eraser width slider">
+                         style="--slider-pct:${sliderPercent(s.eraserWidth, 4, 120)}%" aria-label="${tr('Eraser width slider', 'نوار اندازه پاک‌کن')}">
                 </div>
               </div>
 
@@ -614,23 +647,23 @@ export class ToolbarComponent {
 
               <!-- Eraser Cursor Selector -->
               <div class="gn-section">
-                <span class="gn-section-label" style="margin-bottom:6px; display:block;">Cursor</span>
+                <span class="gn-section-label" style="margin-bottom:6px; display:block;">${tr('Cursor', 'شکل نشانگر')}</span>
                 <div class="gn-tile-grid cols-4">
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${(s.eraserCursor || 'circle') === 'circle' ? 'active' : ''}" data-eraser-cursor="circle" title="Circle Size Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${(s.eraserCursor || 'circle') === 'circle' ? 'active' : ''}" data-eraser-cursor="circle" title="${tr('Circle Size Cursor', 'نشانگر دایره‌ای')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorCircle', 17)}</span>
-                    <span class="gn-tile-label">Circle</span>
+                    <span class="gn-tile-label">${tr('Circle', 'دایره')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'dot' ? 'active' : ''}" data-eraser-cursor="dot" title="Precision Dot Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'dot' ? 'active' : ''}" data-eraser-cursor="dot" title="${tr('Precision Dot Cursor', 'نشانگر نقطه‌ای')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorDot', 17)}</span>
-                    <span class="gn-tile-label">Dot</span>
+                    <span class="gn-tile-label">${tr('Dot', 'نقطه')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'crosshair' ? 'active' : ''}" data-eraser-cursor="crosshair" title="Crosshair Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'crosshair' ? 'active' : ''}" data-eraser-cursor="crosshair" title="${tr('Crosshair Cursor', 'نشانگر به‌علاوه')}">
                     <span class="gn-tile-icon">${getIconSvg('cursorCrosshair', 17)}</span>
-                    <span class="gn-tile-label">Cross</span>
+                    <span class="gn-tile-label">${tr('Cross', 'به‌علاوه')}</span>
                   </button>
-                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'eraser' ? 'active' : ''}" data-eraser-cursor="eraser" title="Eraser Icon Cursor">
+                  <button type="button" class="gn-icon-tile is-compact mode-toggle-btn eraser-cursor-btn ${s.eraserCursor === 'eraser' ? 'active' : ''}" data-eraser-cursor="eraser" title="${tr('Eraser Icon Cursor', 'آیکون پاک‌کن')}">
                     <span class="gn-tile-icon">${getIconSvg('eraser', 17)}</span>
-                    <span class="gn-tile-label">Icon</span>
+                    <span class="gn-tile-label">${tr('Icon', 'آیکون')}</span>
                   </button>
                 </div>
               </div>
@@ -644,7 +677,7 @@ export class ToolbarComponent {
         <div class="toolbar-group">
           <!-- Rectangle with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'rectangle' ? 'is-pinned' : ''}" data-wrapper-tool="rectangle">
-            <button class="tool-btn has-popover ${activeTool === 'rectangle' ? 'active' : ''}" data-tool="rectangle" title="${t('tools.rectangle')} (R)">
+            <button class="tool-btn has-popover ${activeTool === 'rectangle' ? 'active' : ''}" data-tool="rectangle" title="${t('tools.rectangle')}">
               ${getIconSvg('rectangle')}
               <span class="tool-color-dot shape-dot" style="background-color:${s.shapeColor};"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
@@ -656,7 +689,7 @@ export class ToolbarComponent {
 
           <!-- Ellipse with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'ellipse' ? 'is-pinned' : ''}" data-wrapper-tool="ellipse">
-            <button class="tool-btn has-popover ${activeTool === 'ellipse' ? 'active' : ''}" data-tool="ellipse" title="${t('tools.ellipse')} (O)">
+            <button class="tool-btn has-popover ${activeTool === 'ellipse' ? 'active' : ''}" data-tool="ellipse" title="${t('tools.ellipse')}">
               ${getIconSvg('ellipse')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
@@ -667,7 +700,7 @@ export class ToolbarComponent {
 
           <!-- Line with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'line' ? 'is-pinned' : ''}" data-wrapper-tool="line">
-            <button class="tool-btn has-popover ${activeTool === 'line' ? 'active' : ''}" data-tool="line" title="${t('tools.line')} (L)">
+            <button class="tool-btn has-popover ${activeTool === 'line' ? 'active' : ''}" data-tool="line" title="${t('tools.line')}">
               ${getIconSvg('line')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
@@ -678,7 +711,7 @@ export class ToolbarComponent {
 
           <!-- Arrow with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'arrow' ? 'is-pinned' : ''}" data-wrapper-tool="arrow">
-            <button class="tool-btn has-popover ${activeTool === 'arrow' ? 'active' : ''}" data-tool="arrow" title="${t('tools.arrow')} (A)">
+            <button class="tool-btn has-popover ${activeTool === 'arrow' ? 'active' : ''}" data-tool="arrow" title="${t('tools.arrow')}">
               ${getIconSvg('arrow')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
@@ -689,7 +722,7 @@ export class ToolbarComponent {
 
           <!-- Polygon with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'polygon' ? 'is-pinned' : ''}" data-wrapper-tool="polygon">
-            <button class="tool-btn has-popover ${activeTool === 'polygon' ? 'active' : ''}" data-tool="polygon" title="Custom Multi-Point Polygon (G)">
+            <button class="tool-btn has-popover ${activeTool === 'polygon' ? 'active' : ''}" data-tool="polygon" title="${t('tools.polygon')} (G)">
               ${getIconSvg('polygon')}
               <span class="tool-color-dot shape-dot" style="background-color:${s.shapeColor};"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
@@ -706,7 +739,7 @@ export class ToolbarComponent {
         <div class="toolbar-group">
           <!-- Text Tool with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'text' ? 'is-pinned' : ''}" data-wrapper-tool="text">
-            <button class="tool-btn has-popover ${activeTool === 'text' ? 'active' : ''}" data-tool="text" title="${t('tools.text')} (T)">
+            <button class="tool-btn has-popover ${activeTool === 'text' ? 'active' : ''}" data-tool="text" title="${t('tools.text')}">
               ${getIconSvg('text')}
               <span class="tool-color-dot text-dot" style="background-color:${s.textColor};"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
@@ -729,7 +762,7 @@ export class ToolbarComponent {
 
               <!-- Font Family Icon Cards -->
               <div class="gn-section">
-                <div class="gn-tile-grid cols-2" role="group" aria-label="Font family">
+                <div class="gn-tile-grid cols-2" role="group" aria-label="${tr('Font family', 'نوع فونت')}">
                   <button type="button" class="gn-icon-tile mode-toggle-btn font-fam-btn ${(s.fontFamily || 'Inter').includes('Inter') ? 'active' : ''}" data-font-fam="Inter">
                     <span class="gn-font-glyph" style="font-family:var(--font-en);">Aa</span>
                     <span class="gn-tile-label">Inter</span>
@@ -746,10 +779,10 @@ export class ToolbarComponent {
               <!-- Font Size Presets + Slider -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Font Size</span>
+                  <span class="gn-section-label">${tr('Font Size', 'اندازه فونت')}</span>
                   <div class="gn-num-badge">
                     <input type="number" id="hover-font-size-input" class="size-readout size-type-input"
-                           min="6" max="144" step="1" value="${s.fontSize}" title="Type any size (6-144px)" aria-label="Font size">
+                           min="6" max="144" step="1" value="${s.fontSize}" title="${tr('Type any size (6-144px)', 'وارد کردن اندازه فونت (۶ تا ۱۴۴)')}" aria-label="${tr('Font size', 'اندازه فونت')}">
                     <span class="gn-unit">px</span>
                   </div>
                 </div>
@@ -761,7 +794,7 @@ export class ToolbarComponent {
                 <div class="gn-slider-wrap">
                   <input type="range" id="hover-font-size-slider" class="gn-range-slider font-size-slider"
                          min="6" max="144" step="1" value="${s.fontSize}"
-                         style="--slider-pct:${sliderPercent(s.fontSize, 6, 144)}%" aria-label="Font size slider">
+                         style="--slider-pct:${sliderPercent(s.fontSize, 6, 144)}%" aria-label="${tr('Font size slider', 'نوار اندازه فونت')}">
                 </div>
               </div>
 
@@ -770,15 +803,15 @@ export class ToolbarComponent {
               <!-- Text Color Swatches -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Text Color</span>
+                  <span class="gn-section-label">${tr('Text Color', 'رنگ متن')}</span>
                   <input type="text" id="hover-text-color-hex" class="hex-type-input" value="${s.textColor}"
-                         spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Text color hex">
+                         spellcheck="false" maxlength="7" title="${tr('Type any hex color', 'کد هگز رنگ متن')}" aria-label="${tr('Text color hex', 'کد رنگ متن')}">
                 </div>
                 <div class="color-swatches-group gn-swatch-grid">
                   ${renderDefaultSwatches('text', 'text-color', 'text-swatch', textColors, s.textColor)}
                   ${renderCustomPaletteSwatches('text-color', 'text-swatch', s.textColor)}
                   ${renderAddToPaletteButton(s.textColor)}
-                  <div class="color-picker-wrapper" title="Custom text color">
+                  <div class="color-picker-wrapper" title="${tr('Custom text color', 'انتخاب رنگ دلخواه متن')}">
                     <input type="color" id="hover-text-color-picker" class="color-picker-input" value="${s.textColor}">
                   </div>
                 </div>
@@ -813,15 +846,15 @@ export class ToolbarComponent {
               <!-- Paper Background Color Swatches -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Note Paper Color</span>
+                  <span class="gn-section-label">${tr('Note Paper Color', 'رنگ کاغذ یادداشت')}</span>
                   <input type="text" id="hover-note-color-hex" class="hex-type-input" value="${s.noteColor || '#ebd09e'}"
-                         spellcheck="false" maxlength="7" title="Type any hex paper color" aria-label="Note paper color hex">
+                         spellcheck="false" maxlength="7" title="${tr('Type any hex paper color', 'کد رنگ کاغذ یادداشت')}" aria-label="${tr('Note paper color hex', 'کد رنگ کاغذ')}">
                 </div>
                 <div class="color-swatches-group gn-swatch-grid">
                   ${renderDefaultSwatches('sticky-note', 'note-color', 'note-swatch', ['#ebd09e', '#fef08a', '#bbf7d0', '#bae6fd', '#fbcfe8', '#e9d5ff', '#fed7aa'], s.noteColor || '#ebd09e')}
                   ${renderCustomPaletteSwatches('note-color', 'note-swatch', s.noteColor || '#ebd09e')}
                   ${renderAddToPaletteButton(s.noteColor || '#ebd09e')}
-                  <div class="color-picker-wrapper" title="Custom note paper color">
+                  <div class="color-picker-wrapper" title="${tr('Custom note paper color', 'رنگ دلخواه کاغذ یادداشت')}">
                     <input type="color" id="hover-note-color-picker" class="color-picker-input" value="${s.noteColor || '#ebd09e'}">
                   </div>
                 </div>
@@ -832,8 +865,8 @@ export class ToolbarComponent {
               <!-- Text & Ink Color Swatches -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Text & Ink Color</span>
-                  <div class="color-picker-wrapper" title="Custom text & ink color" style="width:22px; height:22px;">
+                  <span class="gn-section-label">${tr('Text & Ink Color', 'رنگ متن و دست‌خط')}</span>
+                  <div class="color-picker-wrapper" title="${tr('Custom text & ink color', 'رنگ دلخواه متن و دست‌خط')}" style="width:22px; height:22px;">
                     <input type="color" id="hover-note-textcolor-picker" class="color-picker-input" value="${s.noteTextColor || '#3b2f1e'}">
                   </div>
                 </div>
@@ -850,17 +883,17 @@ export class ToolbarComponent {
               <!-- Note Font Size -->
               <div class="gn-section">
                 <div class="gn-section-header">
-                  <span class="gn-section-label">Font Size</span>
+                  <span class="gn-section-label">${tr('Font Size', 'اندازه فونت')}</span>
                   <div class="gn-num-badge">
                     <input type="number" id="hover-note-fontsize-input" class="size-readout size-type-input"
-                           min="10" max="96" step="1" value="${s.noteFontSize || 24}" title="Font size (10-96px)" aria-label="Note font size">
+                           min="10" max="96" step="1" value="${s.noteFontSize || 24}" title="${tr('Font size (10-96px)', 'اندازه فونت (۱۰ تا ۹۶)')}" aria-label="${tr('Note font size', 'اندازه فونت یادداشت')}">
                     <span class="gn-unit">px</span>
                   </div>
                 </div>
                 <div class="gn-slider-wrap">
                   <input type="range" id="hover-note-fontsize-slider" class="gn-range-slider"
                          min="10" max="72" step="1" value="${s.noteFontSize || 24}"
-                         style="--slider-pct:${sliderPercent(s.noteFontSize || 24, 10, 72)}%" aria-label="Note font size slider">
+                         style="--slider-pct:${sliderPercent(s.noteFontSize || 24, 10, 72)}%" aria-label="${tr('Note font size slider', 'نوار اندازه فونت یادداشت')}">
                 </div>
               </div>
             </div>
@@ -868,7 +901,7 @@ export class ToolbarComponent {
 
           <!-- Stamp with Goodnotes Popover Card -->
           <div class="tool-btn-wrapper ${this._pinnedTool === 'stamp' ? 'is-pinned' : ''}" data-wrapper-tool="stamp">
-            <button class="tool-btn has-popover ${activeTool === 'stamp' ? 'active' : ''}" data-tool="stamp" title="${t('tools.stamp')} (M)">
+            <button class="tool-btn has-popover ${activeTool === 'stamp' ? 'active' : ''}" data-tool="stamp" title="${t('tools.stamp')}">
               ${getIconSvg('stamp')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
@@ -915,7 +948,7 @@ export class ToolbarComponent {
                 </svg>
               </div>
               <div class="gn-section">
-                <span class="gn-section-label" style="margin-bottom:6px; display:block;">Measurement Unit</span>
+                <span class="gn-section-label" style="margin-bottom:6px; display:block;">${tr('Measurement Unit', 'واحد اندازه‌گیری')}</span>
                 <div class="gn-unit-grid">
                   ${['mm', 'cm', 'm', 'in', 'ft', 'pt', 'px'].map(u => `
                     <button type="button" class="size-pill measure-pill ${s.measureUnit === u ? 'active' : ''}" data-measure-unit="${u}">${u}</button>
@@ -926,24 +959,24 @@ export class ToolbarComponent {
           </div>
 
           <!-- Signature Pad Trigger -->
-          <button class="tool-btn ${activeTool === 'signature' ? 'active' : ''}" id="toolbar-signature-btn" data-tool="signature" title="${t('tools.signature')} (K)">
+          <button class="tool-btn ${activeTool === 'signature' ? 'active' : ''}" id="toolbar-signature-btn" data-tool="signature" title="${t('tools.signature')}">
             ${getIconSvg('signature')}
           </button>
 
           <!-- Floating Scratchpad -->
-          <button class="tool-btn ${activeTool === 'scratchpad' ? 'active' : ''}" data-tool="scratchpad" title="${t('tools.scratchpad')} (N)">
+          <button class="tool-btn ${activeTool === 'scratchpad' ? 'active' : ''}" data-tool="scratchpad" title="${t('tools.scratchpad')}">
             ${getIconSvg('scratchpad')}
           </button>
         </div>
 
         <div class="toolbar-separator"></div>
 
-        <!-- Undo / Redo -->
+        <!-- History Group -->
         <div class="toolbar-group">
-          <button id="toolbar-undo-btn" class="tool-btn" ${!canUndo ? 'disabled style="opacity:0.4; cursor:not-allowed;"' : ''} title="${t('undo')} (Ctrl+Z)">
+          <button id="toolbar-undo-btn" class="tool-btn" title="${t('undo')} (Ctrl+Z)" ${!canUndo ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>
             ${getIconSvg('undo')}
           </button>
-          <button id="toolbar-redo-btn" class="tool-btn" ${!canRedo ? 'disabled style="opacity:0.4; cursor:not-allowed;"' : ''} title="${t('redo')} (Ctrl+Y)">
+          <button id="toolbar-redo-btn" class="tool-btn" title="${t('redo')} (Ctrl+Y)" ${!canRedo ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>
             ${getIconSvg('redo')}
           </button>
         </div>
@@ -970,7 +1003,6 @@ export class ToolbarComponent {
     const row = this._container.querySelector('.toolbar-main-row');
     if (!row) return;
     const layout = store.toolbarLayout;
-    const undoGroup = row.querySelector('#toolbar-undo-btn')?.closest('.toolbar-group') as HTMLElement | null;
 
     const byId = new Map<ToolType, HTMLElement>();
     for (const el of this.toolElements()) {
@@ -978,10 +1010,13 @@ export class ToolbarComponent {
       if (id && !byId.has(id)) byId.set(id, el);
     }
 
+    const undoBtn = row.querySelector('#toolbar-undo-btn');
+    const historyGroup = undoBtn?.parentElement ?? null;
+
     const shown = layout.filter(l => l.visible);
 
     row.querySelectorAll(':scope > *').forEach(n => {
-      if (n !== undoGroup && !(n instanceof HTMLElement && n.classList.contains('toolbar-drag-handle'))) n.remove();
+      if (!(n instanceof HTMLElement && n.classList.contains('toolbar-drag-handle'))) n.remove();
     });
 
     let lastFamily: string | null = null;
@@ -998,7 +1033,14 @@ export class ToolbarComponent {
       row.appendChild(el);
     }
 
-    if (undoGroup) row.appendChild(undoGroup);
+    if (historyGroup) {
+      if (shown.length > 0) {
+        const sep = document.createElement('div');
+        sep.className = 'toolbar-separator';
+        row.appendChild(sep);
+      }
+      row.appendChild(historyGroup);
+    }
   }
 
   /** Top-level tool elements: hover-card wrappers + standalone buttons. */
@@ -1527,7 +1569,7 @@ export class ToolbarComponent {
     const cornerRad = Math.max(0, Math.round(s.shapeCornerRadius ?? 0));
     const fillOpPct = Math.round((s.shapeFillOpacity ?? 1) * 100);
     const isSegment = SEGMENT_TOOLS.includes(shapeType as ToolType);
-    const titleLabel = TOOL_SHORT_LABELS[shapeType] || shapeType;
+    const titleLabel = getToolShortLabel(shapeType);
 
     return `
       <div class="gn-popover-arrow"></div>
@@ -1544,18 +1586,18 @@ export class ToolbarComponent {
 
       <!-- Line Style Visual Icon Cards -->
       <div class="gn-section">
-        <div class="gn-tile-grid cols-3" role="group" aria-label="Stroke style">
-          <button type="button" class="gn-icon-tile mode-toggle-btn ${s.shapeStyle === 'solid' ? 'active' : ''}" data-shape-style="solid" title="Solid Line">
+        <div class="gn-tile-grid cols-3" role="group" aria-label="${tr('Stroke style', 'نوع خط دور')}">
+          <button type="button" class="gn-icon-tile mode-toggle-btn ${s.shapeStyle === 'solid' ? 'active' : ''}" data-shape-style="solid" title="${tr('Solid Line', 'خط ممتد')}">
             <span class="gn-tile-icon">${getIconSvg('styleSolid', 20)}</span>
-            <span class="gn-tile-label">Solid</span>
+            <span class="gn-tile-label">${tr('Solid', 'ممتد')}</span>
           </button>
-          <button type="button" class="gn-icon-tile mode-toggle-btn ${s.shapeStyle === 'dashed' ? 'active' : ''}" data-shape-style="dashed" title="Dashed Line">
+          <button type="button" class="gn-icon-tile mode-toggle-btn ${s.shapeStyle === 'dashed' ? 'active' : ''}" data-shape-style="dashed" title="${tr('Dashed Line', 'خط‌چین')}">
             <span class="gn-tile-icon">${getIconSvg('styleDashed', 20)}</span>
-            <span class="gn-tile-label">Dashed</span>
+            <span class="gn-tile-label">${tr('Dashed', 'خط‌چین')}</span>
           </button>
-          <button type="button" class="gn-icon-tile mode-toggle-btn ${s.shapeStyle === 'dotted' ? 'active' : ''}" data-shape-style="dotted" title="Dotted Line">
+          <button type="button" class="gn-icon-tile mode-toggle-btn ${s.shapeStyle === 'dotted' ? 'active' : ''}" data-shape-style="dotted" title="${tr('Dotted Line', 'نقطه‌چین')}">
             <span class="gn-tile-icon">${getIconSvg('styleDotted', 20)}</span>
-            <span class="gn-tile-label">Dotted</span>
+            <span class="gn-tile-label">${tr('Dotted', 'نقطه‌چین')}</span>
           </button>
         </div>
       </div>
@@ -1565,7 +1607,7 @@ export class ToolbarComponent {
       <!-- Stroke Width Dots + Input + Smooth Slider -->
       <div class="gn-section">
         <div class="gn-section-header">
-          <span class="gn-section-label">Stroke Width</span>
+          <span class="gn-section-label">${tr('Stroke Width', 'ضخامت خط')}</span>
           <div class="gn-size-header-controls">
             <div class="size-pills-group gn-dots-strip">
               ${strokeWidths.map(w => `
@@ -1576,7 +1618,7 @@ export class ToolbarComponent {
             </div>
             <div class="gn-num-badge">
               <input type="number" class="size-readout size-type-input shape-width-input"
-                     min="0.5" max="40" step="0.5" value="${s.shapeWidth}" title="Type any width (0.5-40px)" aria-label="Shape stroke width">
+                     min="0.5" max="40" step="0.5" value="${s.shapeWidth}" title="${tr('Type any width (0.5-40px)', 'وارد کردن ضخامت خط (۰.۵ تا ۴۰)')}" aria-label="${tr('Shape stroke width', 'ضخامت خط شکل')}">
               <span class="gn-unit">px</span>
             </div>
           </div>
@@ -1584,7 +1626,7 @@ export class ToolbarComponent {
         <div class="gn-slider-wrap">
           <input type="range" class="gn-range-slider shape-width-slider"
                  min="0.5" max="40" step="0.5" value="${s.shapeWidth}"
-                 style="--slider-pct:${sliderPercent(s.shapeWidth, 0.5, 40)}%" aria-label="Shape stroke width slider">
+                 style="--slider-pct:${sliderPercent(s.shapeWidth, 0.5, 40)}%" aria-label="${tr('Shape stroke width slider', 'نوار ضخامت خط شکل')}">
         </div>
       </div>
 
@@ -1592,11 +1634,11 @@ export class ToolbarComponent {
         <div class="gn-divider"></div>
         <div class="gn-section">
           <div class="gn-section-header">
-            <span class="gn-section-label">Corner Radius</span>
+            <span class="gn-section-label">${tr('Corner Radius', 'گردی گوشه‌ها')}</span>
             <div class="gn-size-header-controls">
               <div class="gn-num-badge">
                 <input type="number" class="size-readout size-type-input shape-corner-radius-input"
-                       min="0" max="48" step="1" value="${cornerRad}" title="Corner radius (0 = sharp, up to 48px)" aria-label="Shape corner radius">
+                       min="0" max="48" step="1" value="${cornerRad}" title="${tr('Corner radius (0 = sharp, up to 48px)', 'شعاع گردی گوشه (۰ = تیز، تا ۴۸ پیکسل)')}" aria-label="${tr('Shape corner radius', 'گردی گوشه شکل')}">
                 <span class="gn-unit">px</span>
               </div>
             </div>
@@ -1604,7 +1646,7 @@ export class ToolbarComponent {
           <div class="gn-slider-wrap">
             <input type="range" class="gn-range-slider shape-corner-radius-slider"
                    min="0" max="48" step="1" value="${cornerRad}"
-                   style="--slider-pct:${sliderPercent(cornerRad, 0, 48)}%" aria-label="Shape corner radius slider">
+                   style="--slider-pct:${sliderPercent(cornerRad, 0, 48)}%" aria-label="${tr('Shape corner radius slider', 'نوار گردی گوشه شکل')}">
           </div>
         </div>
       ` : ''}
@@ -1614,15 +1656,15 @@ export class ToolbarComponent {
       <!-- Stroke Color Swatches -->
       <div class="gn-section">
         <div class="gn-section-header">
-          <span class="gn-section-label">Stroke Color</span>
+          <span class="gn-section-label">${tr('Stroke Color', 'رنگ خط دور')}</span>
           <input type="text" class="hex-type-input shape-stroke-hex" value="${s.shapeColor}"
-                 spellcheck="false" maxlength="7" title="Type any hex color" aria-label="Shape stroke color hex">
+                 spellcheck="false" maxlength="7" title="${tr('Type any hex color', 'کد هگز رنگ خط دور')}" aria-label="${tr('Shape stroke color hex', 'کد رنگ خط شکل')}">
         </div>
         <div class="color-swatches-group gn-swatch-grid">
           ${renderDefaultSwatches('shape', 'shape-color', 'shape-swatch', shapeColors, s.shapeColor)}
           ${renderCustomPaletteSwatches('shape-color', 'shape-swatch', s.shapeColor)}
           ${renderAddToPaletteButton(s.shapeColor)}
-          <div class="color-picker-wrapper" title="Custom stroke color">
+          <div class="color-picker-wrapper" title="${tr('Custom stroke color', 'رنگ دلخواه خط دور')}">
             <input type="color" class="color-picker-input shape-color-picker" value="${s.shapeColor}">
           </div>
         </div>
@@ -1632,27 +1674,27 @@ export class ToolbarComponent {
         <div class="gn-divider"></div>
         <div class="gn-section">
           <div class="gn-section-header">
-            <span class="gn-section-label">Fill Color</span>
+            <span class="gn-section-label">${tr('Fill Color', 'رنگ داخل شکل')}</span>
             <input type="text" class="hex-type-input shape-fill-hex" value="${s.shapeFillColor === 'transparent' ? '' : s.shapeFillColor}"
-                   spellcheck="false" maxlength="7" placeholder="None" title="Type any hex fill color, empty = none" aria-label="Shape fill color hex">
+                   spellcheck="false" maxlength="7" placeholder="${tr('None', 'بی‌رنگ')}" title="${tr('Type any hex fill color, empty = none', 'کد رنگ داخل شکل (خالی = بی‌رنگ)')}" aria-label="${tr('Shape fill color hex', 'کد رنگ داخل شکل')}">
           </div>
           <div class="color-swatches-group gn-swatch-grid">
-            <button type="button" class="color-swatch gn-nofill-swatch ${s.shapeFillColor === 'transparent' ? 'active' : ''}" data-shape-fill="transparent" title="No Fill (Transparent)">
+            <button type="button" class="color-swatch gn-nofill-swatch ${s.shapeFillColor === 'transparent' ? 'active' : ''}" data-shape-fill="transparent" title="${tr('No Fill (Transparent)', 'بدون رنگ داخلی (شفاف)')}">
               ${getIconSvg('noFill', 14)}
             </button>
             ${renderDefaultSwatches('shape-fill', 'shape-fill-color', 'shape-fill-swatch', shapeColors, s.shapeFillColor)}
             ${renderCustomPaletteSwatches('shape-fill-color', 'shape-fill-swatch', s.shapeFillColor)}
             ${renderAddToPaletteButton(s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor)}
-            <div class="color-picker-wrapper" title="Custom Fill Color">
+            <div class="color-picker-wrapper" title="${tr('Custom Fill Color', 'رنگ دلخواه داخل شکل')}">
               <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
             </div>
           </div>
           <div class="gn-section-header" style="margin-top: 10px;">
-            <span class="gn-section-label">Fill Opacity</span>
+            <span class="gn-section-label">${tr('Fill Opacity', 'شفافیت داخل شکل')}</span>
             <div class="gn-size-header-controls">
               <div class="gn-num-badge">
                 <input type="number" class="size-readout size-type-input shape-fill-opacity-input"
-                       min="0" max="100" step="1" value="${fillOpPct}" title="Fill opacity (0-100%)" aria-label="Shape fill opacity percentage">
+                       min="0" max="100" step="1" value="${fillOpPct}" title="${tr('Fill opacity (0-100%)', 'شفافیت داخل شکل (۰ تا ۱۰۰٪)')}" aria-label="${tr('Shape fill opacity percentage', 'درصد شفافیت داخل شکل')}">
                 <span class="gn-unit">%</span>
               </div>
             </div>
@@ -1660,7 +1702,7 @@ export class ToolbarComponent {
           <div class="gn-slider-wrap">
             <input type="range" class="gn-range-slider shape-fill-opacity-slider"
                    min="0" max="100" step="1" value="${fillOpPct}"
-                   style="--slider-pct:${sliderPercent(fillOpPct, 0, 100)}%" aria-label="Shape fill opacity slider">
+                   style="--slider-pct:${sliderPercent(fillOpPct, 0, 100)}%" aria-label="${tr('Shape fill opacity slider', 'نوار شفافیت داخل شکل')}">
           </div>
         </div>
       ` : ''}
@@ -1668,12 +1710,12 @@ export class ToolbarComponent {
       ${(hasClosedArea || isSegment) ? `
         <div class="gn-divider"></div>
         <div class="gn-section gn-settings-list">
-          <span class="gn-section-label" style="margin-bottom:4px; display:block;">Settings</span>
+          <span class="gn-section-label" style="margin-bottom:4px; display:block;">${tr('Settings', 'تنظیمات')}</span>
           ${hasClosedArea ? `
             <button type="button" class="gn-setting-row" data-shape-outline-toggle aria-pressed="${s.shapeOutline !== false}">
               <span class="gn-setting-label">
                 ${getIconSvg('outlineOn', 15)}
-                <span>Shape Border (Outline)</span>
+                <span>${tr('Shape Border (Outline)', 'حاشیه و کادر دور شکل')}</span>
               </span>
               <span class="gn-switch ${s.shapeOutline !== false ? 'is-on' : ''}">
                 <span class="gn-switch-thumb"></span>
@@ -1683,10 +1725,10 @@ export class ToolbarComponent {
           ${isSegment ? `
             <button type="button" class="gn-setting-row shape-opt-btn ${store.toolOption(shapeType as ToolType, 'snapAngle15') ? 'active' : ''}"
                     data-shape-opt="snapAngle15" aria-pressed="${store.toolOption(shapeType as ToolType, 'snapAngle15')}"
-                    title="Constrain this tool's segments to 15° increments (Shift always does)">
+                    title="${tr('Constrain this tool\'s segments to 15° increments (Shift always does)', 'قفل شدن زاویه خطوط روی مضرب‌های ۱۵ درجه')}">
               <span class="gn-setting-label">
                 ${getIconSvg('snapAngle', 15)}
-                <span>Snap to 15° Angles</span>
+                <span>${tr('Snap to 15° Angles', 'قفل زاویه روی ۱۵ درجه')}</span>
               </span>
               <span class="gn-switch ${store.toolOption(shapeType as ToolType, 'snapAngle15') ? 'is-on' : ''}">
                 <span class="gn-switch-thumb"></span>
@@ -1694,10 +1736,10 @@ export class ToolbarComponent {
             </button>
             <button type="button" class="gn-setting-row shape-opt-btn ${store.toolOption(shapeType as ToolType, 'connectLines') ? 'active' : ''}"
                     data-shape-opt="connectLines" aria-pressed="${store.toolOption(shapeType as ToolType, 'connectLines')}"
-                    title="Merge this line with a coincident endpoint into one continuous path">
+                    title="${tr('Merge this line with a coincident endpoint into one continuous path', 'اتصال خودکار انتهای خطوط منطبق به یکدیگر')}">
               <span class="gn-setting-label">
                 ${getIconSvg('connectNodes', 15)}
-                <span>Connect Endpoints</span>
+                <span>${tr('Connect Endpoints', 'اتصال خودکار سرِ خطوط')}</span>
               </span>
               <span class="gn-switch ${store.toolOption(shapeType as ToolType, 'connectLines') ? 'is-on' : ''}">
                 <span class="gn-switch-thumb"></span>

@@ -66,15 +66,15 @@ export class PenTool {
       const minDist = Math.min(0.18, 0.24 / effZoom);
       const dist = Math.hypot(dx, dy);
       if (dist < minDist) {
-        prev.pressure = prev.pressure * 0.84 + point.pressure * 0.16;
+        prev.pressure = prev.pressure * 0.45 + point.pressure * 0.55;
         if (dist > 0.01) {
           this._liveTip = { ...point, pressure: prev.pressure };
         }
         return;
       }
-      // Arc-length bounded pressure EMA so touch-down pressure never jumps over short steps
-      const rawBlended = prev.pressure * 0.80 + point.pressure * 0.20;
-      const maxDelta = Math.max(0.005, dist * 0.08);
+      // Preserve responsive hardware stylus pressure while smoothing single-sample noise
+      const rawBlended = prev.pressure * 0.35 + point.pressure * 0.65;
+      const maxDelta = Math.max(0.08, dist * 0.35);
       const clampedPressure = Math.max(
         prev.pressure - maxDelta,
         Math.min(prev.pressure + maxDelta, rawBlended)

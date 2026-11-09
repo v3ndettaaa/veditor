@@ -9,7 +9,9 @@ import {
   offsetAnnotation,
   getAnnotationSelectionBox,
   getAnnotationEndpoints,
-  moveAnnotationEndpoint
+  moveAnnotationEndpoint,
+  getAnnotationVertices,
+  moveAnnotationVertex
 } from '../src/annotations/selection';
 import { store } from '../src/core/store';
 import { PenAnnotation, ShapeAnnotation, Point } from '../src/core/types';
@@ -280,3 +282,92 @@ describe('Line and arrow endpoint dragging', () => {
     expect(next).toBe(ann);
   });
 });
+
+describe('Vertex-based shape selection and corner dragging', () => {
+  const poly = (): ShapeAnnotation => ({
+    id: 'poly1',
+    pageIndex: 0,
+    layerId: 'default',
+    type: 'polygon',
+    points: [
+      { x: 20, y: 20 },
+      { x: 120, y: 30 },
+      { x: 70, y: 110 }
+    ],
+    box: computePointsBoundingBox([
+      { x: 20, y: 20 },
+      { x: 120, y: 30 },
+      { x: 70, y: 110 }
+    ], 2),
+    strokeColor: '#4f46e5',
+    strokeWidth: 2,
+    strokeStyle: 'solid',
+    outline: true,
+    opacity: 1,
+    createdAt: 0,
+    updatedAt: 0
+  });
+
+  const rect = (): ShapeAnnotation => ({
+    id: 'rect1',
+    pageIndex: 0,
+    layerId: 'default',
+    type: 'rectangle',
+    box: { x: 40, y: 50, width: 100, height: 60 },
+    strokeColor: '#4f46e5',
+    strokeWidth: 2,
+    strokeStyle: 'solid',
+    outline: true,
+    opacity: 1,
+    createdAt: 0,
+    updatedAt: 0
+  });
+
+  it('hit-tests polygon vertices directly and moves individual vertices', () => {
+    const p = poly();
+    expect(getAnnotationVertices(p)).toEqual([
+      { x: 20, y: 20 },
+      { x: 120, y: 30 },
+      { x: 70, y: 110 }
+    ]);
+    expect(selectionManager.hitTestSelection({ x: 21, y: 21 }, [p], 1)).toBe('vertex:0');
+    expect(selectionManager.hitTestSelection({ x: 119, y: 31 }, [p], 1)).toBe('vertex:1');
+    expect(selectionManager.hitTestSelection({ x: 70, y: 109 }, [p], 1)).toBe('vertex:2');
+    // Empty corner of bounding box outside the triangle should NOT hit body
+    expect(selectionManager.hitTestSelection({ x: 22, y: 108 }, [p], 1)).toBeNull();
+    // Inside the triangle hits body
+    expect(selectionManager.hitTestSelection({ x: 70, y: 55 }, [p], 1)).toBe('body');
+
+    const moved = moveAnnotationVertex(p, 2, { x: 85, y: 140 }) as ShapeAnnotation;
+    expect(moved.points).toEqual([
+      { x: 20, y: 20 },
+      { x: 120, y: 30 },
+      { x: 85, y: 140 }
+    ]);
+  });
+
+  it('supports both free single-corner movement and 90-degree locked resizing on rectangles', () => {
+    const r = rect();
+    expect(selectionManager.hitTestSelection({ x: 41, y: 51 }, [r], 1)).toBe('vertex:0');
+    expect(selectionManager.hitTestSelection({ x: 139, y: 109 }, [r], 1)).toBe('vertex:2');
+    // Edge midpoints stay active for side resizing
+    expect(selectionManager.hitTestSelection({ x: 90, y: 50 }, [r], 1)).toBe('n');
+    expect(selectionManager.hitTestSelection({ x: 140, y: 80 }, [r], 1)).toBe('e');
+
+    // Free corner drag converts rectangle to a 4-vertex polygon with only that corner moved
+    const freeMoved = moveAnnotationVertex(r, 1, { x: 165, y: 35 }, false) as ShapeAnnotation;
+    expect(freeMoved.type).toBe('polygon');
+    expect(freeMoved.points).toEqual([
+      { x: 40, y: 50 },
+      { x: 165, y: 35 },
+      { x: 140, y: 110 },
+      { x: 40, y: 110 }
+    ]);
+
+    // 90-degree locked corner drag resizes the rectangle box
+    const rectMoved = moveAnnotationVertex(r, 2, { x: 180, y: 130 }, true) as ShapeAnnotation;
+    expect(rectMoved.type).toBe('rectangle');
+    expect(rectMoved.box).toEqual({ x: 40, y: 50, width: 140, height: 80 });
+  });
+});
+
