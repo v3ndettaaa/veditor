@@ -96,13 +96,12 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload extension zips to GitHub Release
-        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: v${{ steps.pkg_version.outputs.VERSION }}
-          files: |
-            dist/veditor-chrome.zip
-            dist/veditor-firefox.zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.pkg_version.outputs.VERSION }}"
+          echo "Uploading extensions to release $TAG..."
+          gh release upload "$TAG" dist/veditor-chrome.zip dist/veditor-firefox.zip --clobber || true
+
 
