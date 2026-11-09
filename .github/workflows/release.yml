@@ -98,7 +98,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: v${{ steps.pkg_version.outputs.VERSION }}
           files: |
             dist/veditor-chrome.zip
             dist/veditor-firefox.zip
+
