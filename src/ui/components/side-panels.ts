@@ -204,6 +204,7 @@ export class SidePanelsComponent {
   }
 
   private syncPageSelection(): void {
+    if (!store.sidebarOpen) return;
     const selected = store.selectedPageIndices;
     const active = store.activePageIndex;
     let activeCard: HTMLElement | null = null;

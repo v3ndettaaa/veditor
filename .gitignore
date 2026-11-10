@@ -6,3 +6,4 @@ src-tauri/target/
 src-tauri/gen/
 bun.lock
 .aistudio/
+public/assets/aistudio/

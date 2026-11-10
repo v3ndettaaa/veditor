@@ -9,8 +9,21 @@ import { importNativeAnnotations, stripImportedNativeAnnotations } from './nativ
 import { PageInfo, PDFBookmarkItem, PenAnnotation, HighlighterAnnotation, StrokePoint } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
-import { ADAPTIVE_CANVAS_MAX_DIMENSION, ADAPTIVE_CANVAS_MAX_PIXELS, resolveAdaptiveCanvasDpr, resolveRenderDpr } from '../utils/dpi';
-import { stripNativeInkAnnotationsFromBytes, extractNativeInkToolMap } from './native-ink';
+import {
+  ADAPTIVE_CANVAS_MAX_DIMENSION,
+  ADAPTIVE_CANVAS_MAX_PIXELS,
+  LINUX_DESKTOP_MAX_DIMENSION,
+  LINUX_DESKTOP_MAX_PIXELS,
+  isLinuxOrDesktopWebView,
+  resolveAdaptiveCanvasDpr,
+  resolveRenderDpr
+} from '../utils/dpi';
+import {
+  stripNativeInkAnnotations,
+  extractNativeInkToolMap,
+  getNativeInkPageNumbers,
+  bytesMayContainInkAnnotations
+} from './native-ink';
 import { extractPageTextLayout, PageTextLayout } from './pdf-text-layout';
 
 /** Backing-store multiplier over CSS pixels for the current target DPI. */
@@ -147,17 +160,34 @@ export class PDFEngine {
       prev.renderedBitmaps = this._renderedBitmaps;
     }
 
-    // Pass a fresh slice so PDF.js worker transfer never detaches the original buffer!
-    // Some external tools (PDF Annotator and similar) save freehand ink as a
-    // native /Ink annotation whose /AP is a rasterized image baked at a fixed,
-    // usually low, DPI. Stripping it here — before pdf.js ever parses it — is
-    // what keeps that baked raster from being drawn (chalky at any zoom);
-    // extractNativeInkStrokes() below separately reconstructs the same
-    // annotations from their vector /InkList so nothing is actually lost.
-    let dataCopy = await stripNativeInkAnnotationsFromBytes(data.slice(0));
-    const renderDocument = await PDFDocument.load(dataCopy, { updateMetadata: false });
-    if (stripImportedNativeAnnotations(renderDocument)) {
-      dataCopy = new Uint8Array(await renderDocument.save());
+    // Single-pass PDFDocument load: strip native /Ink and imported VEditor annotations
+    // in one AST pass (instead of multiple full-file parses) and read all page dimensions
+    // synchronously from the page tree so the PDF.js worker is never flooded with 500+
+    // getPage() requests on startup.
+    let dataCopy: Uint8Array = data.slice(0);
+    let preloadedDims: Array<{ width: number; height: number; rotation: number }> | null = null;
+    try {
+      const renderDocument = await PDFDocument.load(dataCopy, { ignoreEncryption: true, updateMetadata: false });
+      const inkStripped = stripNativeInkAnnotations(renderDocument);
+      const nativeStripped = stripImportedNativeAnnotations(renderDocument);
+      if (inkStripped || nativeStripped) {
+        dataCopy = new Uint8Array(await renderDocument.save());
+      }
+      const pdfLibPages = renderDocument.getPages();
+      if (pdfLibPages.length > 0) {
+        preloadedDims = pdfLibPages.map(p => {
+          const box = p.getCropBox();
+          const rot = ((p.getRotation().angle % 360) + 360) % 360;
+          const swapped = rot === 90 || rot === 270;
+          return {
+            width: swapped ? box.height : box.width,
+            height: swapped ? box.width : box.height,
+            rotation: rot
+          };
+        });
+      }
+    } catch (e) {
+      console.warn('Could not strip native annotations or read preloaded dimensions:', e);
     }
 
     const localBase = resolveAssetUrl('');
@@ -176,9 +206,6 @@ export class PDFEngine {
     const pageCount = this._pdfDoc.numPages;
     const pages: PageInfo[] = [];
 
-    // Extract first page dimensions for instant layout initialization (<50ms).
-    // Remaining pages start as placeholders and heal in the background so
-    // first paint never waits for 49 worker round-trips.
     let defaultWidth = 612;
     let defaultHeight = 792;
     let defaultRotation = 0;
@@ -194,15 +221,20 @@ export class PDFEngine {
       console.warn('Error loading first page dimensions:', e);
     }
 
+    const hasExactPreloadedDims = Boolean(preloadedDims && preloadedDims.length === pageCount);
     for (let i = 1; i <= pageCount; i++) {
+      const pre = (i > 1 && hasExactPreloadedDims) ? preloadedDims![i - 1] : null;
+      const w = pre && pre.width > 0 ? pre.width : defaultWidth;
+      const h = pre && pre.height > 0 ? pre.height : defaultHeight;
+      const rot = pre ? pre.rotation : defaultRotation;
       pages.push({
         pageIndex: i - 1,
         pageNumber: i,
-        width: defaultWidth,
-        height: defaultHeight,
-        originalWidth: defaultWidth,
-        originalHeight: defaultHeight,
-        rotation: defaultRotation
+        width: w,
+        height: h,
+        originalWidth: w,
+        originalHeight: h,
+        rotation: rot
       });
     }
 
@@ -215,21 +247,23 @@ export class PDFEngine {
         meta
       });
       this._currentDocId = docId;
-      // Fill true sizes + outline off the critical path; listeners re-layout.
-      void this.fillMetadataBackground(docId);
+      void this.fillMetadataBackground(docId, undefined, hasExactPreloadedDims);
     } else {
-      void this.fillMetadataBackground(null, { doc: this._pdfDoc, meta } as any);
+      void this.fillMetadataBackground(null, { doc: this._pdfDoc, meta } as any, hasExactPreloadedDims);
     }
 
     return meta;
   }
 
   /**
-   * Background pass: true per-page sizes (prevents overlap of mixed-size docs)
-   * + outline. Mutates the already-returned meta in place so callers that hold
-   * the reference (store sessions) see corrections without re-parse.
+   * Background pass: true per-page sizes (when not already preloaded from the PDF
+   * page tree) + outline. Mutates the already-returned meta in place.
    */
-  private async fillMetadataBackground(docId: string | null, ephemeral?: { doc: pdfjsLib.PDFDocumentProxy; meta: { pageCount: number; pages: PageInfo[]; bookmarks: PDFBookmarkItem[] } }): Promise<void> {
+  private async fillMetadataBackground(
+    docId: string | null,
+    ephemeral?: { doc: pdfjsLib.PDFDocumentProxy; meta: { pageCount: number; pages: PageInfo[]; bookmarks: PDFBookmarkItem[] } },
+    skipPageDims: boolean = false
+  ): Promise<void> {
     try {
       const session = docId ? this._docSessions.get(docId) : undefined;
       const doc = session?.doc ?? ephemeral?.doc ?? null;
@@ -237,17 +271,16 @@ export class PDFEngine {
       if (!doc || !meta) return;
       const pageCount = meta.pageCount;
 
-      // Near pages first (visible viewport heals fastest), then the tail in
-      // small batches with yields so scrolling stays at 60fps.
-      const headLimit = Math.min(pageCount, 30);
-      let dimsChanged = false;
-      const fetchOne = async (pageNum: number): Promise<void> => {
-        if (docId && !this._docSessions.has(docId)) return;
-        try {
-          const cached = session?.pageCache.get(pageNum - 1);
-          const p = cached ?? await doc.getPage(pageNum);
-          if (session && !session.pageCache.has(pageNum - 1)) {
-            if (session.pageCache.size >= 24) {
+      if (!skipPageDims) {
+        const headLimit = Math.min(pageCount, 30);
+        let dimsChanged = false;
+        const fetchOne = async (pageNum: number): Promise<void> => {
+          if (docId && !this._docSessions.has(docId)) return;
+          try {
+            const cached = session?.pageCache.get(pageNum - 1);
+            const p = cached ?? await doc.getPage(pageNum);
+            if (session && !session.pageCache.has(pageNum - 1)) {
+              if (session.pageCache.size >= 24) {
               const oldest = session.pageCache.keys().next().value;
               if (oldest !== undefined && oldest !== pageNum - 1) {
                 const oldPage = session.pageCache.get(oldest);
@@ -278,22 +311,23 @@ export class PDFEngine {
         await Promise.all(jobs);
       };
 
-      if (pageCount >= 2) {
-        await batch(2, headLimit);
+        if (pageCount >= 2) {
+          await batch(2, headLimit);
+          if (dimsChanged && docId) this.emitDimensionsUpdated(docId);
+        }
+        // Tail in chunks of 20 with a macrotask yield between chunks.
+        for (let start = headLimit + 1; start <= pageCount; start += 20) {
+          if (docId && !this._docSessions.has(docId)) return;
+          const end = Math.min(pageCount, start + 19);
+          await batch(start, end);
+          await new Promise(r => setTimeout(r, 0));
+          if (dimsChanged && docId) {
+            this.emitDimensionsUpdated(docId);
+            dimsChanged = false;
+          }
+        }
         if (dimsChanged && docId) this.emitDimensionsUpdated(docId);
       }
-      // Tail in chunks of 20 with a macrotask yield between chunks.
-      for (let start = headLimit + 1; start <= pageCount; start += 20) {
-        if (docId && !this._docSessions.has(docId)) return;
-        const end = Math.min(pageCount, start + 19);
-        await batch(start, end);
-        await new Promise(r => setTimeout(r, 0));
-        if (dimsChanged && docId) {
-          this.emitDimensionsUpdated(docId);
-          dimsChanged = false;
-        }
-      }
-      if (dimsChanged && docId) this.emitDimensionsUpdated(docId);
 
       // Outline last: never blocks paint.
       try {
@@ -368,15 +402,22 @@ export class PDFEngine {
    * strokes that were already imported.
    */
   public async extractNativeAnnotations(bytes: Uint8Array) {
-    const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false });
-    const toolMap = extractNativeInkToolMap(pdfDoc);
-    return [...await this.extractNativeInkStrokes(bytes, toolMap), ...importNativeAnnotations(pdfDoc)];
+    const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+    const inkPageNumbers = getNativeInkPageNumbers(pdfDoc);
+    const toolMap = inkPageNumbers.length > 0 ? extractNativeInkToolMap(pdfDoc) : undefined;
+    const inkStrokes = inkPageNumbers.length > 0
+      ? await this.extractNativeInkStrokes(bytes, toolMap, inkPageNumbers)
+      : [];
+    return [...inkStrokes, ...importNativeAnnotations(pdfDoc)];
   }
 
   public async extractNativeInkStrokes(
     bytes: Uint8Array,
-    toolMap?: Map<string, 'pen' | 'highlighter'>
+    toolMap?: Map<string, 'pen' | 'highlighter'>,
+    pageNumbers?: number[]
   ): Promise<Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }>> {
+    if (pageNumbers && pageNumbers.length === 0) return [];
+    if (!pageNumbers && !bytesMayContainInkAnnotations(bytes)) return [];
     const results: Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }> = [];
     let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
     try {
@@ -388,8 +429,11 @@ export class PDFEngine {
         standardFontDataUrl: `${localBase}standard_fonts/`
       });
       const doc = await loadingTask.promise;
+      const pagesToScan = pageNumbers && pageNumbers.length > 0
+        ? pageNumbers.filter(n => n >= 1 && n <= doc.numPages)
+        : Array.from({ length: doc.numPages }, (_, i) => i + 1);
 
-      for (let n = 1; n <= doc.numPages; n++) {
+      for (const n of pagesToScan) {
         const page = await doc.getPage(n);
         const annotations = await page.getAnnotations({ intent: 'display' }).catch(() => []);
         const inkAnnotations = annotations.filter((a: any) => a.subtype === 'Ink' && Array.isArray(a.inkLists) && a.inkLists.length > 0);
@@ -616,18 +660,18 @@ export class PDFEngine {
 
     // Cap backing-store size and total pixel budget at high zoom/dpr so
     // integrated GPUs and WebKitGTK never allocate multi-hundred-MB canvases.
-    // When a High-DPI Viewport Chunk is active for the visible region, the
-    // full-page background canvas uses a tighter 1536px budget to save VRAM.
     let renderScale = scale * dpr;
     const rawW = Math.floor(rawViewport.width);
     const rawH = Math.floor(rawViewport.height);
     const largest = Math.max(rawW, rawH);
-    const useChunk = (
-      largest > ADAPTIVE_CANVAS_MAX_DIMENSION * 1.05 ||
-      rawW * rawH > ADAPTIVE_CANVAS_MAX_PIXELS * 1.08
-    );
-    const maxDim = useChunk ? 1536 : ADAPTIVE_CANVAS_MAX_DIMENSION;
-    const maxPixels = useChunk ? 1536 * 1536 : ADAPTIVE_CANVAS_MAX_PIXELS;
+    const isLinuxDesktop = isLinuxOrDesktopWebView();
+    const useChunk = this.needsViewportChunk(pageIndex, scale, totalRotation);
+    const maxDim = useChunk
+      ? 1536
+      : (isLinuxDesktop ? LINUX_DESKTOP_MAX_DIMENSION : ADAPTIVE_CANVAS_MAX_DIMENSION);
+    const maxPixels = useChunk
+      ? 1536 * 1536
+      : (isLinuxDesktop ? LINUX_DESKTOP_MAX_PIXELS : ADAPTIVE_CANVAS_MAX_PIXELS);
     if (largest > maxDim && largest > 0) {
       renderScale *= maxDim / largest;
     }
@@ -725,9 +769,9 @@ export class PDFEngine {
       // Scale bitmap cache pool with the user's configured Off-screen Page Preload Buffer
       // so pre-rendered pages stay hot in memory and blit in <1ms when scrolling.
       const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
-      const maxCachedBitmaps = store.zoom > 2.4
-        ? Math.max(4, bufferPages + 2)
-        : Math.max(6, bufferPages * 2 + 3);
+      const maxCachedBitmaps = isLinuxDesktop
+        ? Math.min(6, Math.max(4, bufferPages + 2))
+        : (store.zoom > 2.4 ? Math.max(4, bufferPages + 2) : Math.max(6, bufferPages * 2 + 3));
       while (this._renderedBitmaps.size >= maxCachedBitmaps && !this._renderedBitmaps.has(exactKey)) {
         const oldestKey = this._renderedBitmaps.keys().next().value;
         if (oldestKey === undefined) break;
@@ -779,11 +823,15 @@ export class PDFEngine {
   }
 
   /**
-   * Returns true when the full-page base canvas is resolution-capped at the
-   * given zoom `scale`, meaning a High-DPI Viewport Chunk should be rendered
-   * over the visible portion of the page for crisp 100% native sharpness.
+   * Returns true when the full-page base canvas is resolution-capped at extreme
+   * zoom `scale` (>2.85x), meaning a High-DPI Viewport Chunk should be rendered
+   * over the visible portion of the page. Disabled on Linux/Desktop WebKitGTK
+   * so scrolling a page never triggers continuous chunk re-renders or canvas
+   * allocations mid-scroll.
    */
   public needsViewportChunk(pageIndex: number, scale: number, rotation: number = 0): boolean {
+    if (isLinuxOrDesktopWebView()) return false;
+    if (scale <= 2.85) return false;
     const dpr = effectiveDpr();
     const totalRotation = ((rotation || 0) % 360 + 360) % 360;
     const page = this._pageCache.get(pageIndex);
@@ -802,8 +850,8 @@ export class PDFEngine {
       h = Math.floor((swapped ? baseW : baseH) * scale * dpr);
     }
     return (
-      Math.max(w, h) > ADAPTIVE_CANVAS_MAX_DIMENSION * 1.05 ||
-      w * h > ADAPTIVE_CANVAS_MAX_PIXELS * 1.08
+      Math.max(w, h) > ADAPTIVE_CANVAS_MAX_DIMENSION * 1.15 ||
+      w * h > ADAPTIVE_CANVAS_MAX_PIXELS * 1.15
     );
   }
 
@@ -1094,6 +1142,10 @@ export class PDFEngine {
     const userRot = rotationOverride ?? (store.pageRotations[pageIndex] || 0);
     const promise = extractPageTextLayout(this._pdfDoc, pageIndex, userRot)
       .then((layout) => {
+        if (this._textLayoutCache.size >= 24) {
+          const oldestKey = this._textLayoutCache.keys().next().value;
+          if (oldestKey !== undefined) this._textLayoutCache.delete(oldestKey);
+        }
         this._textLayoutCache.set(key, layout);
         this._textLayoutInFlight.delete(key);
         return layout;
@@ -1112,6 +1164,14 @@ export class PDFEngine {
    * Releases and cleans up a specific cached document session (when a tab is closed).
    */
   public unloadDoc(docId: string): void {
+    const prefix = `${docId}:`;
+    for (const key of Array.from(this._textLayoutCache.keys())) {
+      if (key.startsWith(prefix)) this._textLayoutCache.delete(key);
+    }
+    for (const key of Array.from(this._textLayoutInFlight.keys())) {
+      if (key.startsWith(prefix)) this._textLayoutInFlight.delete(key);
+    }
+
     if (this._docSessions.has(docId)) {
       const session = this._docSessions.get(docId)!;
       try {
@@ -1151,6 +1211,8 @@ export class PDFEngine {
       this.unloadDoc(id);
     }
     this._docSessions.clear();
+    this._textLayoutCache.clear();
+    this._textLayoutInFlight.clear();
 
     for (const [, task] of this._activeRenderTasks) {
       try {

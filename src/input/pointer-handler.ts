@@ -2140,16 +2140,27 @@ export class PointerHandler {
   }
 
   public handleHover(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): void {
+    if (store.selectedAnnotationIds.size === 0 && store.activeTool !== 'select') {
+      return;
+    }
     const doc = store.activeDocument;
     if (!doc) return;
     const pageAnns = doc.annotations[pageIndex] || [];
     const pt = this.getPointInPage(e, canvas);
 
-    const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+    const setCursor = (c: string) => {
+      if (canvas.style.cursor !== c) {
+        canvas.style.cursor = c;
+      }
+    };
+
+    const selected = store.selectedAnnotationIds.size > 0
+      ? pageAnns.filter(a => store.selectedAnnotationIds.has(a.id))
+      : [];
     if (selected.length > 0) {
       if (selected.length === 1 && selected[0].type === 'sticky-note' && !selected[0].collapsed) {
         if (stickyNoteTool.hitTestCollapseButton(selected[0], pt)) {
-          canvas.style.cursor = 'pointer';
+          setCursor('pointer');
           floatingPropsBar?.setHoverState(true);
           return;
         }
@@ -2182,7 +2193,7 @@ export class PointerHandler {
       floatingPropsBar?.setHoverState(isNearOrOver);
 
       if (hit) {
-        canvas.style.cursor = hit.startsWith('vertex:') ? 'crosshair' : (cursorByHandle[hit] || 'pointer');
+        setCursor(hit.startsWith('vertex:') ? 'crosshair' : (cursorByHandle[hit] || 'pointer'));
         return;
       }
     }
@@ -2192,22 +2203,22 @@ export class PointerHandler {
     if (store.activeTool === 'select') {
       const hoverAnn = selectionManager.findAnnotationAtPoint(pt, pageAnns);
       if (hoverAnn) {
-        canvas.style.cursor = 'pointer';
+        setCursor('pointer');
         return;
       }
       const layout = pdfEngine.getCachedPageTextLayout(pageIndex);
       if (layout) {
         const textHit = hitTestPageTextPoint(layout, pt.x, pt.y, 3.5, false);
-        canvas.style.cursor = textHit ? 'text' : '';
+        setCursor(textHit ? 'text' : 'default');
       } else {
         void pdfEngine.getPageTextLayout(pageIndex);
-        canvas.style.cursor = '';
+        setCursor('default');
       }
       return;
     }
 
     if (selected.length > 0) {
-      canvas.style.cursor = '';
+      setCursor('');
     }
   }
 

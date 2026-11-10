@@ -22,8 +22,8 @@ export const MAX_RENDER_DIMENSION = 6144;
  * area budget (~9.4 megapixels = 3072x3072) so integrated GPUs and Linux
  * WebKitGTK never stall or OOM when allocating page backing stores.
  */
-export const ADAPTIVE_CANVAS_MAX_DIMENSION = 2048;
-export const ADAPTIVE_CANVAS_MAX_PIXELS = 2048 * 2048;
+export const ADAPTIVE_CANVAS_MAX_DIMENSION = 2304;
+export const ADAPTIVE_CANVAS_MAX_PIXELS = 2304 * 1728;
 
 export function getDevicePixelRatio(): number {
   if (typeof window !== 'undefined' && window.devicePixelRatio) {
@@ -71,10 +71,10 @@ export function clampRenderMultiplier(
   return multiplier;
 }
 
-const LINUX_DESKTOP_MAX_DIMENSION = 1680;
-const LINUX_DESKTOP_MAX_PIXELS = 1680 * 1680;
+export const LINUX_DESKTOP_MAX_DIMENSION = 1920;
+export const LINUX_DESKTOP_MAX_PIXELS = 1920 * 1440;
 
-function isLinuxOrDesktopWebView(): boolean {
+export function isLinuxOrDesktopWebView(): boolean {
   if (typeof document !== 'undefined') {
     const cl = document.documentElement?.classList;
     if (cl && (cl.contains('platform-linux') || cl.contains('platform-desktop'))) {

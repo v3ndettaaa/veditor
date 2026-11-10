@@ -343,3 +343,22 @@ export function extractNativeInkToolMap(pdfDoc: PDFDocument): Map<string, 'pen' 
   return toolMap;
 }
 
+export function getNativeInkPageNumbers(pdfDoc: PDFDocument): number[] {
+  const pageNumbers: number[] = [];
+  const pages = pdfDoc.getPages();
+  for (let idx = 0; idx < pages.length; idx++) {
+    const annots = pages[idx].node.Annots();
+    if (!annots) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      const dict = annots.lookupMaybe(i, PDFDict);
+      const subtype = dict?.lookupMaybe(PDFName.of('Subtype'), PDFName);
+      if (subtype?.asString() === INK_NAME) {
+        pageNumbers.push(idx + 1);
+        break;
+      }
+    }
+  }
+  return pageNumbers;
+}
+
+
