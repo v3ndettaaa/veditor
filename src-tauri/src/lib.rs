@@ -130,41 +130,24 @@ async fn native_build_file_tree(root_path: String) -> Result<Option<RustFileNode
     .map_err(|e| e.to_string())?
 }
 
-/// Configures WebKitGTK on Linux (Arch / Ubuntu / Wayland / X11) for desktop & AppImage builds.
-/// - Disables WebKitGTK's broken DMABUF renderer by default (`WEBKIT_DISABLE_DMABUF_RENDERER=1`),
-///   which otherwise causes WebKitWebProcess crashes, protocol errors, and extreme canvas lag on
-///   Arch Linux (Wayland/Hyprland/KDE/GNOME, Mesa & NVIDIA).
-/// - Disables WebKit's bubblewrap sandbox (`WEBKIT_FORCE_SANDBOX=0`) inside FUSE AppImage mounts.
-/// - In AppImage mode on Wayland with XWayland available, prefers `GDK_BACKEND=x11,wayland` to
-///   avoid GTK3 Wayland protocol crashes (`Error 71`) across rolling-release compositors.
-/// - Preloads the host's newer `libstdc++.so.6` for `WebKitWebProcess` when running inside an
-///   AppImage on rolling-release distros (Arch Linux) so host Mesa DRI drivers load with full
-///   hardware acceleration instead of falling back to slow CPU software rendering.
+/// Configures WebKitGTK on Linux (Ubuntu/AppImage/Wayland/X11) so hardware-accelerated
+/// compositing stays enabled by default while preventing bubblewrap sandbox crashes inside
+/// FUSE AppImage mounts. Users with broken Mesa/NVIDIA DMA-BUF drivers can still opt out
+/// by setting `VEDITOR_DISABLE_DMABUF=1` or `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 #[cfg(target_os = "linux")]
 fn configure_linux_webview_env() {
-    // Safety: called at process startup before spawning threads or child processes.
+    // Safety: called at process startup before spawning threads.
     unsafe {
         if std::env::var_os("WEBKIT_FORCE_SANDBOX").is_none() {
             std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
         }
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        if std::env::var_os("VEDITOR_DISABLE_DMABUF").is_some()
+            && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+        {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-
-        let is_appimage =
-            std::env::var_os("APPIMAGE").is_some() || std::env::var_os("APPDIR").is_some();
-        if is_appimage {
-            if std::env::var_os("GDK_BACKEND").is_none()
-                && std::env::var_os("WAYLAND_DISPLAY").is_some()
-                && std::env::var_os("DISPLAY").is_some()
-            {
-                std::env::set_var("GDK_BACKEND", "x11,wayland");
-            }
-
-            let host_stdcpp = Path::new("/usr/lib/libstdc++.so.6");
-            if host_stdcpp.is_file() && std::env::var_os("LD_PRELOAD").is_none() {
-                std::env::set_var("LD_PRELOAD", "/usr/lib/libstdc++.so.6");
-            }
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
         }
     }
 }

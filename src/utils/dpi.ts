@@ -71,10 +71,10 @@ export function clampRenderMultiplier(
   return multiplier;
 }
 
-export const LINUX_DESKTOP_MAX_DIMENSION = 1920;
-export const LINUX_DESKTOP_MAX_PIXELS = 1920 * 1440;
+const LINUX_DESKTOP_MAX_DIMENSION = 1920;
+const LINUX_DESKTOP_MAX_PIXELS = 1920 * 1440;
 
-export function isLinuxOrDesktopWebView(): boolean {
+function isLinuxOrDesktopWebView(): boolean {
   if (typeof document !== 'undefined') {
     const cl = document.documentElement?.classList;
     if (cl && (cl.contains('platform-linux') || cl.contains('platform-desktop'))) {

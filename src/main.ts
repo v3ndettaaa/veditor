@@ -26,7 +26,7 @@ import { openDocumentSession, getDocumentSession, createDocumentId, saveDocument
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
 import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
-import { resolveAdaptiveCanvasDpr, isLinuxOrDesktopWebView } from './utils/dpi';
+import { resolveAdaptiveCanvasDpr } from './utils/dpi';
 import { t } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
@@ -87,7 +87,6 @@ class VeditorApp {
   private _lastDocId: string | null = null;
   private _lastViewMode: string = 'continuous';
   private _lastRotationSig: string = '';
-  private _lastActivePageIndex: number = 0;
   /**
    * `fileData` reference at the last page-structure apply. Page ops that change
    * the bytes always install a fresh `Uint8Array`, so identity inequality is an
@@ -899,7 +898,6 @@ class VeditorApp {
       this._lastDocId = targetDoc.id;
       this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
-      this._lastActivePageIndex = targetPage;
       try {
         const rots = store.pageRotations;
         this._lastRotationSig = Object.keys(rots).sort().map(k => `${k}:${rots[Number(k)]}`).join(',');
@@ -950,9 +948,6 @@ class VeditorApp {
     } catch (_) {}
     const rotationChanged = rotationSig !== this._lastRotationSig;
 
-    const activePageChanged = store.activePageIndex !== this._lastActivePageIndex;
-    this._lastActivePageIndex = store.activePageIndex;
-
     if (zoomChanged || viewModeChanged || rotationChanged) {
       this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
@@ -975,15 +970,6 @@ class VeditorApp {
       return;
     }
     this._lastRotationSig = rotationSig;
-
-    if (activePageChanged) {
-      if (store.viewMode === 'single') {
-        viewportManager.updateLayout(true);
-      }
-      // In continuous/two-page scroll, crossing a page boundary only updates the
-      // page indicator — annotations and cursors did not change, so skip repainting!
-      return;
-    }
 
     // Update drawing cursors
     this.updateCanvasCursors();
@@ -1537,8 +1523,6 @@ class VeditorApp {
         this._lastScrollLeft = sl;
         this._lastScrollTime = now;
 
-        const useChunks = !isLinuxOrDesktopWebView() && store.zoom > 2.85;
-
         // Only flag extreme velocity (e.g. dragging the scrollbar thumb across many pages)
         if (dist > 650 || (dt < 50 && dist / dt > 8.5)) {
           this._isFastScrolling = true;
@@ -1550,12 +1534,10 @@ class VeditorApp {
             this._isFastScrolling = false;
             if (store.activeDocument && !store.isDocSwitching) {
               viewportManager.handleScroll(true);
-              if (!isLinuxOrDesktopWebView() && store.zoom > 2.85) {
-                this.updateVisiblePageChunks(true, false);
-              }
+              this.updateVisiblePageChunks(true, false);
             }
           }, 90);
-        } else if (!this._isFastScrolling && useChunks) {
+        } else if (!this._isFastScrolling) {
           this.updateVisiblePageChunks(false, false);
           this.scheduleChunkUpdate(75);
         }
@@ -1611,9 +1593,7 @@ class VeditorApp {
 
     // PIPE_3: VRAM Pool Guard - Retain pages within the preload window + 1 warm margin
     const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
-    const maxKeepDistance = (store.zoom > 2.4 || isLinuxOrDesktopWebView())
-      ? 1
-      : Math.max(1, Math.min(3, Math.ceil(bufferPages / 2)));
+    const maxKeepDistance = store.zoom > 2.4 ? 1 : Math.max(1, Math.min(3, Math.ceil(bufferPages / 2)));
     for (const [pageIndex, p] of this._renderedPages) {
       if (store.activeDocument?.id !== docId || store.isDocSwitching) return;
       let minDistance = Infinity;
@@ -1761,7 +1741,7 @@ class VeditorApp {
     }
 
     // Update High-DPI Viewport Chunks synchronously right in the layout/render pass
-    if (!this._isFastScrolling && !isLinuxOrDesktopWebView() && store.zoom > 2.85) {
+    if (!this._isFastScrolling) {
       this.updateVisiblePageChunks(true, false);
     }
 
@@ -1778,14 +1758,10 @@ class VeditorApp {
         const rot = store.pageRotations[pageIndex] || 0;
         void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
       }
-      // Pre-warm PDF text layout for on-screen pages when Select tool is active
-      if (store.activeTool === 'select') {
-        void pdfEngine.getPageTextLayout(pageIndex);
-      }
-      if (p.needsRepaint) {
-        p.needsRepaint = false;
-        this.repaintPageAnnotations(pageIndex, p);
-      }
+      // Pre-warm PDF text layout for on-screen pages so Select-tool hover is instant
+      void pdfEngine.getPageTextLayout(pageIndex);
+      p.needsRepaint = false;
+      this.repaintPageAnnotations(pageIndex, p);
     }
 
     // 4b. Tier 2 Preload Buffer Render: Pages in the preload window (1, 3, or 5 pages
@@ -2334,9 +2310,7 @@ class VeditorApp {
       store.zoom
     );
     for (const [, p] of this._renderedPages) {
-      if (p.scratchCanvas.style.cursor !== cursor) {
-        p.scratchCanvas.style.cursor = cursor;
-      }
+      p.scratchCanvas.style.cursor = cursor;
     }
   }
 

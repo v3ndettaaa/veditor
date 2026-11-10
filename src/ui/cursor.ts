@@ -20,16 +20,6 @@ const MAX_CURSOR_PX = 128;
 /** Below this a ring is too small to aim with, so it stops shrinking. */
 const MIN_RING_PX = 7;
 
-let _lastCursorKey = '';
-let _lastCursorVal = '';
-
-function effectiveMaxCursorPx(): number {
-  if (typeof document !== 'undefined' && document.documentElement?.classList.contains('platform-linux')) {
-    return 64;
-  }
-  return MAX_CURSOR_PX;
-}
-
 function svgCursor(svg: string, size: number): string {
   const hotspot = Math.round(size / 2);
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hotspot} ${hotspot}, crosshair`;
@@ -40,9 +30,8 @@ function svgCursor(svg: string, size: number): string {
  * -- so it stays visible on white paper and on dark or inverted pages alike.
  */
 function ringCursor(diameter: number): string {
-  const maxPx = effectiveMaxCursorPx();
   const d = Math.max(MIN_RING_PX, diameter);
-  if (d > maxPx - 6) return 'crosshair';
+  if (d > MAX_CURSOR_PX - 6) return 'crosshair';
 
   const size = Math.ceil(d) + 6;
   const c = size / 2;
@@ -58,9 +47,8 @@ function ringCursor(diameter: number): string {
 
 /** A filled dot at the brush's true diameter, in the ink colour. */
 function dotCursor(diameter: number, ink: string): string {
-  const maxPx = effectiveMaxCursorPx();
   const d = Math.max(4, diameter);
-  if (d > maxPx - 6) return 'crosshair';
+  if (d > MAX_CURSOR_PX - 6) return 'crosshair';
 
   const size = Math.ceil(d) + 6;
   const c = size / 2;
@@ -74,32 +62,32 @@ function dotCursor(diameter: number, ink: string): string {
 
 /** A rectangular box matching the highlighter width and text coverage. */
 function rectangleCursor(hPx: number, ink: string, alpha: number): string {
-  const maxPx = effectiveMaxCursorPx();
-  const h = Math.max(6, Math.min(maxPx - 8, hPx));
-  const w = Math.max(12, Math.min(maxPx - 8, Math.round(h * 0.8)));
-  const size = Math.max(Math.ceil(w), Math.ceil(h)) + 8;
-  const cx = size / 2;
-  const cy = size / 2;
-  const x = cx - w / 2;
-  const y = cy - h / 2;
+  const h = Math.max(6, Math.min(MAX_CURSOR_PX - 8, hPx));
+  const w = Math.max(12, Math.min(MAX_CURSOR_PX - 8, Math.round(h * 0.8)));
+  const sizeW = Math.ceil(w) + 8;
+  const sizeH = Math.ceil(h) + 8;
+  const x = 4;
+  const y = 4;
+  const cx = sizeW / 2;
+  const cy = sizeH / 2;
   const fillAlpha = Math.min(0.8, Math.max(0.12, alpha));
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizeW}" height="${sizeH}" viewBox="0 0 ${sizeW} ${sizeH}">` +
     `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="${ink}" fill-opacity="${fillAlpha}" stroke="#ffffff" stroke-width="2.5" opacity="0.9"/>` +
     `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="none" stroke="#0f172a" stroke-width="1.2"/>` +
     `<circle cx="${cx}" cy="${cy}" r="1" fill="#0f172a"/>` +
     `</svg>`;
-  return svgCursor(svg, size);
+  return svgCursor(svg, sizeW);
 }
 
 /** A slanted chisel tip marker cursor. */
 function chiselCursor(hPx: number, ink: string, alpha: number): string {
-  const maxPx = effectiveMaxCursorPx();
-  const h = Math.max(8, Math.min(maxPx - 10, hPx));
-  const w = Math.max(8, Math.min(maxPx - 10, Math.round(h * 0.6)));
-  const size = Math.max(Math.ceil(w), Math.ceil(h)) + 8;
-  const cx = size / 2;
-  const cy = size / 2;
+  const h = Math.max(8, Math.min(MAX_CURSOR_PX - 10, hPx));
+  const w = Math.max(8, Math.min(MAX_CURSOR_PX - 10, Math.round(h * 0.6)));
+  const sizeW = Math.ceil(w) + 8;
+  const sizeH = Math.ceil(h) + 8;
+  const cx = sizeW / 2;
+  const cy = sizeH / 2;
   const fillAlpha = Math.min(0.8, Math.max(0.12, alpha));
   const p1 = `${cx - w / 2},${cy + h / 2}`;
   const p2 = `${cx + w / 2},${cy + h / 2 - 4}`;
@@ -107,12 +95,12 @@ function chiselCursor(hPx: number, ink: string, alpha: number): string {
   const p4 = `${cx - w / 2},${cy - h / 2 + 4}`;
   const pts = `${p1} ${p2} ${p3} ${p4}`;
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizeW}" height="${sizeH}" viewBox="0 0 ${sizeW} ${sizeH}">` +
     `<polygon points="${pts}" fill="${ink}" fill-opacity="${fillAlpha}" stroke="#ffffff" stroke-width="2.5" opacity="0.9"/>` +
     `<polygon points="${pts}" fill="none" stroke="#0f172a" stroke-width="1.2"/>` +
     `<circle cx="${cx}" cy="${cy}" r="1" fill="#0f172a"/>` +
     `</svg>`;
-  return svgCursor(svg, size);
+  return svgCursor(svg, sizeW);
 }
 
 /** Fixed-size pen nib. A nib points at the cursor, so it doesn't scale. */
@@ -176,65 +164,48 @@ export function drawingCursorValue(
   const width = brushWidth(tool);
   if (width === null) return 'crosshair';
 
-  const s = store.toolSettings;
-  const onScreen = Math.round(width * zoom * 2) / 2;
-  const maxPx = effectiveMaxCursorPx();
-  const key = `${tool}|${style}|${onScreen}|${maxPx}|${s.penColor}|${s.highlighterColor}|${s.highlighterOpacity}|${s.highlighterCursor}|${s.eraserCursor}`;
-  if (key === _lastCursorKey && _lastCursorVal) {
-    return _lastCursorVal;
-  }
+  const onScreen = width * zoom;
 
-  let result = 'crosshair';
   if (tool === 'highlighter') {
+    const s = store.toolSettings;
     const hlCursor = s.highlighterCursor || 'rectangle';
     const opacity = s.highlighterOpacity ?? 0.45;
     const color = s.highlighterColor || '#facc15';
     switch (hlCursor) {
       case 'rectangle':
-        result = rectangleCursor(onScreen, color, opacity);
-        break;
+        return rectangleCursor(onScreen, color, opacity);
       case 'chisel':
-        result = chiselCursor(onScreen, color, opacity);
-        break;
+        return chiselCursor(onScreen, color, opacity);
       case 'circle':
-        result = ringCursor(onScreen);
-        break;
+        return ringCursor(onScreen);
       case 'dot':
-        result = dotCursor(onScreen, color);
-        break;
+        return dotCursor(onScreen, color);
       case 'crosshair':
       default:
-        result = 'crosshair';
-        break;
-    }
-  } else if (tool === 'eraser') {
-    const eraserCursor = s.eraserCursor || 'circle';
-    switch (eraserCursor) {
-      case 'circle':
-        result = ringCursor(onScreen);
-        break;
-      case 'dot':
-        result = dotCursor(Math.min(24, Math.max(6, onScreen * 0.35)), 'rgba(239,68,68,0.85)');
-        break;
-      case 'eraser':
-        result = eraserIconCursor();
-        break;
-      case 'crosshair':
-      default:
-        result = 'crosshair';
-        break;
-    }
-  } else {
-    switch (style) {
-      case 'circle': result = ringCursor(onScreen); break;
-      case 'dot': result = dotCursor(onScreen, inkColor(tool)); break;
-      case 'pen': result = penCursor(); break;
-      case 'crosshair':
-      default: result = 'crosshair'; break;
+        return 'crosshair';
     }
   }
 
-  _lastCursorKey = key;
-  _lastCursorVal = result;
-  return result;
+  if (tool === 'eraser') {
+    const eraserCursor = store.toolSettings.eraserCursor || 'circle';
+    switch (eraserCursor) {
+      case 'circle':
+        return ringCursor(onScreen);
+      case 'dot':
+        return dotCursor(Math.min(24, Math.max(6, onScreen * 0.35)), 'rgba(239,68,68,0.85)');
+      case 'eraser':
+        return eraserIconCursor();
+      case 'crosshair':
+      default:
+        return 'crosshair';
+    }
+  }
+
+  switch (style) {
+    case 'circle': return ringCursor(onScreen);
+    case 'dot': return dotCursor(onScreen, inkColor(tool));
+    case 'pen': return penCursor();
+    case 'crosshair':
+    default: return 'crosshair';
+  }
 }
