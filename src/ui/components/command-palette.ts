@@ -5,14 +5,17 @@
 
 import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
+import { pageActions } from '../../core/page-actions';
 import { saveActiveDocument, saveActiveDocumentAs } from '../../io/save';
 import { duplicateSelectedAnnotations } from '../../annotations/duplicate';
 import { dataExporter } from '../../io/export-data';
+import { cropDialog } from './crop-dialog';
+import { sidePanelsInstance } from './side-panels';
 import { showToast } from './toast';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { toggleFullscreen } from '../fullscreen';
-import { tr } from '../i18n';
+import { t, tr } from '../i18n';
 
 interface PaletteCommand {
   id: string;
@@ -143,6 +146,20 @@ export class CommandPaletteComponent {
       },
       { id: 'shortcuts-modal', title: tr('Keyboard Shortcuts Reference', 'راهنمای میانبرهای صفحه‌کلید'), category: catHelp, shortcut: '?', action: () => store.setShortcutsModalOpen(true) },
       { id: 'edit-duplicate', title: tr('Duplicate Selection', 'تکثیر موارد انتخاب‌شده'), category: catEdit, shortcut: 'Ctrl+D', action: () => { duplicateSelectedAnnotations(); } },
+      { id: 'page-crop', title: tr('Crop Page Margins…', 'برش حاشیه صفحات…'), category: catEdit, action: () => { void cropDialog.open(store.activePageIndex); } },
+      { id: 'page-merge', title: tr('Merge External PDF into Document…', 'ادغام فایل پی‌دی‌اف خارجی در سند…'), category: catFile, action: () => { sidePanelsInstance?.promptMergeExternalPdf(); } },
+      {
+        id: 'page-extract',
+        title: tr('Extract Selected Page(s) as New PDF…', 'استخراج صفحات انتخاب‌شده به‌صورت فایل پی‌دی‌اف مجزا…'),
+        category: catFile,
+        action: () => {
+          const sel = store.effectivePageSelection();
+          void pageActions.extractPagesToFile(sel).then(ok => {
+            if (ok) showToast(t('sidebar.pages.extracted', { count: sel.length }), 'success');
+          });
+        }
+      },
+      { id: 'nav-jump-back', title: tr('Jump Back to Previous Page', 'بازگشت به مکان قبلی پس از پرش صفحه'), category: catView, shortcut: 'Alt+←', action: () => { viewportManager.popAndRestoreJump(); } },
       { id: 'settings-modal', title: tr('Open Settings', 'باز کردن تنظیمات برنامه'), category: catHelp, action: () => store.setSettingsModalOpen(true) }
     ];
   }
@@ -151,7 +168,15 @@ export class CommandPaletteComponent {
     if (!store.commandPaletteOpen) {
       if (this._wasOpen) {
         this._wasOpen = false;
-        this._container.innerHTML = '';
+        const overlay = this._container.querySelector<HTMLElement>('#palette-overlay');
+        if (overlay) {
+          overlay.classList.add('is-closing');
+          window.setTimeout(() => {
+            if (!store.commandPaletteOpen) this._container.innerHTML = '';
+          }, 150);
+        } else {
+          this._container.innerHTML = '';
+        }
       }
       return;
     }

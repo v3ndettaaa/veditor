@@ -255,6 +255,41 @@ export interface UserBookmarkItem {
   createdAt: number;
 }
 
+export interface PageCropMargins {
+  /** Normalized inset (0..0.45) from each visual edge of the page. */
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface PDFLinkItem {
+  id: string;
+  pageIndex?: number;
+  /** Normalized [0..1] rectangle relative to the rotated page viewport. */
+  nx: number;
+  ny: number;
+  nw: number;
+  nh: number;
+  /** External web/mailto URL if this is an external link. */
+  url?: string;
+  /** Zero-based destination page index if this is an internal document link. */
+  destPageIndex?: number;
+  /** Normalized vertical landing position (0..1) on the destination page. */
+  destOffsetYRatio?: number;
+  /** Tooltip label shown on hover. */
+  title?: string;
+}
+
+export interface JumpHistoryItem {
+  docId: string;
+  fromPageIndex: number;
+  scrollTop: number;
+  scrollLeft: number;
+  targetPageIndex: number;
+  timestamp: number;
+}
+
 export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots' | 'isometric';
 
 /** How a notebook's paper looks. Drawn into the PDF, so it exports as seen. */

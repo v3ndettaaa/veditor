@@ -86,7 +86,16 @@ export const en = {
       blankInserted: 'Blank page inserted',
       deleted: 'Page deleted',
       deletedMany: '{count} pages deleted',
-      failed: 'That page operation could not be completed'
+      failed: 'That page operation could not be completed',
+      mergeBefore: 'Merge PDF file before…',
+      mergeAfter: 'Merge PDF file after…',
+      merged: '{count} page(s) merged into document',
+      extract: 'Extract page as PDF…',
+      extractMany: 'Extract {count} pages as PDF…',
+      extracted: '{count} page(s) extracted to PDF',
+      crop: 'Crop page margins…',
+      cropped: 'Page crop applied',
+      cropReset: 'Page crop reset'
     }
   },
   properties: {

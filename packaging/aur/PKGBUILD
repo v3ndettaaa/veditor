@@ -1,0 +1,25 @@
+# Maintainer: v3ndettaaa <https://github.com/v3ndettaaa/veditor>
+pkgname=veditor-bin
+pkgver=3.6.0
+pkgrel=1
+pkgdesc="Native-grade desktop PDF editor & annotation workspace built with Tauri v2 and Rust"
+arch=('x86_64')
+url="https://github.com/v3ndettaaa/veditor"
+license=('MIT')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libayatana-appindicator'
+  'librsvg'
+  'hicolor-icon-theme'
+)
+provides=('veditor')
+conflicts=('veditor' 'veditor-git')
+options=('!strip')
+source=("${pkgname}-${pkgver}.deb::${url}/releases/download/v${pkgver}/veditor_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  bsdtar -xf "${srcdir}/data.tar.gz" -C "${pkgdir}/"
+  install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
+}

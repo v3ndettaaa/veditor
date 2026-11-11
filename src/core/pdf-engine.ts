@@ -4,9 +4,9 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName } from 'pdf-lib';
 import { importNativeAnnotations, stripImportedNativeAnnotations } from './native-annotations';
-import { PageInfo, PDFBookmarkItem, PenAnnotation, HighlighterAnnotation, StrokePoint } from './types';
+import { PageInfo, PDFBookmarkItem, PDFLinkItem, PenAnnotation, HighlighterAnnotation, StrokePoint } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
 import {
@@ -20,7 +20,7 @@ import {
   extractNativeInkToolMap,
   bytesMayContainInkAnnotations
 } from './native-ink';
-import { extractPageTextLayout, PageTextLayout } from './pdf-text-layout';
+import { extractPageTextLayout, getTextRangeRects, PageTextLayout } from './pdf-text-layout';
 
 /** Backing-store multiplier over CSS pixels for the current target DPI. */
 function effectiveDpr(): number {
@@ -109,13 +109,17 @@ export class PDFEngine {
   /**
    * Loads a PDF document from raw binary bytes, with multi-document tab caching.
    */
-  public async loadFromBytes(data: Uint8Array, docId?: string): Promise<{
+  public async loadFromBytes(
+    data: Uint8Array,
+    docId?: string,
+    forceReload: boolean = false
+  ): Promise<{
     pageCount: number;
     pages: PageInfo[];
     bookmarks: PDFBookmarkItem[];
   }> {
-    // If this document is already cached in memory, switch to it instantly (<1ms)
-    if (docId && this._docSessions.has(docId)) {
+    // If this document is already cached in memory and not force-reloading, switch to it instantly (<1ms)
+    if (!forceReload && docId && this._docSessions.has(docId)) {
       if (this._currentDocId === docId) {
         return this._docSessions.get(docId)!.meta;
       }
@@ -143,14 +147,8 @@ export class PDFEngine {
       return cached.meta;
     }
 
-    // Cancel ongoing render tasks
-    for (const [, task] of this._activeRenderTasks) {
-      try { task.cancel(); } catch (e) {}
-    }
-    this._activeRenderTasks.clear();
-
-    // Save previous active session before replacing
-    if (this._currentDocId && this._docSessions.has(this._currentDocId)) {
+    // Save previous active session before replacing (only if switching to a different doc)
+    if (this._currentDocId && this._currentDocId !== docId && this._docSessions.has(this._currentDocId)) {
       const prev = this._docSessions.get(this._currentDocId)!;
       prev.pageCache = this._pageCache;
       prev.renderedBitmaps = this._renderedBitmaps;
@@ -177,13 +175,14 @@ export class PDFEngine {
       // and extension CSP never hit the network on the critical path.
       cMapUrl: `${localBase}cmaps/`,
       cMapPacked: true,
-      standardFontDataUrl: `${localBase}standard_fonts/`
+      standardFontDataUrl: `${localBase}standard_fonts/`,
+      verbosity: 0
     });
 
-    this._pdfDoc = await loadingTask.promise;
-    this._pageCache = new Map();
-    this._renderedBitmaps = new Map();
-    const pageCount = this._pdfDoc.numPages;
+    const newPdfDoc = await loadingTask.promise;
+    const newPageCache = new Map<number, pdfjsLib.PDFPageProxy>();
+    const newRenderedBitmaps = new Map<string, CachedBitmap>();
+    const pageCount = newPdfDoc.numPages;
     const pages: PageInfo[] = [];
 
     // Instant load: only page 1 is awaited; pages 2..N start with page 1's box
@@ -194,8 +193,8 @@ export class PDFEngine {
     let defaultRotation = 0;
 
     try {
-      const firstPage = await this._pdfDoc.getPage(1);
-      this._pageCache.set(0, firstPage);
+      const firstPage = await newPdfDoc.getPage(1);
+      newPageCache.set(0, firstPage);
       const vp = firstPage.getViewport({ scale: 1.0 });
       defaultWidth = vp.width;
       defaultHeight = vp.height;
@@ -215,6 +214,43 @@ export class PDFEngine {
         rotation: defaultRotation
       });
     }
+
+    // Cancel any ongoing rendering tasks and atomically swap out the old session
+    for (const [, task] of this._activeRenderTasks) {
+      try { task.cancel(); } catch (e) {}
+    }
+    this._activeRenderTasks.clear();
+    for (const [, task] of this._activeChunkTasks) {
+      try { task.cancel(); } catch (e) {}
+    }
+    this._activeChunkTasks.clear();
+
+    if (docId) {
+      this.clearLinkCache(docId);
+      const oldSession = this._docSessions.get(docId);
+      if (oldSession && oldSession.doc !== newPdfDoc) {
+        try {
+          oldSession.pageCache.clear();
+          for (const [, entry] of oldSession.renderedBitmaps) {
+            if (entry.canvas) {
+              entry.canvas.width = 1;
+              entry.canvas.height = 1;
+            }
+          }
+          oldSession.renderedBitmaps.clear();
+          if (typeof (oldSession.doc as any).cleanup === 'function') {
+            (oldSession.doc as any).cleanup();
+          }
+          if (oldSession.doc.loadingTask && typeof (oldSession.doc.loadingTask as any).destroy === 'function') {
+            (oldSession.doc.loadingTask as any).destroy();
+          }
+        } catch (_) {}
+      }
+    }
+
+    this._pdfDoc = newPdfDoc;
+    this._pageCache = newPageCache;
+    this._renderedBitmaps = newRenderedBitmaps;
 
     const meta = { pageCount, pages, bookmarks: [] as PDFBookmarkItem[] };
     if (docId) {
@@ -403,7 +439,8 @@ export class PDFEngine {
         data: bytes.slice(0),
         cMapUrl: `${localBase}cmaps/`,
         cMapPacked: true,
-        standardFontDataUrl: `${localBase}standard_fonts/`
+        standardFontDataUrl: `${localBase}standard_fonts/`,
+        verbosity: 0
       });
       const doc = await loadingTask.promise;
 
@@ -1116,14 +1153,455 @@ export class PDFEngine {
         return null;
       });
 
-    this._textLayoutInFlight.set(key, promise);
+      this._textLayoutInFlight.set(key, promise);
     return promise;
+  }
+
+  private _linkCache = new Map<string, PDFLinkItem[]>();
+
+  /**
+   * 3-Layer Universal Link & Reference Detector:
+   *  1. PDF.js `/Link` annotations (external URLs, named actions, explicit/named destinations)
+   *  2. Raw PDF `/Annots` dictionary inspector via `pdf-lib` (catches custom/legacy PDF generators)
+   *  3. Text-Layer Smart Scanner (turns plain-text URLs, emails, DOIs, and explicit page/section
+   *     references into interactive hotspots when not already covered by a `/Link` annotation)
+   */
+  public async getPageLinks(pageIndex: number, rotationOverride?: number): Promise<PDFLinkItem[]> {
+    if (!this._pdfDoc) return [];
+    const key = this.textLayoutKey(pageIndex, rotationOverride);
+    const cached = this._linkCache.get(key);
+    if (cached) return cached;
+
+    const doc = this._pdfDoc;
+    const renderDocId = this._currentDocId;
+
+    try {
+      let page = this._pageCache.get(pageIndex);
+      if (!page) {
+        page = await doc.getPage(pageIndex + 1);
+        if (renderDocId === this._currentDocId && this._pageCache.size < 24) {
+          this._pageCache.set(pageIndex, page);
+        }
+      }
+
+      const userRot = rotationOverride ?? (store.pageRotations[pageIndex] || 0);
+      const totalRotation = (((page.rotate || 0) + (userRot || 0)) % 360 + 360) % 360;
+      const vp = page.getViewport({ scale: 1.0, rotation: totalRotation });
+      if (vp.width <= 0 || vp.height <= 0) return [];
+
+      const rawAnnotations = await page.getAnnotations({ intent: 'display' }).catch(() => []);
+      const links: PDFLinkItem[] = [];
+
+      const normalizeExternalUrl = (raw: string): string | null => {
+        const trimmed = raw.trim().replace(/[.,;:!?)]+$/, '');
+        if (!trimmed) return null;
+        if (/^(https?:|mailto:|tel:)/i.test(trimmed)) return trimmed;
+        if (/^www\.[a-z0-9.-]+\.[a-z]{2,}/i.test(trimmed)) return `https://${trimmed}`;
+        if (/^doi\s*:\s*(10\.\d{4,9}\/\S+)/i.test(trimmed)) {
+          const m = trimmed.match(/^doi\s*:\s*(10\.\d{4,9}\/\S+)/i);
+          return m ? `https://doi.org/${m[1]}` : null;
+        }
+        if (/^10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+$/.test(trimmed)) {
+          return `https://doi.org/${trimmed}`;
+        }
+        if (/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(trimmed)) {
+          return `mailto:${trimmed}`;
+        }
+        if (/^[a-z0-9-]+(\.[a-z0-9-]+)+\/\S+/i.test(trimmed)) {
+          return `https://${trimmed}`;
+        }
+        return null;
+      };
+
+      const overlapsExisting = (nx: number, ny: number, nw: number, nh: number): boolean => {
+        const cx = nx + nw / 2;
+        const cy = ny + nh / 2;
+        for (const ex of links) {
+          if (cx >= ex.nx && cx <= ex.nx + ex.nw && cy >= ex.ny && cy <= ex.ny + ex.nh) {
+            return true;
+          }
+          const ox = Math.max(0, Math.min(nx + nw, ex.nx + ex.nw) - Math.max(nx, ex.nx));
+          const oy = Math.max(0, Math.min(ny + nh, ex.ny + ex.nh) - Math.max(ny, ex.ny));
+          const inter = ox * oy;
+          if (inter > 0) {
+            const minArea = Math.min(nw * nh, ex.nw * ex.nh);
+            if (minArea > 0 && inter / minArea > 0.35) return true;
+          }
+        }
+        return false;
+      };
+
+      const convertPdfRectToNormalized = (rect: number[]) => {
+        let x1 = rect[0], y1 = rect[1], x2 = rect[2], y2 = rect[3];
+        if (typeof vp.convertToViewportPoint === 'function') {
+          const [vx1, vy1] = vp.convertToViewportPoint(x1, y1);
+          const [vx2, vy2] = vp.convertToViewportPoint(x2, y2);
+          x1 = vx1; y1 = vy1; x2 = vx2; y2 = vy2;
+        } else if (typeof (vp as any).convertToViewportRectangle === 'function') {
+          const r = (vp as any).convertToViewportRectangle(rect);
+          x1 = r[0]; y1 = r[1]; x2 = r[2]; y2 = r[3];
+        } else {
+          y1 = vp.height - rect[1];
+          y2 = vp.height - rect[3];
+        }
+        const minX = Math.min(x1, x2);
+        const maxX = Math.max(x1, x2);
+        const minY = Math.min(y1, y2);
+        const maxY = Math.max(y1, y2);
+        const nx = Math.max(0, Math.min(1, minX / vp.width));
+        const ny = Math.max(0, Math.min(1, minY / vp.height));
+        const nw = Math.max(0.002, Math.min(1 - nx, (maxX - minX) / vp.width));
+        const nh = Math.max(0.002, Math.min(1 - ny, (maxY - minY) / vp.height));
+        return { nx, ny, nw, nh };
+      };
+
+      // --- LAYER 1: PDF.js Annotation Layer ---
+      for (let i = 0; i < rawAnnotations.length; i++) {
+        const annot: any = rawAnnotations[i];
+        if (!annot || annot.subtype !== 'Link' || !Array.isArray(annot.rect) || annot.rect.length < 4) {
+          continue;
+        }
+
+        const { nx, ny, nw, nh } = convertPdfRectToNormalized(annot.rect);
+
+        const rawUrl = typeof annot.url === 'string' && annot.url.trim()
+          ? annot.url.trim()
+          : (typeof annot.unsafeUrl === 'string' && annot.unsafeUrl.trim() ? annot.unsafeUrl.trim() : '');
+
+        const normalizedUrl = rawUrl ? normalizeExternalUrl(rawUrl) : null;
+        if (normalizedUrl) {
+          links.push({
+            id: String(annot.id || `link_${pageIndex}_${i}`),
+            pageIndex,
+            nx,
+            ny,
+            nw,
+            nh,
+            url: normalizedUrl,
+            title: normalizedUrl
+          });
+          continue;
+        }
+
+        // Support PDF /Named actions (FirstPage, LastPage, NextPage, PrevPage)
+        if (typeof annot.action === 'string' && annot.action) {
+          let namedTarget: number | undefined;
+          if (annot.action === 'FirstPage') namedTarget = 0;
+          else if (annot.action === 'LastPage') namedTarget = doc.numPages - 1;
+          else if (annot.action === 'NextPage') namedTarget = Math.min(doc.numPages - 1, pageIndex + 1);
+          else if (annot.action === 'PrevPage') namedTarget = Math.max(0, pageIndex - 1);
+          if (namedTarget !== undefined) {
+            links.push({
+              id: String(annot.id || `link_${pageIndex}_${i}`),
+              pageIndex,
+              nx,
+              ny,
+              nw,
+              nh,
+              destPageIndex: namedTarget
+            });
+            continue;
+          }
+        }
+
+        // Resolve internal destination
+        let destArray: any[] | null = null;
+        if (typeof annot.dest === 'string' && annot.dest) {
+          try {
+            destArray = await doc.getDestination(annot.dest);
+          } catch (_) {}
+          if (!destArray) {
+            // Heuristic fallback if named destination string encodes a page number (e.g. "page.3" or "Page3")
+            const pageMatch = annot.dest.match(/(?:page[._\-\s]*|^p)(\d+)$/i);
+            if (pageMatch) {
+              const pNum = parseInt(pageMatch[1], 10);
+              if (pNum >= 1 && pNum <= doc.numPages) {
+                destArray = [pNum - 1, { name: 'XYZ' }, null, null, null];
+              }
+            }
+          }
+        } else if (Array.isArray(annot.dest)) {
+          destArray = annot.dest;
+        }
+
+        if (destArray && destArray.length > 0) {
+          let destPageIndex: number | undefined;
+          const ref = destArray[0];
+          try {
+            if (typeof ref === 'number' && Number.isFinite(ref)) {
+              destPageIndex = Math.max(0, Math.min(doc.numPages - 1, ref));
+            } else if (ref && typeof ref === 'object') {
+              const idx = await doc.getPageIndex(ref);
+              if (typeof idx === 'number' && Number.isFinite(idx)) {
+                destPageIndex = Math.max(0, Math.min(doc.numPages - 1, idx));
+              }
+            }
+          } catch (_) {}
+
+          if (destPageIndex !== undefined) {
+            let destOffsetYRatio: number | undefined;
+            const kindName = destArray[1]?.name;
+            if ((kindName === 'XYZ' || kindName === 'FitH' || kindName === 'FitBH') && typeof destArray[3] === 'number') {
+              try {
+                const targetPageInfo = store.activeDocument?.pages[destPageIndex];
+                const pageH = targetPageInfo?.originalHeight || vp.height || 792;
+                destOffsetYRatio = Math.max(0, Math.min(0.95, 1 - destArray[3] / pageH));
+              } catch (_) {}
+            } else if ((kindName === 'FitH' || kindName === 'FitBH') && typeof destArray[2] === 'number') {
+              try {
+                const targetPageInfo = store.activeDocument?.pages[destPageIndex];
+                const pageH = targetPageInfo?.originalHeight || vp.height || 792;
+                destOffsetYRatio = Math.max(0, Math.min(0.95, 1 - destArray[2] / pageH));
+              } catch (_) {}
+            }
+
+            links.push({
+              id: String(annot.id || `link_${pageIndex}_${i}`),
+              pageIndex,
+              nx,
+              ny,
+              nw,
+              nh,
+              destPageIndex,
+              destOffsetYRatio
+            });
+          }
+        }
+      }
+
+      // --- LAYER 2: Raw PDF Page `/Annots` Dictionary Inspector via pdf-lib ---
+      if (store.activeDocument?.fileData) {
+        try {
+          const pdfLibDoc = await PDFDocument.load(store.activeDocument.fileData, {
+            ignoreEncryption: true,
+            updateMetadata: false
+          });
+          const pdfPages = pdfLibDoc.getPages();
+          if (pageIndex >= 0 && pageIndex < pdfPages.length) {
+            const refToPageIdx = new Map<string, number>();
+            pdfPages.forEach((p, idx) => {
+              if (p.ref) refToPageIdx.set(p.ref.toString(), idx);
+            });
+            const lookupKey = (dict: any, keyName: string): any => {
+              if (!dict || typeof dict.lookup !== 'function') return undefined;
+              try {
+                const byName = dict.lookup(PDFName.of(keyName)) ?? dict.get?.(PDFName.of(keyName));
+                if (byName !== undefined) return byName;
+              } catch (_) {}
+              try {
+                return dict.lookup(pdfLibDoc.context.obj(keyName)) ?? dict.get?.(pdfLibDoc.context.obj(keyName));
+              } catch (_) {
+                return undefined;
+              }
+            };
+
+            const annotsArr = pdfPages[pageIndex].node.Annots();
+            if (annotsArr) {
+              for (let i = 0; i < annotsArr.size(); i++) {
+                const dict: any = annotsArr.lookup(i);
+                if (!dict || typeof dict.get !== 'function') continue;
+                const subtypeObj = lookupKey(dict, 'Subtype');
+                const subtypeStr = String(subtypeObj?.decodeText?.() ?? subtypeObj?.asString?.() ?? subtypeObj?.toString?.() ?? '');
+                if (!/Link/i.test(subtypeStr)) continue;
+
+                const rectArr: any = lookupKey(dict, 'Rect');
+                if (!rectArr || typeof rectArr.size !== 'function' || rectArr.size() < 4) continue;
+                const rNums = [0, 1, 2, 3].map(k => Number(rectArr.lookup(k)?.asNumber?.() ?? 0));
+                const { nx, ny, nw, nh } = convertPdfRectToNormalized(rNums);
+                if (overlapsExisting(nx, ny, nw, nh)) continue;
+
+                const actionDict: any = lookupKey(dict, 'A');
+                if (actionDict && typeof actionDict.lookup === 'function') {
+                  const uriObj: any = lookupKey(actionDict, 'URI');
+                  const uriRaw = String(uriObj?.decodeText?.() ?? uriObj?.asString?.() ?? '').trim();
+                  const normalizedUri = uriRaw ? normalizeExternalUrl(uriRaw) : null;
+                  if (normalizedUri) {
+                    links.push({
+                      id: `pdflib_link_${pageIndex}_${i}`,
+                      pageIndex,
+                      nx,
+                      ny,
+                      nw,
+                      nh,
+                      url: normalizedUri,
+                      title: normalizedUri
+                    });
+                    continue;
+                  }
+                }
+
+                // Check direct /Dest on annotation OR /D inside /A << /S /GoTo /D ... >>
+                const destArr: any = lookupKey(dict, 'Dest') ?? (actionDict ? lookupKey(actionDict, 'D') : undefined);
+                if (destArr && typeof destArr.size === 'function' && destArr.size() > 0) {
+                  const rawRef = destArr.get(0);
+                  let destPageIndex = rawRef ? refToPageIdx.get(rawRef.toString()) : undefined;
+                  if (destPageIndex === undefined) {
+                    const numPage = Number(destArr.lookup(0)?.asNumber?.() ?? NaN);
+                    if (Number.isFinite(numPage) && numPage >= 0 && numPage < pdfPages.length) {
+                      destPageIndex = numPage;
+                    }
+                  }
+                  if (destPageIndex !== undefined) {
+                    const topNum = destArr.size() >= 4 ? Number(destArr.lookup(3)?.asNumber?.() ?? NaN) : NaN;
+                    const pageH = vp.height || 792;
+                    const destOffsetYRatio = Number.isFinite(topNum)
+                      ? Math.max(0, Math.min(0.95, 1 - topNum / pageH))
+                      : undefined;
+                    links.push({
+                      id: `pdflib_link_${pageIndex}_${i}`,
+                      pageIndex,
+                      nx,
+                      ny,
+                      nw,
+                      nh,
+                      destPageIndex,
+                      destOffsetYRatio
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // --- LAYER 3: Smart Text-Layer Link & Reference Scanner ---
+      // Detects plain-text URLs, emails, DOIs, and explicit page/section references
+      // that lack PDF `/Link` annotation boxes in the file.
+      try {
+        const textLayout = this.getCachedPageTextLayout(pageIndex, userRot)
+          ?? await this.getPageTextLayout(pageIndex, userRot);
+        if (textLayout && textLayout.fullText && textLayout.width > 0 && textLayout.height > 0) {
+          const fullText = textLayout.fullText;
+          const toAsciiDigits = (s: string) =>
+            s.replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06f0))
+             .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660));
+
+          const addTextMatchHotspots = (
+            startOffset: number,
+            endOffset: number,
+            payload: { url?: string; title?: string; destPageIndex?: number; destOffsetYRatio?: number },
+            idPrefix: string
+          ) => {
+            const rects = getTextRangeRects(textLayout, startOffset, endOffset);
+            for (let rIdx = 0; rIdx < rects.length; rIdx++) {
+              const r = rects[rIdx];
+              const nx = Math.max(0, Math.min(1, r.x / textLayout.width));
+              const ny = Math.max(0, Math.min(1, r.y / textLayout.height));
+              const nw = Math.max(0.004, Math.min(1 - nx, r.width / textLayout.width));
+              const nh = Math.max(0.004, Math.min(1 - ny, r.height / textLayout.height));
+              if (overlapsExisting(nx, ny, nw, nh)) continue;
+              links.push({
+                id: `${idPrefix}_${pageIndex}_${startOffset}_${rIdx}`,
+                pageIndex,
+                nx,
+                ny,
+                nw,
+                nh,
+                ...payload
+              });
+            }
+          };
+
+          // 3a. Plain-text URLs, bare common domains, DOIs, and email addresses
+          const urlEmailDoiRegex = /\b(?:https?:\/\/[^\s<>()"'\]）】]+|www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^\s<>()"'\]）】]*|(?:github\.com|gitlab\.com|arxiv\.org|doi\.org|wikipedia\.org|stackoverflow\.com|youtube\.com|youtu\.be|t\.me|linkedin\.com|medium\.com|docs\.google\.com|drive\.google\.com)\/[^\s<>()"'\]）】]+|doi\s*:\s*10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+|10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+          let match: RegExpExecArray | null;
+          while ((match = urlEmailDoiRegex.exec(fullText)) !== null) {
+            let rawToken = match[0];
+            let endOff = match.index + rawToken.length;
+            while (rawToken.length > 0 && /[.,;:!?)'"\]）】]$/.test(rawToken)) {
+              rawToken = rawToken.slice(0, -1);
+              endOff--;
+            }
+            const url = normalizeExternalUrl(rawToken);
+            if (url && endOff > match.index) {
+              addTextMatchHotspots(match.index, endOff, { url, title: url }, 'txt_url');
+            }
+          }
+
+          // 3b. Explicit Internal Page References (e.g. "Page 3", "page 2", "p. 3", "صفحه ۲")
+          if (doc.numPages > 1) {
+            const pageRefRegex = /(?:^|[\s([«"'])(?:[Pp]ages?|[Pp]p?\.|صفحه|صفحات)\s*([0-9۰-۹٠-٩]{1,4})\b/g;
+            while ((match = pageRefRegex.exec(fullText)) !== null) {
+              const numStr = toAsciiDigits(match[1]);
+              const targetPageNum = parseInt(numStr, 10);
+              if (Number.isFinite(targetPageNum) && targetPageNum >= 1 && targetPageNum <= doc.numPages) {
+                const targetIdx = targetPageNum - 1;
+                if (targetIdx !== pageIndex) {
+                  const fullMatch = match[0];
+                  const trimLead = fullMatch.match(/^[\s([«"']/)?.[0]?.length ?? 0;
+                  const sOff = match.index + trimLead;
+                  const eOff = match.index + fullMatch.length;
+                  addTextMatchHotspots(sOff, eOff, { destPageIndex: targetIdx }, 'txt_pg');
+                }
+              }
+            }
+          }
+
+          // 3c. Outline / Bookmark Section References (e.g. "Section 2", "Chapter 3", "بخش ۲")
+          const bookmarks = store.activeDocument?.bookmarks;
+          if (bookmarks && bookmarks.length > 0 && doc.numPages > 1) {
+            const flatBookmarks: Array<{ title: string; pageIndex: number }> = [];
+            const walkBm = (items: PDFBookmarkItem[]) => {
+              for (const it of items) {
+                if (typeof it.pageIndex === 'number' && it.title) {
+                  flatBookmarks.push({ title: it.title.trim(), pageIndex: it.pageIndex });
+                }
+                if (it.items?.length) walkBm(it.items);
+              }
+            };
+            walkBm(bookmarks);
+
+            if (flatBookmarks.length > 0) {
+              const secRefRegex = /(?:^|[\s([«"'])(?:[Ss]ection|[Cc]hapter|[Pp]art|بخش|فصل)\s+([0-9۰-۹٠-٩]+(?:\.[0-9۰-۹٠-٩]+)*)\b/g;
+              while ((match = secRefRegex.exec(fullText)) !== null) {
+                const secNum = toAsciiDigits(match[1]);
+                const bm = flatBookmarks.find(b =>
+                  b.title.startsWith(`${secNum}.`) ||
+                  b.title.startsWith(`${secNum} `) ||
+                  b.title.includes(` ${secNum} `)
+                );
+                if (bm && bm.pageIndex !== pageIndex) {
+                  const fullMatch = match[0];
+                  const trimLead = fullMatch.match(/^[\s([«"']/)?.[0]?.length ?? 0;
+                  const sOff = match.index + trimLead;
+                  const eOff = match.index + fullMatch.length;
+                  addTextMatchHotspots(sOff, eOff, { destPageIndex: bm.pageIndex }, 'txt_sec');
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      this._linkCache.set(key, links);
+      return links;
+    } catch (e) {
+      console.warn(`Could not extract links for page ${pageIndex}:`, e);
+      return [];
+    }
+  }
+
+  public clearLinkCache(docId?: string): void {
+    if (!docId) {
+      this._linkCache.clear();
+      this._textLayoutCache.clear();
+      return;
+    }
+    const prefix = `${docId}:`;
+    for (const k of this._linkCache.keys()) {
+      if (k.startsWith(prefix)) this._linkCache.delete(k);
+    }
+    for (const k of this._textLayoutCache.keys()) {
+      if (k.startsWith(prefix)) this._textLayoutCache.delete(k);
+    }
   }
 
   /**
    * Releases and cleans up a specific cached document session (when a tab is closed).
    */
   public unloadDoc(docId: string): void {
+    this.clearLinkCache(docId);
     if (this._docSessions.has(docId)) {
       const session = this._docSessions.get(docId)!;
       try {
@@ -1159,6 +1637,7 @@ export class PDFEngine {
    * Cleans up all document instances and caches.
    */
   public destroy() {
+    this.clearLinkCache();
     for (const [id] of this._docSessions) {
       this.unloadDoc(id);
     }

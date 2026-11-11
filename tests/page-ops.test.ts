@@ -4,6 +4,7 @@ import {
   applyPageBytesResult,
   buildIndexMap,
   capturePageSnapshot,
+  cropPdfPages,
   deletePdfPages,
   exportPdfPages,
   insertBlankPages,
@@ -14,6 +15,7 @@ import {
   remapBookmarks,
   remapPageRecord,
   remapRotations,
+  resetPdfPageCrops,
   spliceIndexMap
 } from '../src/core/page-ops';
 import { history, PageOpsCommand } from '../src/core/history';
@@ -174,6 +176,32 @@ describe('PDF page operations', () => {
     const all = await movePdfPages(bytes, [0, 1, 2, 3], 0);
     expect(await widthsOf(all.bytes)).toEqual([600, 601, 602, 603]);
   });
+
+  it('crops pages non-destructively and restores original page bounds on reset', async () => {
+    const bytes = await makePdf(3);
+    const cropped = await cropPdfPages(bytes, [0, 2], {
+      top: 40,
+      right: 30,
+      bottom: 50,
+      left: 20
+    });
+    expect(Math.round(cropped.pages[0].width)).toBe(550);
+    expect(Math.round(cropped.pages[0].height)).toBe(710);
+    expect(Math.round(cropped.pages[1].width)).toBe(601);
+    expect(Math.round(cropped.pages[1].height)).toBe(800);
+    expect(Math.round(cropped.pages[2].width)).toBe(552);
+    expect(Math.round(cropped.pages[2].height)).toBe(710);
+    expect(cropped.visualOffsets[0].dx).toBeCloseTo(20, 4);
+    expect(cropped.visualOffsets[0].dy).toBeCloseTo(40, 4);
+
+    const restored = await resetPdfPageCrops(cropped.bytes, [0, 2]);
+    expect(Math.round(restored.pages[0].width)).toBe(600);
+    expect(Math.round(restored.pages[0].height)).toBe(800);
+    expect(Math.round(restored.pages[2].width)).toBe(602);
+    expect(Math.round(restored.pages[2].height)).toBe(800);
+    expect(restored.visualOffsets[0].dx).toBeCloseTo(-20, 4);
+    expect(restored.visualOffsets[0].dy).toBeCloseTo(-40, 4);
+  });
 });
 
 describe('PageOpsCommand', () => {
@@ -245,4 +273,13 @@ describe('PageOpsCommand', () => {
     expect(signals).toBe(2);
     unsubscribe();
   });
+
+  it('includes the initially active page when Ctrl+Click toggling additional pages', () => {
+    store.setActivePageIndex(0);
+    store.setSelectedPageIndices([]);
+    store.togglePageIndex(1);
+    store.togglePageIndex(2);
+    expect(Array.from(store.selectedPageIndices).sort()).toEqual([0, 1, 2]);
+  });
 });
+

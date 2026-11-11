@@ -12,8 +12,9 @@ import { onPageStructureChanged } from '../../core/page-ops';
 import { DocumentSession, PDFBookmarkItem } from '../../core/types';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 import { openContextMenu, MenuEntry } from './context-menu';
+import { cropDialog } from './crop-dialog';
 import { showToast } from './toast';
 import { findMatchesInPageLayout, PdfSearchMatch } from '../../core/pdf-text-layout';
 import { triggerAutoSave } from '../../io/storage';
@@ -27,8 +28,14 @@ export class SidePanelsComponent {
    * `${docId}:${structureRevision}:${pageIndex}`.
    */
   private _thumbnailCache: Map<string, string> = new Map();
+  /**
+   * Last rendered thumbnail per `${docId}:${pageIndex}` used as an instant placeholder
+   * during page structure reloads so thumbnails update in-place without flashing blank.
+   */
+  private _prevThumbnailByPage: Map<string, string> = new Map();
   /** Zoom never changes sidebar output — skip full rebuilds on zoom-only notifies. */
   private _lastRenderKey: string = '';
+  private _lastRenderedTab: string = '';
   /**
    * Anchor for shift-click page ranges. Held on the component rather than in
    * the click handler's closure because selecting re-renders the list.
@@ -59,6 +66,17 @@ export class SidePanelsComponent {
       this._structureRevision++;
       this._lastRenderKey = '';
     });
+    this.render();
+  }
+
+  /**
+   * Called by main.ts after `pdfEngine.loadFromBytes(..., true)` has finished hot-swapping
+   * the updated PDF document in memory, ensuring thumbnails re-rasterize from the new PDF.
+   */
+  public refreshAfterStructureReload(): void {
+    this._thumbnailCache.clear();
+    this._structureRevision++;
+    this._lastRenderKey = '';
     this.render();
   }
 
@@ -155,6 +173,8 @@ export class SidePanelsComponent {
       if (hLen > 0) activeTabBadge = `<span class="badge">${hLen}</span>`;
     }
 
+    const prevThumbListScrollTop = this._container.querySelector<HTMLElement>('#thumbnail-list')?.scrollTop ?? null;
+
     this._container.innerHTML = `
       <div class="sidebar-header">
         <div class="sidebar-tabs-nav" role="tablist">
@@ -199,13 +219,22 @@ export class SidePanelsComponent {
     if (contentArea) {
       this.renderTabContent(contentArea, activeTab);
     }
-    this._lastActivePageIndex = -1;
+    if (prevThumbListScrollTop !== null && prevThumbListScrollTop > 0) {
+      const nextThumbList = this._container.querySelector<HTMLElement>('#thumbnail-list');
+      if (nextThumbList) {
+        nextThumbList.scrollTop = prevThumbListScrollTop;
+      }
+      this._lastActivePageIndex = store.activePageIndex;
+    } else {
+      this._lastActivePageIndex = -1;
+    }
     this.syncPageSelection();
   }
 
   private syncPageSelection(): void {
     const selected = store.selectedPageIndices;
     const active = store.activePageIndex;
+    const effective = store.effectivePageSelection();
     let activeCard: HTMLElement | null = null;
     this._container.querySelectorAll<HTMLElement>('.thumbnail-card[data-page]').forEach(card => {
       const idx = parseInt(card.dataset.page || '-1', 10);
@@ -221,13 +250,88 @@ export class SidePanelsComponent {
         card.classList.toggle('is-active', isActive);
         card.setAttribute('aria-current', isActive ? 'true' : 'false');
       }
+
+      const img = card.querySelector<HTMLImageElement>('[data-thumb-frame] img');
+      if (img) {
+        const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
+        const nextTransform = rot ? `rotate(${rot}deg)` : '';
+        if (img.style.transform !== nextTransform) {
+          img.style.transform = nextTransform;
+        }
+      }
+
       if (isActive) activeCard = card;
     });
+
+    // Keep the top Extract button label synced with the number of selected pages
+    const extractBtnLabel = this._container.querySelector<HTMLElement>('#sidebar-extract-pdf-btn span');
+    if (extractBtnLabel) {
+      extractBtnLabel.textContent = effective.length > 1
+        ? `${tr('Extract', 'استخراج')} (${effective.length})`
+        : tr('Extract', 'استخراج');
+    }
 
     if (activeCard && this._lastActivePageIndex !== active) {
       (activeCard as HTMLElement).scrollIntoView({ block: 'nearest' });
     }
     this._lastActivePageIndex = active;
+  }
+
+  /**
+   * Opens a file picker to merge one or more external PDF files at `atIndex`
+   * (defaults to right after the currently selected/active page).
+   */
+  public promptMergeExternalPdf(atIndex?: number): void {
+    const doc = store.activeDocument;
+    if (!doc || doc.notebook) return;
+    const selection = store.effectivePageSelection();
+    const targetIdx = atIndex !== undefined
+      ? Math.max(0, Math.min(doc.pageCount, atIndex))
+      : (selection.length > 0 ? selection[selection.length - 1] + 1 : (store.activePageIndex || 0) + 1);
+
+    const tempInput = document.createElement('input');
+    tempInput.type = 'file';
+    tempInput.accept = 'application/pdf,.pdf';
+    tempInput.multiple = true;
+    tempInput.style.display = 'none';
+    document.body.appendChild(tempInput);
+
+    tempInput.addEventListener('change', async () => {
+      const files = Array.from(tempInput.files || []).filter(
+        f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+      );
+      tempInput.remove();
+      if (files.length === 0) return;
+      await this.mergeDroppedOrPickedFiles(files, targetIdx);
+    });
+
+    tempInput.click();
+  }
+
+  private async mergeDroppedOrPickedFiles(files: File[], insertAt: number): Promise<void> {
+    const doc = store.activeDocument;
+    if (!doc || doc.notebook || files.length === 0) return;
+    if (pageActions.isBusy) return;
+
+    try {
+      const buffers: Uint8Array[] = [];
+      for (const file of files) {
+        const ab = await file.arrayBuffer();
+        if (ab.byteLength > 0) {
+          buffers.push(new Uint8Array(ab));
+        }
+      }
+      if (buffers.length === 0) return;
+      const inserted = await pageActions.mergeExternalPdfBytes(insertAt, buffers);
+      if (inserted > 0) {
+        showToast(t('sidebar.pages.merged', { count: inserted }), 'success');
+      } else {
+        showToast(t('sidebar.pages.failed'), 'error');
+      }
+    } catch (err) {
+      console.error('Could not merge external PDF files:', err);
+      showToast(t('sidebar.pages.failed'), 'error');
+    }
   }
 
   private syncPageBadges(): void {
@@ -300,6 +404,13 @@ export class SidePanelsComponent {
   private renderTabContent(el: HTMLElement, tab: string) {
     const doc = store.activeDocument;
     const lang = store.appSettings.language;
+    if (this._lastRenderedTab !== tab) {
+      el.classList.remove('sidebar-tab-enter');
+      void el.offsetWidth;
+      el.classList.add('sidebar-tab-enter');
+      this._lastRenderedTab = tab;
+    }
+
     if (!doc) {
       el.innerHTML = `<div class="empty-note">${lang === 'fa' ? 'هیچ سندی باز نیست' : 'No document active'}</div>`;
       return;
@@ -307,21 +418,41 @@ export class SidePanelsComponent {
 
     if (tab === 'thumbnails') {
       const selected = store.selectedPageIndices;
+      const isNotebook = !!doc.notebook;
       el.innerHTML = `
+        <div class="sidebar-pages-toolbar">
+          <button type="button" class="sidebar-page-action-btn" id="sidebar-merge-pdf-btn" ${isNotebook ? 'disabled' : ''} title="${escapeHtml(tr('Merge external PDF file(s) into this document (or drag & drop PDF here)', 'ادغام فایل پی‌دی‌اف خارجی در این سند (یا رها کردن فایل در اینجا)'))}">
+            ${getIconSvg('merge', 13)}
+            <span>${tr('Merge', 'ادغام')}</span>
+          </button>
+          <button type="button" class="sidebar-page-action-btn" id="sidebar-extract-pdf-btn" title="${escapeHtml(tr('Extract selected page(s) as a standalone PDF file', 'استخراج صفحات انتخاب‌شده به‌صورت فایل پی‌دی‌اف مجزا'))}">
+            ${getIconSvg('extract', 13)}
+            <span>${tr('Extract', 'استخراج')}</span>
+          </button>
+          <button type="button" class="sidebar-page-action-btn" id="sidebar-crop-pdf-btn" ${isNotebook ? 'disabled' : ''} title="${escapeHtml(tr('Crop page margins', 'برش حاشیه صفحات'))}">
+            ${getIconSvg('crop', 13)}
+            <span>${tr('Crop', 'برش')}</span>
+          </button>
+        </div>
         <div class="thumbnail-list" id="thumbnail-list" tabindex="0" role="listbox" aria-multiselectable="true">
+          <div class="thumbnail-drop-indicator" id="thumbnail-drop-indicator" aria-hidden="true"></div>
           ${doc.pages.map((_p, idx) => {
             const isActive = idx === store.activePageIndex;
             const isSelected = selected.has(idx);
             const annotCount = doc.annotations[idx]?.length || 0;
             const cachedSrc = this._thumbnailCache.get(`${doc.id}:${this._structureRevision}:${idx}`);
+            const fallbackSrc = cachedSrc || this._prevThumbnailByPage.get(`${doc.id}:${idx}`);
+            const isStale = !cachedSrc && Boolean(fallbackSrc);
+            const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
+            const rotStyle = rot ? ` style="transform: rotate(${rot}deg);"` : '';
             return `
               <button class="thumbnail-card ${isActive ? 'is-active' : ''} ${isSelected ? 'is-selected' : ''}"
                       data-page="${idx}" role="option" draggable="true"
                       aria-current="${isActive ? 'true' : 'false'}"
                       aria-selected="${isSelected ? 'true' : 'false'}"
                       title="${escapeHtml(t('sidebar.pages.goTo', { page: idx + 1 }))}">
-                <span class="thumbnail-frame ${cachedSrc ? '' : 'is-loading'}" data-thumb-frame="${idx}">
-                  ${cachedSrc ? `<img src="${cachedSrc}" decoding="async" alt="Page ${idx + 1} preview">` : ''}
+                <span class="thumbnail-frame ${fallbackSrc ? '' : 'is-loading'}" data-thumb-frame="${idx}">
+                  ${fallbackSrc ? `<img src="${fallbackSrc}" ${isStale ? 'data-stale="true"' : ''} decoding="async" alt="Page ${idx + 1} preview"${rotStyle}>` : ''}
                   ${annotCount > 0 ? `<span class="thumbnail-badge">${annotCount}</span>` : ''}
                 </span>
                 <span class="thumbnail-label">${idx + 1}</span>
@@ -330,6 +461,21 @@ export class SidePanelsComponent {
           }).join('')}
         </div>
       `;
+
+      el.querySelector('#sidebar-merge-pdf-btn')?.addEventListener('click', () => {
+        this.promptMergeExternalPdf();
+      });
+      el.querySelector('#sidebar-extract-pdf-btn')?.addEventListener('click', () => {
+        const sel = store.effectivePageSelection();
+        void this.runPageAction(async () => {
+          const ok = await pageActions.extractPagesToFile(sel);
+          if (ok) showToast(t('sidebar.pages.extracted', { count: sel.length }), 'success');
+          return ok;
+        });
+      });
+      el.querySelector('#sidebar-crop-pdf-btn')?.addEventListener('click', () => {
+        void cropDialog.open(store.activePageIndex);
+      });
 
       const list = el.querySelector<HTMLElement>('#thumbnail-list');
       if (list) this.bindThumbnailList(list, doc);
@@ -424,8 +570,7 @@ export class SidePanelsComponent {
           if ((e.target as HTMLElement).closest('[data-remove-bookmark]')) return;
           const pageIdx = parseInt(itemEl.getAttribute('data-bookmark-page') || '-1', 10);
           if (Number.isFinite(pageIdx) && pageIdx >= 0 && pageIdx < doc.pageCount) {
-            store.setActivePageIndex(pageIdx);
-            viewportManager.scrollToPage(pageIdx);
+            viewportManager.navigateWithJumpHistory(pageIdx);
           }
         });
       });
@@ -555,21 +700,117 @@ export class SidePanelsComponent {
 
   private bindThumbnailList(list: HTMLElement, doc: DocumentSession): void {
     let dragging: number[] = [];
+    let dropInsertIndex: number | null = null;
+    let dragRafId: number | null = null;
+    let autoScrollRafId: number | null = null;
+    let autoScrollVelocity = 0;
+    let lastClientX = 0;
+    let lastClientY = 0;
 
-    const cards = Array.from(list.querySelectorAll<HTMLElement>('[data-page]'));
+    const cards = Array.from(list.querySelectorAll<HTMLElement>('.thumbnail-card[data-page]'));
+    const indicator = list.querySelector<HTMLElement>('#thumbnail-drop-indicator');
+    const scrollParent = list.closest<HTMLElement>('#sidebar-tab-content') || list.parentElement;
 
     const selectionFor = (idx: number): number[] => {
-      const explicit = store.selectedPageIndices;
-      return explicit.size > 0 ? [...explicit].sort((a, b) => a - b) : [idx];
+      const effective = store.effectivePageSelection(idx);
+      return effective.includes(idx) && effective.length > 0 ? effective : [idx];
+    };
+
+    const stopAutoScroll = () => {
+      autoScrollVelocity = 0;
+      if (autoScrollRafId !== null) {
+        cancelAnimationFrame(autoScrollRafId);
+        autoScrollRafId = null;
+      }
+    };
+
+    const hideDropIndicator = () => {
+      stopAutoScroll();
+      if (dragRafId !== null) {
+        cancelAnimationFrame(dragRafId);
+        dragRafId = null;
+      }
+      dropInsertIndex = null;
+      list.classList.remove('is-external-file-drag');
+      for (const c of cards) c.classList.remove('is-drop-target');
+      if (indicator) {
+        indicator.classList.remove('is-visible');
+      }
+    };
+
+    const updateIndicatorPosition = (clientX: number, clientY: number) => {
+      if (!indicator || cards.length === 0) return;
+      const listRect = list.getBoundingClientRect();
+      const isRtl = document.documentElement.dir === 'rtl';
+
+      // Find the card in the 2-column grid closest to (clientX, clientY)
+      let bestCardIdx = 0;
+      let bestScore = Infinity;
+      for (let i = 0; i < cards.length; i++) {
+        const r = cards[i].getBoundingClientRect();
+        const dy = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0;
+        const dx = clientX < r.left ? r.left - clientX : clientX > r.right ? clientX - r.right : 0;
+        // Weight vertical row matching higher so pointer stays within the hovered row
+        const score = dy * 4 + dx;
+        if (score < bestScore) {
+          bestScore = score;
+          bestCardIdx = i;
+        }
+      }
+
+      const targetCard = cards[bestCardIdx];
+      const rect = targetCard.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+
+      // Determine whether insertion is BEFORE or AFTER `targetCard`
+      const insertBefore = isRtl ? clientX > midX : clientX < midX;
+      const bestInsertIdx = insertBefore ? bestCardIdx : bestCardIdx + 1;
+      dropInsertIndex = bestInsertIdx;
+
+      for (let i = 0; i < cards.length; i++) {
+        cards[i].classList.toggle('is-drop-target', i === bestCardIdx);
+      }
+
+      // Position the vertical insertion bar on the single target card's left or right edge
+      const cardTop = rect.top - listRect.top;
+      const cardLeft = rect.left - listRect.left;
+      const placeOnLeftEdge = isRtl ? !insertBefore : insertBefore;
+      const edgeX = placeOnLeftEdge
+        ? Math.max(2, cardLeft - 6)
+        : Math.min(listRect.width - 6, cardLeft + rect.width + 2);
+
+      indicator.style.height = `${Math.round(rect.height)}px`;
+      indicator.style.transform = `translate3d(${Math.round(edgeX)}px, ${Math.round(cardTop)}px, 0)`;
+      indicator.dataset.dropSlot = String(bestInsertIdx + 1);
+      if (!indicator.classList.contains('is-visible')) {
+        indicator.classList.add('is-visible');
+      }
+    };
+
+    const tickAutoScroll = () => {
+      if (!scrollParent || autoScrollVelocity === 0) {
+        autoScrollRafId = null;
+        return;
+      }
+      scrollParent.scrollTop += autoScrollVelocity;
+      updateIndicatorPosition(lastClientX, lastClientY);
+      autoScrollRafId = requestAnimationFrame(tickAutoScroll);
+    };
+
+    const hasExternalFiles = (dt: DataTransfer | null): boolean => {
+      if (!dt || dragging.length > 0) return false;
+      const types = Array.from(dt.types || []);
+      return types.includes('Files');
     };
 
     for (const card of cards) {
       const idx = parseInt(card.dataset.page || '0', 10);
 
       card.addEventListener('click', (e) => {
-        if (e.shiftKey && this._pageAnchor !== null) {
-          const from = Math.min(this._pageAnchor, idx);
-          const to = Math.max(this._pageAnchor, idx);
+        if (e.shiftKey) {
+          const anchor = this._pageAnchor ?? store.activePageIndex;
+          const from = Math.min(anchor, idx);
+          const to = Math.max(anchor, idx);
           const range: number[] = [];
           for (let i = from; i <= to; i++) range.push(i);
           store.setSelectedPageIndices(range);
@@ -581,16 +822,19 @@ export class SidePanelsComponent {
           return;
         }
         this._pageAnchor = idx;
-        store.setSelectedPageIndices([]);
+        store.setSelectedPageIndices([idx]);
         viewportManager.scrollToPage(idx);
       });
 
       card.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!store.selectedPageIndices.has(idx)) {
+        const effective = store.effectivePageSelection();
+        if (!effective.includes(idx)) {
           this._pageAnchor = idx;
-          store.setSelectedPageIndices([]);
+          store.setSelectedPageIndices([idx]);
+        } else if (store.selectedPageIndices.size === 0) {
+          store.setSelectedPageIndices([idx]);
         }
         this.openPageMenu(e.clientX, e.clientY, idx);
       });
@@ -601,33 +845,94 @@ export class SidePanelsComponent {
           e.dataTransfer.effectAllowed = 'move';
           e.dataTransfer.setData('text/plain', String(idx));
         }
-        card.classList.add('is-dragging');
+        for (const selIdx of dragging) {
+          cards[selIdx]?.classList.add('is-dragging');
+        }
       });
 
       card.addEventListener('dragend', () => {
+        for (const c of cards) c.classList.remove('is-dragging');
         dragging = [];
-        card.classList.remove('is-dragging');
-      });
-
-      card.addEventListener('dragover', (e) => {
-        if (dragging.length === 0) return;
-        e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-        card.classList.add('is-drop-target');
-      });
-
-      card.addEventListener('dragleave', () => card.classList.remove('is-drop-target'));
-
-      card.addEventListener('drop', (e) => {
-        e.preventDefault();
-        card.classList.remove('is-drop-target');
-        const moving = dragging;
-        dragging = [];
-        if (moving.length === 0 || moving.includes(idx)) return;
-        const toIndex = moving[0] > idx ? idx : idx + 1;
-        void this.runPageAction(() => pageActions.movePages(moving, toIndex));
+        hideDropIndicator();
       });
     }
+
+    list.addEventListener('dragover', (e) => {
+      const isExternal = hasExternalFiles(e.dataTransfer);
+      if (dragging.length === 0 && !isExternal) return;
+      if (isExternal && doc.notebook) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = isExternal ? 'copy' : 'move';
+      }
+      list.classList.toggle('is-external-file-drag', isExternal);
+      lastClientX = e.clientX;
+      lastClientY = e.clientY;
+
+      if (scrollParent) {
+        const spRect = scrollParent.getBoundingClientRect();
+        const edgeThreshold = 48;
+        if (e.clientY < spRect.top + edgeThreshold) {
+          const ratio = Math.min(1, (spRect.top + edgeThreshold - e.clientY) / edgeThreshold);
+          autoScrollVelocity = -Math.ceil(ratio * 10);
+        } else if (e.clientY > spRect.bottom - edgeThreshold) {
+          const ratio = Math.min(1, (e.clientY - (spRect.bottom - edgeThreshold)) / edgeThreshold);
+          autoScrollVelocity = Math.ceil(ratio * 10);
+        } else {
+          autoScrollVelocity = 0;
+        }
+        if (autoScrollVelocity !== 0 && autoScrollRafId === null) {
+          autoScrollRafId = requestAnimationFrame(tickAutoScroll);
+        }
+      }
+
+      if (dragRafId === null) {
+        dragRafId = requestAnimationFrame(() => {
+          dragRafId = null;
+          updateIndicatorPosition(lastClientX, lastClientY);
+        });
+      }
+    });
+
+    list.addEventListener('dragleave', (e) => {
+      const related = e.relatedTarget as Node | null;
+      if (!related || !list.contains(related)) {
+        hideDropIndicator();
+      }
+    });
+
+    list.addEventListener('drop', (e) => {
+      const isExternal = hasExternalFiles(e.dataTransfer);
+      if (dragging.length === 0 && !isExternal) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      updateIndicatorPosition(e.clientX, e.clientY);
+      const targetIndex = dropInsertIndex ?? doc.pageCount;
+      const moving = dragging;
+      dragging = [];
+      for (const c of cards) c.classList.remove('is-dragging');
+      hideDropIndicator();
+
+      if (isExternal && e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        const pdfFiles = Array.from(e.dataTransfer.files).filter(
+          f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+        );
+        if (pdfFiles.length > 0) {
+          void this.mergeDroppedOrPickedFiles(pdfFiles, targetIndex);
+        }
+        return;
+      }
+
+      if (moving.length === 0) return;
+      if (moving.length === 1 && (targetIndex === moving[0] || targetIndex === moving[0] + 1)) {
+        return;
+      }
+      void this.runPageAction(() => pageActions.movePages(moving, targetIndex));
+    });
 
     list.addEventListener('keydown', (e) => {
       const target = e.target as HTMLElement | null;
@@ -746,6 +1051,25 @@ export class SidePanelsComponent {
           return ok;
         }); } },
       { kind: 'separator' },
+      { kind: 'action', id: 'page-merge-before', label: t('sidebar.pages.mergeBefore'), icon: 'merge',
+        disabled: notebook,
+        run: () => { this.promptMergeExternalPdf(selection[0]); } },
+      { kind: 'action', id: 'page-merge-after', label: t('sidebar.pages.mergeAfter'), icon: 'merge',
+        disabled: notebook,
+        run: () => { this.promptMergeExternalPdf(selection[selection.length - 1] + 1); } },
+      { kind: 'action', id: 'page-extract', label: many
+          ? t('sidebar.pages.extractMany', { count: selection.length })
+          : t('sidebar.pages.extract'),
+        icon: 'extract',
+        run: () => { void this.runPageAction(async () => {
+          const ok = await pageActions.extractPagesToFile(selection);
+          if (ok) showToast(t('sidebar.pages.extracted', { count: selection.length }), 'success');
+          return ok;
+        }); } },
+      { kind: 'action', id: 'page-crop', label: t('sidebar.pages.crop'), icon: 'crop',
+        disabled: notebook,
+        run: () => { void cropDialog.open(selection[0]); } },
+      { kind: 'separator' },
       { kind: 'action', id: 'page-duplicate', label: t('sidebar.pages.duplicate'), icon: 'plus',
         run: () => { void this.runPageAction(() => pageActions.duplicatePages(selection)); } },
       { kind: 'action', id: 'page-blank-before', label: t('sidebar.pages.insertBlankBefore'), icon: 'pagePlus',
@@ -826,14 +1150,24 @@ export class SidePanelsComponent {
           if (!rendered) return;
           src = rendered.toDataURL('image/jpeg', 0.80);
           this._thumbnailCache.set(key, src);
+          this._prevThumbnailByPage.set(`${docId}:${idx}`, src);
         } finally {
           inFlight.delete(idx);
         }
+      } else {
+        this._prevThumbnailByPage.set(`${docId}:${idx}`, src);
       }
 
       const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
       if (!frame || !frame.isConnected) return;
-      if (frame.querySelector('img')) {
+      const existingImg = frame.querySelector<HTMLImageElement>('img');
+      if (existingImg) {
+        if (existingImg.hasAttribute('data-stale')) {
+          existingImg.src = src;
+          existingImg.removeAttribute('data-stale');
+          const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
+          existingImg.style.transform = rot ? `rotate(${rot}deg)` : '';
+        }
         frame.classList.remove('is-loading');
         return;
       }
@@ -842,6 +1176,8 @@ export class SidePanelsComponent {
       img.src = src;
       img.decoding = 'async';
       img.alt = `Page ${idx + 1} preview`;
+      const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
+      if (rot) img.style.transform = `rotate(${rot}deg)`;
       frame.classList.remove('is-loading');
       frame.prepend(img);
     };
@@ -869,7 +1205,8 @@ export class SidePanelsComponent {
 
     for (let idx = 0; idx < pageCount; idx++) {
       const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
-      if (frame && !frame.querySelector('img')) {
+      const existingImg = frame?.querySelector('img');
+      if (frame && (!existingImg || existingImg.hasAttribute('data-stale'))) {
         this._thumbObserver.observe(frame);
       }
     }

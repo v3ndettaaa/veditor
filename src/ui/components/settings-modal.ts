@@ -90,8 +90,11 @@ export class SettingsModalComponent {
     this._container.querySelectorAll('[data-tab]').forEach(btn => {
       btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
     });
-    const content = this._container.querySelector('.settings-content');
+    const content = this._container.querySelector<HTMLElement>('.settings-content');
     if (content) {
+      content.classList.remove('settings-tab-enter');
+      void content.offsetWidth;
+      content.classList.add('settings-tab-enter');
       content.innerHTML = this.renderTabContent(store.appSettings, store.toolSettings);
       content.scrollTop = 0;
     }
@@ -100,7 +103,17 @@ export class SettingsModalComponent {
 
   public render(): void {
     if (!store.settingsModalOpen) {
-      this._container.innerHTML = '';
+      const overlay = this._container.querySelector<HTMLElement>('#settings-overlay');
+      if (overlay && !overlay.classList.contains('is-closing')) {
+        overlay.classList.add('is-closing');
+        window.setTimeout(() => {
+          if (!store.settingsModalOpen) {
+            this._container.innerHTML = '';
+          }
+        }, 150);
+      } else if (!overlay) {
+        this._container.innerHTML = '';
+      }
       this._lastRenderKey = null;
       this._renderedLanguage = null;
       return;
@@ -704,40 +717,66 @@ export class SettingsModalComponent {
     if (this._activeTab === 'about') {
       return `
         <div class="about-pane">
-          <div class="about-mark">
-            ${getIconSvg('pen', 28)}
+          <div class="about-hero-card">
+            <div class="about-mark">
+              ${getIconSvg('pen', 28)}
+            </div>
+            <div class="about-identity">
+              <div class="about-name">${t('appName')}</div>
+              <div class="about-version" id="about-version-text">${tr('Version …', 'نسخه …')}</div>
+            </div>
+            <p class="about-blurb">
+              ${tr(
+                'Ultra-fast, professional offline PDF annotator and document editor. Engineered for high performance, sub-millisecond drawing latency, and complete local privacy.',
+                'ویرایشگر و حاشیه‌نویس حرفه‌ای، فوق‌سریع و کاملاً آفلاین PDF؛ طراحی‌شده برای نوشتن روان با قلم نوری، کمترین تأخیر و حفظ کامل حریم خصوصی روی دستگاه شما.'
+              )}
+            </p>
+            <div class="about-badges-row">
+              <span class="about-feature-pill">
+                ${getIconSvg('shieldCheck', 13)}
+                <span>${tr('100% Local & Private', '۱۰۰٪ محلی و خصوصی')}</span>
+              </span>
+              <span class="about-feature-pill">
+                ${getIconSvg('zap', 13)}
+                <span>${tr('120 Hz Vector Engine', 'موتور برداری ۱۲۰ هرتز')}</span>
+              </span>
+              <span class="about-feature-pill">
+                ${getIconSvg('code', 13)}
+                <span>${tr('MIT Open Source', 'متن‌باز با مجوز MIT')}</span>
+              </span>
+            </div>
           </div>
-          <div>
-            <div class="about-name">${t('appName')}</div>
-            <div class="about-version" id="about-version-text">${tr('Version …', 'نسخه …')}</div>
+
+          <div class="about-update-card">
+            <div class="about-update-row">
+              <div class="about-update-info">
+                <div class="about-update-title">${tr('Software Updates', 'بروزرسانی برنامه')}</div>
+                <div class="about-update-desc">${tr('Check GitHub Releases for the latest version', 'بررسی انتشار نسخه جدید در مخزن رسمی گیت‌هاب')}</div>
+              </div>
+              <button type="button" id="check-updates-btn" class="secondary-btn about-update-btn">
+                ${getIconSvg('refresh', 14)}
+                <span>${tr('Check for Updates', 'بررسی نسخه جدید')}</span>
+              </button>
+            </div>
+            <div id="update-status-box" class="about-update-status" aria-live="polite"></div>
           </div>
 
-          <p class="about-blurb">
-            ${tr(
-              'Ultra-fast, professional offline PDF annotator and document editor. Engineered for high performance, sub-millisecond drawing latency, and complete local privacy.',
-              'ویرایشگر و حاشیه‌نویس حرفه‌ای، فوق‌سریع و کاملاً آفلاین PDF؛ طراحی‌شده برای نوشتن روان با قلم نوری، کمترین تأخیر و حفظ کامل حریم خصوصی روی دستگاه شما.'
-            )}
-          </p>
-
-          <!-- Official GitHub Link -->
-          <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" class="secondary-btn about-repo-link">
-            ${getIconSvg('github', 18)}
-            <span>${tr('View Source on GitHub', 'مشاهده مخزن پروژه در گیت‌هاب')}</span>
-            ${getIconSvg('externalLink', 13)}
-          </a>
-
-          <div class="about-links">
-            <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" class="about-link">
-              ${getIconSvg('info', 13)}
-              <span>${tr('Report Issue', 'گزارش مشکل یا پیشنهاد')}</span>
+          <div class="about-actions-grid">
+            <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" class="secondary-btn about-action-btn">
+              ${getIconSvg('github', 16)}
+              <span>${tr('GitHub Repository', 'مخزن گیت‌هاب')}</span>
+              ${getIconSvg('externalLink', 12)}
             </a>
-            <span class="about-link-divider">•</span>
-            <span class="about-license">${tr('MIT Licensed', 'مجوز متن‌باز MIT')}</span>
+            <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" class="secondary-btn about-action-btn">
+              ${getIconSvg('info', 15)}
+              <span>${tr('Report an Issue', 'گزارش مشکل یا پیشنهاد')}</span>
+              ${getIconSvg('externalLink', 12)}
+            </a>
+            <button type="button" id="about-shortcuts-btn" class="primary-btn about-action-btn is-full-span">
+              ${getIconSvg('command', 15)}
+              <span>${tr('View Keyboard Shortcuts (?)', 'مشاهده کلیدهای میانبر (؟)')}</span>
+            </button>
           </div>
-
-          <button id="about-shortcuts-btn" class="primary-btn">
-            ${tr('View Keyboard Shortcuts (?)', 'مشاهده کلیدهای میانبر (؟)')}
-          </button>
         </div>
       `;
     }
@@ -1046,6 +1085,69 @@ export class SettingsModalComponent {
       });
     }
 
+    // Manual update checker (queries GitHub Releases API only when clicked)
+    const checkUpdatesBtn = this._container.querySelector<HTMLButtonElement>('#check-updates-btn');
+    const updateStatusBox = this._container.querySelector<HTMLElement>('#update-status-box');
+    checkUpdatesBtn?.addEventListener('click', async () => {
+      if (!updateStatusBox || checkUpdatesBtn.disabled) return;
+      checkUpdatesBtn.disabled = true;
+      checkUpdatesBtn.classList.add('is-checking');
+      updateStatusBox.className = 'about-update-status is-visible';
+      updateStatusBox.textContent = tr('Checking GitHub releases…', 'در حال بررسی آخرین نسخه در گیت‌هاب…');
+
+      try {
+        const currentVer = (await getAppVersion()).replace(/^v/i, '').trim();
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 6500);
+        const res = await fetch('https://api.github.com/repos/v3ndettaaa/veditor/releases/latest', {
+          headers: { Accept: 'application/vnd.github+json' },
+          signal: controller.signal
+        });
+        window.clearTimeout(timer);
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const latestTag = String(data?.tag_name || '').replace(/^v/i, '').trim();
+        const releaseUrl = String(data?.html_url || 'https://github.com/v3ndettaaa/veditor/releases/latest');
+
+        if (!latestTag) {
+          throw new Error('No release tag');
+        }
+
+        const isNewer = this.compareSemver(latestTag, currentVer) > 0;
+        if (isNewer) {
+          updateStatusBox.className = 'about-update-status is-visible is-update-available';
+          updateStatusBox.innerHTML = `
+            <span>${tr(`New version available: v${latestTag}`, `نسخه جدید منتشر شده است: v${latestTag}`)}</span>
+            <a href="${releaseUrl}" target="_blank" rel="noopener noreferrer" class="about-update-download-link">
+              <span>${tr('Download Release', 'دریافت نسخه جدید')}</span>
+              ${getIconSvg('externalLink', 12)}
+            </a>
+          `;
+        } else {
+          updateStatusBox.className = 'about-update-status is-visible is-up-to-date';
+          updateStatusBox.textContent = tr(
+            `You are running the latest version (v${currentVer}).`,
+            `شما از آخرین نسخه برنامه (v${currentVer}) استفاده می‌کنید.`
+          );
+        }
+      } catch (_) {
+        updateStatusBox.className = 'about-update-status is-visible is-error';
+        updateStatusBox.innerHTML = `
+          <span>${tr('Could not reach GitHub Releases.', 'امکان ارتباط با گیت‌هاب وجود نداشت.')}</span>
+          <a href="https://github.com/v3ndettaaa/veditor/releases" target="_blank" rel="noopener noreferrer" class="about-update-download-link">
+            <span>${tr('Open Releases Page', 'مشاهده صفحه نسخه‌ها')}</span>
+            ${getIconSvg('externalLink', 12)}
+          </a>
+        `;
+      } finally {
+        checkUpdatesBtn.disabled = false;
+        checkUpdatesBtn.classList.remove('is-checking');
+      }
+    });
+
     // Keyboard shortcut rebinding: click a row, press the new key.
     const refreshShortcutsPane = () => {
       const content = this._container.querySelector('.settings-content');
@@ -1098,5 +1200,15 @@ export class SettingsModalComponent {
       shortcutManager.reset();
       refreshShortcutsPane();
     });
+  }
+
+  private compareSemver(a: string, b: string): number {
+    const pa = a.split(/[.-]/).map(n => parseInt(n, 10) || 0);
+    const pb = b.split(/[.-]/).map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < 3; i++) {
+      const diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
   }
 }

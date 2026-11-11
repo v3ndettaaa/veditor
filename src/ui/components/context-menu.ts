@@ -28,6 +28,10 @@ import {
 import { mergeBoundingBoxes } from '../../utils/geometry';
 import { getIconSvg } from '../../utils/icons';
 import { viewportManager } from '../../core/viewport';
+import { pageActions } from '../../core/page-actions';
+import { t, tr } from '../i18n';
+import { cropDialog } from './crop-dialog';
+import { sidePanelsInstance } from './side-panels';
 import { showToast } from './toast';
 
 export interface AnnotationMenuTarget {
@@ -136,7 +140,10 @@ export function openContextMenu(x: number, y: number, entries: MenuEntry[], pare
     document.removeEventListener('keydown', onKeyDown, true);
     document.getElementById('document-scroll-container')?.removeEventListener('scroll', onViewportChange);
     window.removeEventListener('resize', onViewportChange);
-    root.remove();
+    root.classList.add('is-closing');
+    window.setTimeout(() => {
+      root.remove();
+    }, 120);
   };
 
   root.querySelector<HTMLButtonElement>('[data-menu-action]')?.focus({ preventScroll: true });
@@ -244,6 +251,7 @@ export class AnnotationContextMenu {
     const doc = store.activeDocument;
     const clips = store.clipboardAnnotations;
     const entries: MenuEntry[] = [];
+    const isNotebook = !!doc?.notebook;
 
     if (clips.length > 0) {
       entries.push({
@@ -260,7 +268,7 @@ export class AnnotationContextMenu {
     entries.push({
       kind: 'action',
       id: 'select-all',
-      label: 'Select all on page',
+      label: tr('Select all on page', 'انتخاب همه موارد این صفحه'),
       icon: 'select',
       shortcut: 'Ctrl+A',
       disabled: pageAnnotations.length === 0,
@@ -272,8 +280,37 @@ export class AnnotationContextMenu {
     });
 
     entries.push({ kind: 'separator' });
-    entries.push({ kind: 'action', id: 'fit-width', label: 'Fit to width', icon: 'fitWidth', run: () => viewportManager.fitToWidth() });
-    entries.push({ kind: 'action', id: 'fit-page', label: 'Fit to page', icon: 'fitPage', run: () => viewportManager.fitToPage() });
+    entries.push({
+      kind: 'action',
+      id: 'canvas-crop-page',
+      label: t('sidebar.pages.crop'),
+      icon: 'crop',
+      disabled: isNotebook,
+      run: () => { void cropDialog.open(target.pageIndex); }
+    });
+    entries.push({
+      kind: 'action',
+      id: 'canvas-extract-page',
+      label: t('sidebar.pages.extract'),
+      icon: 'extract',
+      run: () => {
+        void pageActions.extractPagesToFile([target.pageIndex]).then(ok => {
+          if (ok) showToast(t('sidebar.pages.extracted', { count: 1 }), 'success');
+        });
+      }
+    });
+    entries.push({
+      kind: 'action',
+      id: 'canvas-merge-pdf',
+      label: t('sidebar.pages.mergeAfter'),
+      icon: 'merge',
+      disabled: isNotebook,
+      run: () => { sidePanelsInstance?.promptMergeExternalPdf(target.pageIndex + 1); }
+    });
+
+    entries.push({ kind: 'separator' });
+    entries.push({ kind: 'action', id: 'fit-width', label: tr('Fit to width', 'تنظیم به عرض صفحه'), icon: 'fitWidth', run: () => viewportManager.fitToWidth() });
+    entries.push({ kind: 'action', id: 'fit-page', label: tr('Fit to page', 'نمایش کامل صفحه'), icon: 'fitPage', run: () => viewportManager.fitToPage() });
     return entries;
   }
 

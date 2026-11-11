@@ -86,7 +86,16 @@ export const fa = {
       blankInserted: 'صفحه خالی اضافه شد',
       deleted: 'صفحه حذف شد',
       deletedMany: '{count} صفحه حذف شد',
-      failed: 'انجام این عملیات روی صفحه ممکن نشد'
+      failed: 'انجام این عملیات روی صفحه ممکن نشد',
+      mergeBefore: 'ادغام فایل PDF قبل از این صفحه…',
+      mergeAfter: 'ادغام فایل PDF بعد از این صفحه…',
+      merged: '{count} صفحه به سند اضافه و ادغام شد',
+      extract: 'استخراج این صفحه به‌عنوان فایل PDF…',
+      extractMany: 'استخراج {count} صفحه به‌عنوان فایل PDF…',
+      extracted: '{count} صفحه در فایل PDF جداگانه ذخیره شد',
+      crop: 'برش حاشیه صفحه (Crop)…',
+      cropped: 'برش حاشیه صفحات اعمال شد',
+      cropReset: 'برش حاشیه صفحات بازنشانی شد'
     }
   },
   properties: {

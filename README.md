@@ -7,14 +7,15 @@
 **High-Frame-Rate, Offline-First PDF Editor, Annotator & Digital Notebook**  
 *Native Desktop App (Linux, Windows, macOS) & Browser Extension (Chrome, Brave, Edge, Firefox)*
 
-[![Latest Release](https://img.shields.io/badge/release-v3.5.0-6366f1?style=flat-square&logo=github)](https://github.com/v3ndettaaa/veditor/releases/latest)
+[![Latest Release](https://img.shields.io/badge/release-v3.6.0-6366f1?style=flat-square&logo=github)](https://github.com/v3ndettaaa/veditor/releases/latest)
+[![AppImage Catalog](https://img.shields.io/badge/AppImage-Catalog-2b6cb0?style=flat-square&logo=linux)](https://appimage.github.io/veditor/)
 [![Build & Release](https://img.shields.io/github/actions/workflow/status/v3ndettaaa/veditor/release.yml?branch=main&style=flat-square&logo=githubactions&label=build)](https://github.com/v3ndettaaa/veditor/actions/workflows/release.yml)
-[![Tests](https://img.shields.io/badge/tests-186%20passed-10b981?style=flat-square)](#-development--testing)
+[![Tests](https://img.shields.io/badge/tests-188%20passed-10b981?style=flat-square)](#-development--testing)
 [![Privacy](https://img.shields.io/badge/privacy-100%25%20Offline%20%C2%B7%20Zero%20Telemetry-059669?style=flat-square)](#-privacy--security)
 [![Languages](https://img.shields.io/badge/i18n-English%20%7C%20%D9%81%D8%A7%D8%B1%D8%B3%DB%8C%20(RTL)-f59e0b?style=flat-square)](#-customization--localization)
 [![License](https://img.shields.io/badge/license-MIT-8b5cf6?style=flat-square)](LICENSE)
 
-[**Download v3.5**](#-download--install) • [**Screenshots**](#-visual-showcase) • [**Features**](#-features) • [**Keyboard Shortcuts**](#%EF%B8%8F-keyboard-shortcuts) • [**Build from Source**](#-development--testing)
+[**Download v3.6**](#-download--install) • [**Screenshots**](#-visual-showcase) • [**Features**](#-features) • [**Keyboard Shortcuts**](#%EF%B8%8F-keyboard-shortcuts) • [**Build from Source**](#-development--testing)
 
 </div>
 
@@ -50,16 +51,16 @@ Dark/Light themes, custom brand accents, paper patterns, fullscreen auto-hide ta
 
 ## 📥 Download & Install
 
-All official desktop installers and browser extension packages are built automatically via GitHub Actions and published on the [**GitHub Releases**](https://github.com/v3ndettaaa/veditor/releases/latest) page.
+All official desktop installers and browser extension packages are built automatically via GitHub Actions and published on the [**GitHub Releases**](https://github.com/v3ndettaaa/veditor/releases/latest) page. You can also check for new versions manually at any time from **Settings → About → Check for Updates**.
 
 ### Desktop Application (Tauri v2)
 
 | Platform | Architecture | Format | Download Link |
 | :--- | :--- | :--- | :--- |
-| **Linux** *(Arch, Ubuntu, Fedora)* | `x86_64` | `.AppImage` / `.deb` / `.rpm` | [**Download for Linux (v3.5.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
-| **Windows** *(10 / 11)* | `x86_64` | `.exe` Setup / `.msi` | [**Download for Windows (v3.5.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
-| **macOS** *(Apple Silicon)* | `aarch64` (`M1–M4`) | `.dmg` | [**Download for macOS ARM64 (v3.5.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
-| **macOS** *(Intel)* | `x86_64` | `.dmg` | [**Download for macOS Intel (v3.5.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
+| **Linux** *(Arch, Ubuntu, Fedora)* | `x86_64` | `PKGBUILD` / `.AppImage` / `.deb` / `.rpm` | [**Download for Linux (v3.6.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
+| **Windows** *(10 / 11)* | `x86_64` | `.exe` Setup / `WinGet` / `Scoop` | [**Download for Windows (v3.6.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
+| **macOS** *(Apple Silicon)* | `aarch64` (`M1–M4`) | `.dmg` / `Homebrew` | [**Download for macOS ARM64 (v3.6.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
+| **macOS** *(Intel)* | `x86_64` | `.dmg` / `Homebrew` | [**Download for macOS Intel (v3.6.0)**](https://github.com/v3ndettaaa/veditor/releases/latest) |
 
 ### Browser Extensions
 
@@ -68,18 +69,49 @@ All official desktop installers and browser extension packages are built automat
 | **Chrome / Brave / Edge** *(Manifest V3)* | `.zip` | [**veditor-chrome.zip**](https://github.com/v3ndettaaa/veditor/releases/latest/download/veditor-chrome.zip) |
 | **Firefox** *(WebExtensions)* | `.zip` | [**veditor-firefox.zip**](https://github.com/v3ndettaaa/veditor/releases/latest/download/veditor-firefox.zip) |
 
-<details>
-<summary><strong>🐧 Linux / Arch Linux Installation Notes</strong></summary>
+<details open>
+<summary><strong>🐧 Linux Installation Commands (Arch / Ubuntu / Fedora / AppImage)</strong></summary>
 
-- **AppImage (Any Distro / Arch Linux)**:
+- **Arch Linux / Manjaro / EndeavourOS (`PKGBUILD` via `makepkg`)**:
   ```bash
-  chmod +x veditor_3.5.0_amd64.AppImage
-  ./veditor_3.5.0_amd64.AppImage
+  curl -fsSLO https://raw.githubusercontent.com/v3ndettaaa/veditor/main/packaging/aur/PKGBUILD
+  makepkg -si
   ```
-  *Note: v3.5+ automatically configures WebKitGTK (`WEBKIT_DISABLE_DMABUF_RENDERER=1`) and host Mesa GPU driver compatibility on rolling-release distributions such as Arch Linux.*
-- **Debian / Ubuntu (`.deb`)**:
+- **Debian / Ubuntu / Linux Mint / Pop!_OS (`.deb`)**:
   ```bash
-  sudo apt install ./veditor_3.5.0_amd64.deb
+  curl -LO https://github.com/v3ndettaaa/veditor/releases/latest/download/veditor_3.6.0_amd64.deb
+  sudo apt install ./veditor_3.6.0_amd64.deb
+  ```
+- **Fedora / RHEL / openSUSE (`.rpm`)**:
+  ```bash
+  sudo dnf install https://github.com/v3ndettaaa/veditor/releases/latest/download/veditor-3.6.0-1.x86_64.rpm
+  ```
+- **Official AppImage Catalog / AM Package Manager (Any Linux Distro)**:
+  ```bash
+  # Install via AM / AppMan from the official AppImage Catalog (https://appimage.github.io/veditor/):
+  am -i veditor
+  # or run the portable AppImage directly:
+  curl -LO https://github.com/v3ndettaaa/veditor/releases/latest/download/veditor_3.6.0_amd64.AppImage
+  chmod +x veditor_3.6.0_amd64.AppImage
+  ./veditor_3.6.0_amd64.AppImage
+  ```
+  *Note: Automatically configures WebKitGTK (`WEBKIT_DISABLE_DMABUF_RENDERER=1`) and host Mesa GPU driver compatibility on rolling-release distributions such as Arch Linux.*
+</details>
+
+<details>
+<summary><strong>🪟 Windows & 🍎 macOS Package Manager Manifests</strong></summary>
+
+- **Windows (Scoop & WinGet local manifests)**:
+  ```powershell
+  # Install via Scoop manifest from repo:
+  scoop install https://raw.githubusercontent.com/v3ndettaaa/veditor/main/packaging/scoop/veditor.json
+
+  # Install via WinGet manifest from repo:
+  winget install --manifest .\packaging\winget\v3ndettaaa.VEditor.yaml
+  ```
+- **macOS (Homebrew Cask from repo)**:
+  ```bash
+  brew install --cask https://raw.githubusercontent.com/v3ndettaaa/veditor/main/packaging/homebrew/veditor.rb
   ```
 </details>
 
@@ -111,10 +143,11 @@ All official desktop installers and browser extension packages are built automat
 - **3-Mode Eraser (`E`)**: Switch between **Stroke Eraser** (whole-stroke removal), **Pixel/Segment Slicer** (splits ink paths cleanly at intersections), and **Object Eraser**.
 - **Signatures, Stamps & Clipboard Paste**: Draw and save vector signatures (`K`), place vector status stamps (`M`), or press `Ctrl+V` to paste any image directly from your system clipboard onto the page.
 
-### 📄 Native PDF Compatibility & Re-Editable Export
+### 📄 Native PDF Compatibility, Page Operations & Interactive Links
 - **Standard PDF Annotation Embedding**: Saved PDFs embed standard `/Ink`, `/Square`, `/Circle`, `/Polygon`, `/Line`, `/FreeText`, and `/Text` annotations so your work is visible in external PDF viewers.
 - **Lossless Round-Trip Editing**: Re-opening a saved PDF in **veditor** automatically restores all vector strokes, shapes, text boxes, and sticky notes as fully editable objects without duplicate ghost layers.
-- **Custom Notebooks & Page Operations**: Create blank, ruled, grid, dotted, or night-mode notebooks from scratch, and rotate, reorder, duplicate, insert, or delete pages from the thumbnail sidebar.
+- **Interactive PDF Links & Jump-Back History (`Alt + ←`)**: Click internal Table-of-Contents entries, footnotes, cross-references, and external URLs directly on the page when using the `Select` or `Hand` tool, then jump right back to your exact previous scroll position with the floating **`↩ Back to Page X`** pill or `Alt + Left Arrow`.
+- **Merge, Extract & Non-Destructive Crop**: Drag and drop external `.pdf` files directly into the thumbnail sidebar at 60fps to merge pages at any position with full Undo/Redo support, extract selected pages into a standalone PDF, or interactively crop page margins (**Current Page**, **All Pages**, or **Custom Page Range**) while keeping annotations aligned and allowing one-click reset to original page bounds.
 
 ### ⚡ High-Performance Virtualized Viewport
 - **500+ Page Virtualization**: Only on-screen and nearby preload pages occupy GPU memory; off-screen canvases are automatically recycled.
@@ -143,7 +176,8 @@ Every tool shortcut can be customized in **Settings → Keyboard Shortcuts**.
 | `L` | Straight Line | `Space` *(hold)* | Temporary Hand Pan |
 | `Ctrl + Z` / `Ctrl + Y` | Undo / Redo | `Ctrl + S` | Save PDF |
 | `Ctrl + +` / `Ctrl + -` | Zoom In / Out | `Ctrl + 0` | Fit to Width |
-| `Ctrl + K` | Command Palette | `?` | Keyboard Shortcuts Help |
+| `Alt + ←` | Jump Back to Previous Page | `Ctrl + K` | Command Palette |
+| `?` | Keyboard Shortcuts Help | `F11` | Toggle Fullscreen |
 
 ---
 
@@ -162,7 +196,7 @@ npm install
 # Start local development server (http://localhost:3000)
 npm run dev
 
-# Run the automated Vitest suite (21 test suites, 186 tests)
+# Run the automated Vitest suite (21 test suites, 187 tests)
 npm test
 
 # Type-check with TypeScript
@@ -185,6 +219,7 @@ npx tauri build          # Compiles native OS installers in src-tauri/target/rel
 ```text
 veditor/
 ├── docs/screenshots/          # Lossless showcase screenshots for documentation
+├── packaging/                 # Arch AUR (PKGBUILD), WinGet, Scoop & Homebrew Cask manifests
 ├── public/                    # Extension icons & bundled offline PDF.js worker
 ├── src/
 │   ├── annotations/           # Vector rendering engine, spline math, selection & tools
@@ -195,7 +230,7 @@ veditor/
 │   ├── ui/                    # Components, themes, custom cursors & EN/FA (RTL) i18n
 │   └── main.ts                # Application bootstrap & virtualized viewport lifecycle
 ├── src-tauri/                 # Tauri v2 Rust desktop backend & Linux WebKitGTK tuning
-├── tests/                     # 21 Vitest unit & integration test suites (186 tests)
+├── tests/                     # 21 Vitest unit & integration test suites (187 tests)
 ├── manifest.chrome.json       # Chrome / Edge / Brave Manifest V3 config
 └── manifest.firefox.json      # Firefox WebExtensions manifest config
 ```

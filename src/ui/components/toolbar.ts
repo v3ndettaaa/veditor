@@ -519,7 +519,7 @@ export class ToolbarComponent {
               <div class="gn-section">
                 <div class="gn-section-header">
                   <span class="gn-section-label">${tr('Tint Color', 'رنگ هایلایتر')}</span>
-                  <input type="text" id="hover-hl-color-hex" class="hex-type-input" value="${s.highlighterColor}"
+                  <input type="text" id="hover-hl-color-hex" class="hex-type-input" value="${/^#[0-9a-fA-F]{6}$/.test(s.highlighterColor) ? s.highlighterColor : '#fef08a'}"
                          spellcheck="false" maxlength="7" title="${tr('Type any hex color, e.g. #fef08a', 'کد هگز رنگ را وارد کنید')}" aria-label="${tr('Highlighter color hex', 'کد رنگ هایلایتر')}">
                 </div>
                 <div class="color-swatches-group gn-swatch-grid">
@@ -527,7 +527,7 @@ export class ToolbarComponent {
                   ${renderCustomPaletteSwatches('hl-color', 'hl-swatch', s.highlighterColor)}
                   ${renderAddToPaletteButton(s.highlighterColor)}
                   <div class="color-picker-wrapper" title="${tr('Custom highlighter color', 'رنگ دلخواه هایلایتر')}">
-                    <input type="color" id="hover-hl-color-picker" class="color-picker-input" value="${s.highlighterColor}">
+                    <input type="color" id="hover-hl-color-picker" class="color-picker-input" value="${/^#[0-9a-fA-F]{6}$/.test(s.highlighterColor) ? s.highlighterColor : '#fef08a'}">
                   </div>
                 </div>
               </div>
@@ -1138,8 +1138,9 @@ export class ToolbarComponent {
       el.classList.toggle('active', !!c && c.toLowerCase() === s.highlighterColor.toLowerCase());
     });
 
+    const safeHlHex = /^#[0-9a-fA-F]{6}$/.test(s.highlighterColor) ? s.highlighterColor : '#fef08a';
     const hlPicker = this._container.querySelector<HTMLInputElement>('#hover-hl-color-picker');
-    if (hlPicker && hlPicker.value !== s.highlighterColor) hlPicker.value = s.highlighterColor;
+    if (hlPicker && hlPicker.value !== safeHlHex) hlPicker.value = safeHlHex;
 
     this._container.querySelectorAll('[data-hl-width]').forEach(el => {
       const w = parseInt(el.getAttribute('data-hl-width') || '0', 10);
@@ -1156,7 +1157,7 @@ export class ToolbarComponent {
     }
 
     const hlHex = this._container.querySelector<HTMLInputElement>('#hover-hl-color-hex');
-    if (hlHex && document.activeElement !== hlHex && hlHex.value !== s.highlighterColor) hlHex.value = s.highlighterColor;
+    if (hlHex && document.activeElement !== hlHex && hlHex.value !== safeHlHex) hlHex.value = safeHlHex;
 
     const hlStraightToggle = this._container.querySelector<HTMLElement>('[data-hl-straight-toggle]');
     if (hlStraightToggle) {

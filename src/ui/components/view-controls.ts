@@ -256,9 +256,9 @@ export class ViewControlsComponent {
       if (!isNaN(num)) {
         const clamped = Math.max(1, Math.min(total, num));
         pageInput.value = String(clamped);
-        // scrollToPage is robust across view modes (activates + lays out the
-        // target spread first when its layout is missing).
-        viewportManager.scrollToPage(clamped - 1);
+        // navigateWithJumpHistory records the pre-jump position so the user can
+        // return to their previous page with one click on the Back pill.
+        viewportManager.navigateWithJumpHistory(clamped - 1);
       } else {
         pageInput.value = String(store.activePageIndex + 1);
       }

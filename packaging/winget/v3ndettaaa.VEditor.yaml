@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+PackageIdentifier: v3ndettaaa.VEditor
+PackageVersion: 3.6.0
+PackageLocale: en-US
+Publisher: v3ndettaaa
+PublisherUrl: https://github.com/v3ndettaaa
+PublisherSupportUrl: https://github.com/v3ndettaaa/veditor/issues
+PackageName: veditor
+PackageUrl: https://github.com/v3ndettaaa/veditor
+License: MIT
+LicenseUrl: https://github.com/v3ndettaaa/veditor/blob/main/LICENSE
+ShortDescription: Native-grade desktop PDF editor and annotation workspace built with Tauri v2 and Rust.
+Tags:
+  - pdf
+  - pdf-editor
+  - pdf-reader
+  - annotation
+  - tauri
+Installers:
+  - Architecture: x64
+    InstallerType: nullsoft
+    InstallerUrl: https://github.com/v3ndettaaa/veditor/releases/download/v3.6.0/veditor_3.6.0_x64-setup.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: singleton
+ManifestVersion: 1.6.0

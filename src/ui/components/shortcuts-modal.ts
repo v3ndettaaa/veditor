@@ -19,7 +19,15 @@ export class ShortcutsModalComponent {
     if (!store.shortcutsModalOpen) {
       if (this._wasOpen) {
         this._wasOpen = false;
-        this._container.innerHTML = '';
+        const overlay = this._container.querySelector<HTMLElement>('#shortcuts-overlay');
+        if (overlay) {
+          overlay.classList.add('is-closing');
+          window.setTimeout(() => {
+            if (!store.shortcutsModalOpen) this._container.innerHTML = '';
+          }, 150);
+        } else {
+          this._container.innerHTML = '';
+        }
       }
       return;
     }
@@ -67,6 +75,7 @@ export class ShortcutsModalComponent {
           { key: 'Ctrl / Cmd  −', desc: tr('Zoom out', 'کوچک‌نمایی') },
           { key: 'Double-click', desc: tr('Toggle 200% / fit width', 'تغییر بین بزرگ‌نمایی ۲۰۰٪ و عرض صفحه') },
           { key: '0', desc: tr('Fit to width', 'تنظیم به عرض صفحه') },
+          { key: 'Alt + ←', desc: tr('Jump back to previous page', 'بازگشت به مکان قبلی پس از پرش صفحه') },
           { key: 'F', desc: tr('Toggle focus mode', 'حالت تمرکز') }
         ]
       },

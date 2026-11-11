@@ -8,6 +8,9 @@
  * the only place that knows the before/after snapshot dance.
  */
 
+import { offsetAnnotation } from '../annotations/selection';
+import { pdfExporter } from '../io/export-pdf';
+import { nativeSaveAsDialog, nativeWriteFile } from '../io/native-fs';
 import { history, PageOpsCommand } from './history';
 import { notebookController } from './notebook';
 import {
@@ -15,6 +18,7 @@ import {
   applyRecordMap,
   buildIndexMap,
   capturePageSnapshot,
+  cropPdfPages,
   deletePdfPages,
   exportPdfPages,
   insertBlankPages,
@@ -22,11 +26,13 @@ import {
   movePdfPages,
   notifyPageStructureChanged,
   reorderIndexMap,
+  resetPdfPageCrops,
   rotatePageRecords,
   spliceIndexMap
 } from './page-ops';
+import { isDesktop } from './platform';
 import { store } from './store';
-import { DocumentSession, PageClipboard } from './types';
+import { DocumentSession, PageClipboard, PageCropMargins } from './types';
 
 export type PagePasteMode = 'before' | 'after';
 
@@ -283,6 +289,164 @@ class PageActions {
       after
     ));
     return true;
+  }
+
+  /**
+   * Merges one or more external PDF byte buffers into the active document at
+   * `atIndex` as a single undoable operation. Returns the total number of
+   * pages inserted (0 if nothing changed).
+   */
+  public async mergeExternalPdfBytes(atIndex: number, filesBytes: Uint8Array[]): Promise<number> {
+    const doc = store.activeDocument;
+    if (!doc || !doc.fileData || doc.notebook || filesBytes.length === 0) return 0;
+
+    const insertAt = Math.max(0, Math.min(doc.pageCount, Math.floor(atIndex)));
+    let totalInserted = 0;
+
+    const ok = await this.runMutation(
+      filesBytes.length > 1 ? `Merge ${filesBytes.length} PDF files` : 'Merge PDF',
+      d => !!d.fileData && !d.notebook,
+      async d => {
+        let currentBytes = d.fileData!;
+        let currentAt = insertAt;
+        let lastResult: Awaited<ReturnType<typeof insertPdfPages>> | null = null;
+
+        for (const srcBytes of filesBytes) {
+          if (!srcBytes || srcBytes.byteLength === 0) continue;
+          const prevCount = lastResult ? lastResult.pageCount : d.pageCount;
+          const res = await insertPdfPages(currentBytes, currentAt, srcBytes);
+          const added = Math.max(0, res.pageCount - prevCount);
+          if (added > 0) {
+            totalInserted += added;
+            currentAt += added;
+            currentBytes = res.bytes;
+            lastResult = res;
+          }
+        }
+
+        if (!lastResult || totalInserted === 0) return false;
+        const map = spliceIndexMap(d.pageCount, [{ at: insertAt, count: totalInserted }]);
+        applyPageBytesResult(d, store.pageRotations, lastResult, map);
+        this.selectRange(insertAt, totalInserted);
+        return true;
+      }
+    );
+
+    return ok ? totalInserted : 0;
+  }
+
+  /**
+   * Extracts the given page indices into a standalone PDF file (preserving
+   * editable annotations on those pages) and prompts the user to save it.
+   */
+  public async extractPagesToFile(indices: number[]): Promise<boolean> {
+    const doc = store.activeDocument;
+    if (!doc || !doc.fileData) return false;
+    const list = this.normalize(indices);
+    if (list.length === 0) return false;
+
+    try {
+      let exportedBytes: Uint8Array | null = null;
+      try {
+        exportedBytes = await pdfExporter.exportPDF({
+          flatten: false,
+          dpi: 150,
+          pageIndices: list
+        });
+      } catch {
+        const fallback = await exportPdfPages(doc.fileData, list);
+        exportedBytes = fallback ? fallback.bytes : null;
+      }
+      if (!exportedBytes || exportedBytes.byteLength === 0) return false;
+
+      const baseName = (doc.name || 'document').replace(/\.pdf$/i, '');
+      const rangeSuffix = list.length === 1
+        ? `page-${list[0] + 1}`
+        : `pages-${list[0] + 1}-${list[list.length - 1] + 1}`;
+      const suggestedName = `${baseName}-${rangeSuffix}.pdf`;
+
+      if (isDesktop()) {
+        const savePath = await nativeSaveAsDialog(suggestedName);
+        if (!savePath) return false;
+        return await nativeWriteFile(savePath, exportedBytes);
+      }
+      const saveResult = await pdfExporter.saveToFileWithResult(exportedBytes, suggestedName);
+      return !saveResult.cancelled;
+    } catch (err) {
+      console.error('Could not extract pages to file:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Non-destructively crops the given pages by `margins` (in PDF points from
+   * each visual edge) and translates any annotations on those pages so they
+   * remain visually aligned with the cropped content.
+   */
+  public async cropPages(indices: number[], margins: PageCropMargins): Promise<boolean> {
+    const doc = store.activeDocument;
+    if (!doc || !doc.fileData || doc.notebook) return false;
+    const list = this.normalize(indices);
+    if (list.length === 0) return false;
+
+    return this.runMutation(
+      list.length > 1 ? `Crop ${list.length} pages` : 'Crop page',
+      d => !!d.fileData && !d.notebook,
+      async d => {
+        const userRotations: Record<number, number> = {};
+        for (const idx of list) {
+          userRotations[idx] = store.pageRotations[idx] || 0;
+        }
+        const result = await cropPdfPages(d.fileData!, list, margins, userRotations);
+        const identityOrder = Array.from({ length: d.pageCount }, (_, i) => i);
+        applyPageBytesResult(d, store.pageRotations, result, buildIndexMap(identityOrder));
+
+        for (const [key, offset] of Object.entries(result.visualOffsets)) {
+          const pageIdx = Number(key);
+          if (Math.abs(offset.dx) < 0.01 && Math.abs(offset.dy) < 0.01) continue;
+          const existing = d.annotations[pageIdx];
+          if (existing && existing.length > 0) {
+            d.annotations[pageIdx] = existing.map(ann => offsetAnnotation(ann, -offset.dx, -offset.dy));
+          }
+        }
+        return true;
+      }
+    );
+  }
+
+  /**
+   * Restores the original uncropped MediaBox/CropBox on the specified pages
+   * and shifts annotations back into alignment.
+   */
+  public async resetPageCrops(indices: number[]): Promise<boolean> {
+    const doc = store.activeDocument;
+    if (!doc || !doc.fileData || doc.notebook) return false;
+    const list = this.normalize(indices);
+    if (list.length === 0) return false;
+
+    return this.runMutation(
+      list.length > 1 ? `Reset crop on ${list.length} pages` : 'Reset page crop',
+      d => !!d.fileData && !d.notebook,
+      async d => {
+        const userRotations: Record<number, number> = {};
+        for (const idx of list) {
+          userRotations[idx] = store.pageRotations[idx] || 0;
+        }
+        const result = await resetPdfPageCrops(d.fileData!, list, userRotations);
+        const identityOrder = Array.from({ length: d.pageCount }, (_, i) => i);
+        applyPageBytesResult(d, store.pageRotations, result, buildIndexMap(identityOrder));
+
+        for (const [key, offset] of Object.entries(result.visualOffsets)) {
+          const pageIdx = Number(key);
+          if (Math.abs(offset.dx) < 0.01 && Math.abs(offset.dy) < 0.01) continue;
+          const existing = d.annotations[pageIdx];
+          if (existing && existing.length > 0) {
+            d.annotations[pageIdx] = existing.map(ann => offsetAnnotation(ann, -offset.dx, -offset.dy));
+          }
+        }
+        return true;
+      }
+    );
   }
 
   // -------------------------------------------------------------------------

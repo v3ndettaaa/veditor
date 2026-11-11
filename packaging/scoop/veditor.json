@@ -1,0 +1,29 @@
+{
+  "version": "3.6.0",
+  "description": "Native-grade desktop PDF editor & annotation workspace built with Tauri v2 and Rust",
+  "homepage": "https://github.com/v3ndettaaa/veditor",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/v3ndettaaa/veditor/releases/download/v3.6.0/veditor_3.6.0_x64-setup.exe#/dl.7z",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "bin": "veditor.exe",
+  "shortcuts": [
+    [
+      "veditor.exe",
+      "veditor"
+    ]
+  ],
+  "checkver": {
+    "github": "https://github.com/v3ndettaaa/veditor"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/v3ndettaaa/veditor/releases/download/v$version/veditor_$version_x64-setup.exe#/dl.7z"
+      }
+    }
+  }
+}

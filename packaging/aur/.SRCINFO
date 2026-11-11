@@ -1,0 +1,20 @@
+pkgbase = veditor-bin
+	pkgdesc = Native-grade desktop PDF editor & annotation workspace built with Tauri v2 and Rust
+	pkgver = 1.1.2
+	pkgrel = 1
+	url = https://github.com/v3ndettaaa/veditor
+	arch = x86_64
+	license = MIT
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libayatana-appindicator
+	depends = librsvg
+	depends = hicolor-icon-theme
+	provides = veditor
+	conflicts = veditor
+	conflicts = veditor-git
+	options = !strip
+	source = veditor-bin-1.1.2.deb::https://github.com/v3ndettaaa/veditor/releases/download/v1.1.2/VEditor_1.1.2_amd64.deb
+	sha256sums = SKIP
+
+pkgname = veditor-bin

@@ -4,7 +4,7 @@
  */
 
 import { store } from './store';
-import { PageInfo, ViewMode, MIN_ZOOM, MAX_ZOOM } from './types';
+import { JumpHistoryItem, PageInfo, ViewMode, MIN_ZOOM, MAX_ZOOM } from './types';
 import { persistDocPosition } from '../io/storage';
 
 export interface ViewportPageRect {
@@ -364,7 +364,137 @@ export class ViewportManager {
     }
   }
 
-  public scrollToPage(pageIndex: number, opts?: { behavior?: ScrollBehavior }) {
+  private _jumpHistory: JumpHistoryItem[] = [];
+  private _jumpListeners: Set<() => void> = new Set();
+
+  public onJumpHistoryChanged(cb: () => void): () => void {
+    this._jumpListeners.add(cb);
+    return () => this._jumpListeners.delete(cb);
+  }
+
+  private emitJumpHistoryChanged(): void {
+    for (const cb of this._jumpListeners) {
+      try { cb(); } catch (_) {}
+    }
+  }
+
+  /** Returns the most recent jump entry for the active document, if any. */
+  public getLatestJump(): JumpHistoryItem | null {
+    const docId = store.activeDocument?.id;
+    if (!docId) return null;
+    for (let i = this._jumpHistory.length - 1; i >= 0; i--) {
+      if (this._jumpHistory[i].docId === docId) {
+        return this._jumpHistory[i];
+      }
+    }
+    return null;
+  }
+
+  /** Removes the latest jump entry for the active document without scrolling. */
+  public dismissLatestJump(): void {
+    const docId = store.activeDocument?.id;
+    if (!docId) return;
+    for (let i = this._jumpHistory.length - 1; i >= 0; i--) {
+      if (this._jumpHistory[i].docId === docId) {
+        this._jumpHistory.splice(i, 1);
+        this.emitJumpHistoryChanged();
+        return;
+      }
+    }
+  }
+
+  /**
+   * Records the current scroll position & page on the Jump History stack,
+   * scrolls to `targetPageIndex` (with an optional normalized vertical offset),
+   * and triggers a 1s landing flash on the destination page.
+   */
+  public navigateWithJumpHistory(
+    targetPageIndex: number,
+    opts?: { offsetYRatio?: number; behavior?: ScrollBehavior }
+  ): void {
+    const doc = store.activeDocument;
+    if (!doc || !this._scrollContainer) return;
+
+    const clampedTarget = Math.max(0, Math.min(doc.pageCount - 1, Math.floor(targetPageIndex)));
+    const fromPageIndex = store.activePageIndex || 0;
+    const scrollTop = this._scrollContainer.scrollTop;
+    const scrollLeft = this._scrollContainer.scrollLeft;
+
+    if (fromPageIndex !== clampedTarget || (opts?.offsetYRatio !== undefined && opts.offsetYRatio > 0.05)) {
+      this._jumpHistory.push({
+        docId: doc.id,
+        fromPageIndex,
+        scrollTop,
+        scrollLeft,
+        targetPageIndex: clampedTarget,
+        timestamp: Date.now()
+      });
+      if (this._jumpHistory.length > 25) {
+        this._jumpHistory.shift();
+      }
+      this.emitJumpHistoryChanged();
+    }
+
+    this.scrollToPage(clampedTarget, {
+      behavior: opts?.behavior,
+      offsetYRatio: opts?.offsetYRatio
+    });
+    this.flashDestinationPage(clampedTarget);
+  }
+
+  /**
+   * Pops the most recent jump for the active document and restores its exact
+   * pre-jump scroll position and active page.
+   */
+  public popAndRestoreJump(): boolean {
+    const doc = store.activeDocument;
+    if (!doc || !this._scrollContainer) return false;
+
+    let foundIdx = -1;
+    for (let i = this._jumpHistory.length - 1; i >= 0; i--) {
+      if (this._jumpHistory[i].docId === doc.id) {
+        foundIdx = i;
+        break;
+      }
+    }
+    if (foundIdx === -1) return false;
+
+    const [entry] = this._jumpHistory.splice(foundIdx, 1);
+    this.emitJumpHistoryChanged();
+
+    const targetPage = Math.max(0, Math.min(doc.pageCount - 1, entry.fromPageIndex));
+    if (store.viewMode === 'single') {
+      store.setActivePageIndex(targetPage);
+      this.updateLayout(true);
+    }
+
+    const behavior: ScrollBehavior = store.appSettings.smoothScroll !== false ? 'smooth' : 'auto';
+    this._scrollContainer.scrollTo({
+      top: Math.max(0, entry.scrollTop),
+      left: Math.max(0, entry.scrollLeft),
+      behavior
+    });
+    store.setActivePageIndex(targetPage);
+    this.flashDestinationPage(targetPage);
+    return true;
+  }
+
+  private flashDestinationPage(pageIndex: number): void {
+    setTimeout(() => {
+      const container = this._pagesWrapper?.querySelector<HTMLElement>(
+        `.pdf-page-container[data-page-index="${pageIndex}"]`
+      );
+      if (!container) return;
+      container.classList.remove('pdf-jump-target-flash');
+      void container.offsetWidth;
+      container.classList.add('pdf-jump-target-flash');
+      setTimeout(() => {
+        container.classList.remove('pdf-jump-target-flash');
+      }, 1050);
+    }, 80);
+  }
+
+  public scrollToPage(pageIndex: number, opts?: { behavior?: ScrollBehavior; offsetYRatio?: number }) {
     if (!this._scrollContainer) return;
     this._zoomAnchor = null;
     const doc = store.activeDocument;
@@ -383,11 +513,24 @@ export class ViewportManager {
     if (layout) {
       const behavior = opts?.behavior
         ?? (store.appSettings.smoothScroll !== false ? 'smooth' : 'auto');
+      const offsetPx = opts?.offsetYRatio && Number.isFinite(opts.offsetYRatio)
+        ? Math.max(0, Math.min(layout.height - 40, opts.offsetYRatio * layout.height))
+        : 0;
       this._scrollContainer.scrollTo({
-        top: Math.max(0, layout.top - 20),
+        top: Math.max(0, layout.top + offsetPx - 20),
         behavior
       });
       store.setActivePageIndex(pageIndex);
+      if (store.viewMode === 'single') {
+        const container = this._pagesWrapper?.querySelector<HTMLElement>(
+          `.pdf-page-container[data-page-index="${pageIndex}"]`
+        );
+        if (container) {
+          container.classList.remove('page-flip-enter');
+          void container.offsetWidth;
+          container.classList.add('page-flip-enter');
+        }
+      }
     }
   }
 

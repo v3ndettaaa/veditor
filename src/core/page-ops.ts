@@ -13,11 +13,12 @@
  * main.ts uses to reload the pdf engine and re-lay-out.
  */
 
-import { PDFDocument } from 'pdf-lib';
+import { PDFArray, PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
 import {
   Annotation,
   DocumentSession,
   Layer,
+  PageCropMargins,
   PageInfo,
   PDFBookmarkItem
 } from './types';
@@ -212,6 +213,143 @@ export async function movePdfPages(
   for (let i = from.length - 1; i >= 0; i--) doc.removePage(from[i]);
   copied.forEach((page, i) => doc.insertPage(finalDest + i, page));
   return finish(doc);
+}
+
+const ORIG_BOX_KEY = 'VEditorOrigBox';
+
+/**
+ * Applies crop margins `{ top, right, bottom, left }` (either normalized ratios
+ * `0..0.45` or PDF point values `>= 1`) to `indices` while preserving the
+ * original uncropped MediaBox in `/VEditorOrigBox` on each page dictionary so
+ * crops can be non-destructively reset even across saves.
+ */
+export async function cropPdfPages(
+  bytes: Uint8Array,
+  indices: number[],
+  margins: PageCropMargins,
+  userRotations: Record<number, number> = {}
+): Promise<PageBytesResult & { visualOffsets: Record<number, { dx: number; dy: number }> }> {
+  const doc = await loadDoc(bytes);
+  const pages = doc.getPages();
+  const total = pages.length;
+  const targets = [...new Set(indices)].filter(i => i >= 0 && i < total);
+
+  const visualOffsets: Record<number, { dx: number; dy: number }> = {};
+
+  for (const idx of targets) {
+    const page = pages[idx];
+    const mb = page.getMediaBox();
+
+    // Record original uncropped MediaBox the first time a page is cropped
+    if (!page.node.get(PDFName.of(ORIG_BOX_KEY))) {
+      page.node.set(
+        PDFName.of(ORIG_BOX_KEY),
+        doc.context.obj([mb.x, mb.y, mb.width, mb.height])
+      );
+    }
+
+    const nativeRot = ((Math.round(page.getRotation().angle) % 360) + 360) % 360;
+    const userRot = ((Math.round(userRotations[idx] || 0) % 360) + 360) % 360;
+    const effRot = (nativeRot + userRot) % 360;
+    const swapped = effRot === 90 || effRot === 270;
+    const visualW = Math.max(1, swapped ? mb.height : mb.width);
+    const visualH = Math.max(1, swapped ? mb.width : mb.height);
+
+    const toRatio = (val: number, span: number): number => {
+      if (!Number.isFinite(val) || val <= 0) return 0;
+      const ratio = val > 0.95 ? val / span : val;
+      return Math.max(0, Math.min(0.44, ratio));
+    };
+
+    const tInset = toRatio(margins.top, visualH);
+    const bInset = toRatio(margins.bottom, visualH);
+    const lInset = toRatio(margins.left, visualW);
+    const rInset = toRatio(margins.right, visualW);
+
+    let newX = mb.x;
+    let newY = mb.y;
+    let newW = mb.width;
+    let newH = mb.height;
+
+    if (effRot === 90) {
+      newX = mb.x + tInset * mb.width;
+      newY = mb.y + lInset * mb.height;
+      newW = mb.width * Math.max(0.1, 1 - tInset - bInset);
+      newH = mb.height * Math.max(0.1, 1 - lInset - rInset);
+      visualOffsets[idx] = { dx: lInset * mb.height, dy: tInset * mb.width };
+    } else if (effRot === 180) {
+      newX = mb.x + rInset * mb.width;
+      newY = mb.y + tInset * mb.height;
+      newW = mb.width * Math.max(0.1, 1 - lInset - rInset);
+      newH = mb.height * Math.max(0.1, 1 - tInset - bInset);
+      visualOffsets[idx] = { dx: lInset * mb.width, dy: tInset * mb.height };
+    } else if (effRot === 270) {
+      newX = mb.x + bInset * mb.width;
+      newY = mb.y + rInset * mb.height;
+      newW = mb.width * Math.max(0.1, 1 - tInset - bInset);
+      newH = mb.height * Math.max(0.1, 1 - lInset - rInset);
+      visualOffsets[idx] = { dx: lInset * mb.height, dy: tInset * mb.width };
+    } else {
+      newX = mb.x + lInset * mb.width;
+      newY = mb.y + bInset * mb.height;
+      newW = mb.width * Math.max(0.1, 1 - lInset - rInset);
+      newH = mb.height * Math.max(0.1, 1 - tInset - bInset);
+      visualOffsets[idx] = { dx: lInset * mb.width, dy: tInset * mb.height };
+    }
+
+    page.setMediaBox(newX, newY, newW, newH);
+    page.setCropBox(newX, newY, newW, newH);
+  }
+
+  const finished = await finish(doc);
+  return { ...finished, visualOffsets };
+}
+
+/**
+ * Restores the original uncropped MediaBox & CropBox for `indices` if a saved
+ * `/VEditorOrigBox` exists on those pages.
+ */
+export async function resetPdfPageCrops(
+  bytes: Uint8Array,
+  indices: number[],
+  userRotations: Record<number, number> = {}
+): Promise<PageBytesResult & { resetCount: number; visualOffsets: Record<number, { dx: number; dy: number }> }> {
+  const doc = await loadDoc(bytes);
+  const pages = doc.getPages();
+  const total = pages.length;
+  const targets = [...new Set(indices)].filter(i => i >= 0 && i < total);
+  let resetCount = 0;
+  const visualOffsets: Record<number, { dx: number; dy: number }> = {};
+
+  for (const idx of targets) {
+    const page = pages[idx];
+    const curMb = page.getMediaBox();
+    const origEntry = page.node.lookup(PDFName.of(ORIG_BOX_KEY));
+    if (origEntry instanceof PDFArray && origEntry.size() === 4) {
+      const ox = (origEntry.get(0) as PDFNumber)?.asNumber?.() ?? 0;
+      const oy = (origEntry.get(1) as PDFNumber)?.asNumber?.() ?? 0;
+      const ow = (origEntry.get(2) as PDFNumber)?.asNumber?.() ?? 612;
+      const oh = (origEntry.get(3) as PDFNumber)?.asNumber?.() ?? 792;
+      if (ow > 10 && oh > 10) {
+        const nativeRot = ((Math.round(page.getRotation().angle) % 360) + 360) % 360;
+        const userRot = ((Math.round(userRotations[idx] || 0) % 360) + 360) % 360;
+        const effRot = (nativeRot + userRot) % 360;
+        if (effRot === 0) {
+          visualOffsets[idx] = {
+            dx: ox - curMb.x,
+            dy: (curMb.y + curMb.height) - (oy + oh)
+          };
+        }
+        page.setMediaBox(ox, oy, ow, oh);
+        page.setCropBox(ox, oy, ow, oh);
+        page.node.delete(PDFName.of(ORIG_BOX_KEY));
+        resetCount++;
+      }
+    }
+  }
+
+  const finished = await finish(doc);
+  return { ...finished, resetCount, visualOffsets };
 }
 
 function clampIndex(index: number, pageCount: number, opts?: { allowEnd?: boolean }): number {

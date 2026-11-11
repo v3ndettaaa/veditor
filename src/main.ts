@@ -27,7 +27,8 @@ import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFil
 import { selectionManager, transformAnnotation } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { resolveAdaptiveCanvasDpr } from './utils/dpi';
-import { t } from './ui/i18n';
+import { getIconSvg } from './utils/icons';
+import { t, tr } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
@@ -70,6 +71,8 @@ class VeditorApp {
     annotChunkCanvas?: HTMLCanvasElement;
     scratchCanvas: HTMLCanvasElement;
     scratchChunkCanvas?: HTMLCanvasElement;
+    linkLayer?: HTMLElement;
+    linksLoadedKey?: string;
     /**
      * Signature of the layout that produced this element's current size
      * (zoom | render dpr | page rotation). A change means every backing store
@@ -299,19 +302,81 @@ class VeditorApp {
     // 9. Subscribe to document/page changes
     store.subscribe(() => {
       this.handleStoreUpdate();
+      this.syncJumpBackPill();
+    });
+
+    this.initJumpBackPill();
+    viewportManager.onJumpHistoryChanged(() => {
+      this.syncJumpBackPill();
     });
 
     this.renderEmptyState();
+  }
+
+  private _jumpBackPill: HTMLElement | null = null;
+
+  private initJumpBackPill(): void {
+    const host = document.getElementById('app-viewport-container') || document.body;
+    const pill = document.createElement('div');
+    pill.id = 'jump-back-pill';
+    pill.className = 'jump-back-pill is-hidden';
+    pill.setAttribute('role', 'status');
+    pill.innerHTML = `
+      <button type="button" class="jump-back-main-btn" id="jump-back-main-btn">
+        <span class="jump-back-icon">${getIconSvg('arrowLeft', 14)}</span>
+        <span class="jump-back-label" id="jump-back-label"></span>
+      </button>
+      <button type="button" class="jump-back-dismiss-btn" id="jump-back-dismiss-btn" aria-label="Dismiss">
+        ${getIconSvg('close', 12)}
+      </button>
+    `;
+    host.appendChild(pill);
+    this._jumpBackPill = pill;
+
+    pill.querySelector('#jump-back-main-btn')?.addEventListener('click', () => {
+      viewportManager.popAndRestoreJump();
+    });
+    pill.querySelector('#jump-back-dismiss-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      viewportManager.dismissLatestJump();
+    });
+  }
+
+  private syncJumpBackPill(): void {
+    const pill = this._jumpBackPill;
+    if (!pill) return;
+    const entry = viewportManager.getLatestJump();
+    if (!entry || !store.activeDocument) {
+      pill.classList.add('is-hidden');
+      return;
+    }
+    const pageNum = entry.fromPageIndex + 1;
+    const labelEl = pill.querySelector<HTMLElement>('#jump-back-label');
+    const mainBtn = pill.querySelector<HTMLButtonElement>('#jump-back-main-btn');
+    if (labelEl) {
+      labelEl.textContent = tr(`Back to Page ${pageNum}`, `بازگشت به صفحه ${pageNum}`);
+    }
+    if (mainBtn) {
+      mainBtn.title = tr(
+        `Return to Page ${pageNum} (Alt + Left Arrow)`,
+        `بازگشت به مکان قبلی در صفحه ${pageNum} (Alt + فلش چپ)`
+      );
+    }
+    pill.classList.remove('is-hidden');
   }
 
   private _landingPage: LandingPageComponent | null = null;
 
   private renderEmptyState() {
     if (store.activeDocument) {
+      this._emptyStateView.classList.add('is-leaving');
       this._emptyStateView.style.display = 'none';
+      this._scrollContainer.classList.add('viewport-active-enter');
       return;
     }
 
+    this._scrollContainer.classList.remove('viewport-active-enter');
+    this._emptyStateView.classList.remove('is-leaving');
     this._emptyStateView.style.display = 'flex';
     if (!this._landingPage) {
       this._landingPage = new LandingPageComponent(this._emptyStateView, {
@@ -379,7 +444,8 @@ class VeditorApp {
     };
     const close = () => {
       window.removeEventListener('keydown', onEsc);
-      overlay.remove();
+      overlay.classList.add('is-closing');
+      window.setTimeout(() => overlay.remove(), 150);
     };
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
@@ -517,10 +583,15 @@ class VeditorApp {
     // Window Drag & Drop
     window.addEventListener('dragover', (e) => {
       e.preventDefault();
-      e.dataTransfer!.dropEffect = 'copy';
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     });
 
     window.addEventListener('drop', async (e) => {
+      // Drops inside the sidebar thumbnails list are handled by SidePanelsComponent
+      // to merge external PDF files into the active document.
+      if ((e.target as HTMLElement | null)?.closest('#app-sidebar')) {
+        return;
+      }
       e.preventDefault();
       let fileHandle: FileSystemFileHandle | null = null;
       if (e.dataTransfer?.items && e.dataTransfer.items.length > 0) {
@@ -724,6 +795,7 @@ class VeditorApp {
         }
       } finally {
         store.endDocSwitch();
+        this.updateCanvasCursors();
         viewportManager.handleScroll(true);
       }
 
@@ -784,20 +856,43 @@ class VeditorApp {
   }
 
   /**
-   * Re-mounts the whole document after a page operation changed its bytes.
-   *
-   * The pdf.js proxy for this doc id points at the previous file, so it has to
-   * be dropped before the new bytes are parsed; every mounted element is then
-   * stale by construction (page numbers all shifted), which is why this starts
-   * clean rather than trying to patch individual pages.
+   * Marks mounted pages as needing fresh geometry, raster, and link hotspots
+   * WITHOUT removing their DOM containers or clearing their painted canvas
+   * bitmaps, eliminating the blank-screen flash during sidebar page operations.
+   * Only containers for page indices >= `newPageCount` (after page deletion)
+   * are unmounted.
+   */
+  private invalidateRenderedPagesInPlace(newPageCount: number): void {
+    for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
+      pdfEngine.cancelPageRender(pageIndex);
+      if (pageIndex >= newPageCount) {
+        p.pdfCanvas.width = 0; p.pdfCanvas.height = 0;
+        if (p.chunkCanvas) { p.chunkCanvas.width = 0; p.chunkCanvas.height = 0; }
+        p.annotCanvas.width = 0; p.annotCanvas.height = 0;
+        if (p.annotChunkCanvas) { p.annotChunkCanvas.width = 0; p.annotChunkCanvas.height = 0; }
+        p.scratchCanvas.width = 0; p.scratchCanvas.height = 0;
+        if (p.scratchChunkCanvas) { p.scratchChunkCanvas.width = 0; p.scratchChunkCanvas.height = 0; }
+        if (p.container.parentNode === this._pagesWrapper) {
+          this._pagesWrapper.removeChild(p.container);
+        }
+        this._renderedPages.delete(pageIndex);
+      } else {
+        p.geomKey = undefined;
+        p.linksLoadedKey = undefined;
+        p.needsRaster = true;
+        p.needsRepaint = true;
+      }
+    }
+  }
+
+  /**
+   * Updates the active document in place after a page operation changed its bytes
+   * or rotation, keeping existing rendered page canvases visible until the
+   * double-buffered replacement frame is blitted.
    */
   private async reloadPageStructure(doc: DocumentSession): Promise<void> {
     if (store.activeDocument?.id !== doc.id) return;
 
-    // Only re-parse and re-persist when the page op actually rewrote the PDF.
-    // Rotation lives in the record layer, so it needs a re-layout and a
-    // re-raster (the engine keys its bitmap cache by page@scale:rotation) but
-    // not a reload of the same bytes.
     const bytes = doc.fileData;
     const previous = this._structureBytes;
     const bytesChanged = !previous || previous.doc !== doc || previous.bytes !== bytes;
@@ -805,32 +900,31 @@ class VeditorApp {
 
     this.resetZoomPreviewState();
     if (bytesChanged) {
-      pdfEngine.unloadDoc(doc.id);
       try {
-        // loadFromBytes copies internally, so passing the live bytes is safe.
-        if (bytes) await pdfEngine.loadFromBytes(bytes, doc.id);
+        // Atomic hot-swap: parses the new PDF bytes before replacing the live proxy
+        if (bytes) await pdfEngine.loadFromBytes(bytes, doc.id, true);
       } catch (err) {
         console.error('Could not reload the document after a page operation:', err);
       }
-      // The user may have switched tabs while the PDF was parsing.
       if (store.activeDocument?.id !== doc.id) return;
     }
 
-    this.clearRenderedPages();
-    viewportManager.clearVisible();
+    this.invalidateRenderedPagesInPlace(doc.pageCount);
     viewportManager.updateLayout(true);
 
     const target = Math.max(0, Math.min(doc.pageCount - 1, store.activePageIndex));
-    viewportManager.scrollToPage(target, { behavior: 'auto' });
+    const onScreen = viewportManager.getOnScreenPages();
+    if (!onScreen.has(target)) {
+      viewportManager.scrollToPage(target, { behavior: 'auto' });
+    }
 
-    // Page ops are structural edits, so they are saved immediately rather than
-    // waiting for the autosave debounce.
     if (bytesChanged) {
       void saveDocumentSession(doc, { includeBytes: true }).catch(err => {
         console.warn('Could not persist the page operation:', err);
       });
     }
 
+    sidePanelsInstance?.refreshAfterStructureReload();
     store.notify();
   }
 
@@ -933,6 +1027,7 @@ class VeditorApp {
         }
       } finally {
         store.endDocSwitch();
+        this.updateCanvasCursors();
         // One sync pass so center-page tracking matches the restored offset.
         viewportManager.handleScroll(true);
       }
@@ -952,16 +1047,15 @@ class VeditorApp {
       this._lastZoom = store.zoom;
       this._lastViewMode = store.viewMode;
       this._lastRotationSig = rotationSig;
-      if (viewModeChanged || rotationChanged) {
-        // Spread-only modes keep stale continuous containers at wrong tops;
-        // rotation swaps w/h so every top below shifts. Start clean.
+      if (viewModeChanged) {
         this.resetZoomPreviewState();
-        if (viewModeChanged) {
-          this._scrollContainer.scrollTop = 0;
-          this._scrollContainer.scrollLeft = 0;
-        }
+        this._scrollContainer.scrollTop = 0;
+        this._scrollContainer.scrollLeft = 0;
         viewportManager.clearVisible();
         this.clearRenderedPages();
+      } else if (rotationChanged) {
+        this.resetZoomPreviewState();
+        this.invalidateRenderedPagesInPlace(store.activeDocument.pageCount);
       }
       // The size-indicating cursors are drawn at the on-screen brush size, so
       // they have to be refreshed on zoom as well as on tool changes.
@@ -1681,12 +1775,16 @@ class VeditorApp {
         scratchChunkCanvas.className = 'scratch-chunk-canvas';
         (scratchCanvas as HTMLCanvasElement & { _chunkCanvas?: HTMLCanvasElement })._chunkCanvas = scratchChunkCanvas;
 
+        const linkLayer = document.createElement('div');
+        linkLayer.className = 'pdf-link-layer';
+
         container.appendChild(pdfCanvas);
         container.appendChild(chunkCanvas);
         container.appendChild(annotCanvas);
         container.appendChild(annotChunkCanvas);
         container.appendChild(scratchCanvas);
         container.appendChild(scratchChunkCanvas);
+        container.appendChild(linkLayer);
 
         this._pagesWrapper.appendChild(container);
 
@@ -1697,7 +1795,8 @@ class VeditorApp {
           annotCanvas,
           annotChunkCanvas,
           scratchCanvas,
-          scratchChunkCanvas
+          scratchChunkCanvas,
+          linkLayer
         };
         this._renderedPages.set(pageIndex, pageElements);
 
@@ -1758,8 +1857,9 @@ class VeditorApp {
         const rot = store.pageRotations[pageIndex] || 0;
         void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
       }
-      // Pre-warm PDF text layout for on-screen pages so Select-tool hover is instant
+      // Pre-warm PDF text layout and interactive links for on-screen pages
       void pdfEngine.getPageTextLayout(pageIndex);
+      void this.populatePageLinks(pageIndex, p, docId);
       p.needsRepaint = false;
       this.repaintPageAnnotations(pageIndex, p);
     }
@@ -1778,6 +1878,7 @@ class VeditorApp {
         const rot = store.pageRotations[pageIndex] || 0;
         void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
       }
+      void this.populatePageLinks(pageIndex, p, docId);
       if (p.needsRepaint && !this._isFastScrolling) {
         p.needsRepaint = false;
         this.repaintPageAnnotations(pageIndex, p);
@@ -2303,7 +2404,67 @@ class VeditorApp {
     }
   }
 
+  private async populatePageLinks(
+    pageIndex: number,
+    p: { linkLayer?: HTMLElement; linksLoadedKey?: string },
+    docId: string
+  ): Promise<void> {
+    const layer = p.linkLayer;
+    if (!layer) return;
+    const rot = ((store.pageRotations[pageIndex] || 0) % 360 + 360) % 360;
+    const key = `${docId}:${pageIndex}:${rot}`;
+    if (p.linksLoadedKey === key) return;
+    p.linksLoadedKey = key;
+
+    const links = await pdfEngine.getPageLinks(pageIndex, rot);
+    if (!layer.isConnected || store.activeDocument?.id !== docId) return;
+    layer.innerHTML = '';
+    if (links.length === 0) return;
+
+    for (const link of links) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pdf-link-hotspot';
+      btn.style.left = `${(link.nx * 100).toFixed(3)}%`;
+      btn.style.top = `${(link.ny * 100).toFixed(3)}%`;
+      btn.style.width = `${(link.nw * 100).toFixed(3)}%`;
+      btn.style.height = `${(link.nh * 100).toFixed(3)}%`;
+
+      if (link.destPageIndex !== undefined) {
+        const targetPageNum = link.destPageIndex + 1;
+        const tip = tr(`Go to Page ${targetPageNum}`, `رفتن به صفحه ${targetPageNum}`);
+        btn.title = tip;
+        btn.dataset.linkBadge = tr(`Page ${targetPageNum}`, `صفحه ${targetPageNum}`);
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          viewportManager.navigateWithJumpHistory(link.destPageIndex!, {
+            offsetYRatio: link.destOffsetYRatio
+          });
+        });
+      } else if (link.url) {
+        btn.title = link.url;
+        btn.dataset.linkBadge = link.url.replace(/^https?:\/\//i, '').slice(0, 36);
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const a = document.createElement('a');
+          a.href = link.url!;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        });
+      }
+      layer.appendChild(btn);
+    }
+  }
+
   public updateCanvasCursors(): void {
+    const linksInteractive = store.activeTool !== 'eraser';
+    document.body.classList.toggle('pdf-links-interactive', linksInteractive);
+
     const cursor = drawingCursorValue(
       store.activeTool,
       store.toolSettings.drawingCursor || 'pen',
@@ -2524,7 +2685,14 @@ class VeditorApp {
         return;
       }
 
-      if (e.altKey) return;
+      if (e.altKey) {
+        if (e.key === 'ArrowLeft') {
+          if (viewportManager.popAndRestoreJump()) {
+            e.preventDefault();
+          }
+        }
+        return;
+      }
 
       // Tool keys resolve through the user-configurable shortcut registry (shortcutManager)
       const shortcutTool = shortcutManager.actionForEvent(e);

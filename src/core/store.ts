@@ -65,7 +65,7 @@ class StateStore {
   private _toolSettings: ToolSettings = {
     penColor: '#4f46e5',
     penWidth: 3,
-    highlighterColor: 'rgba(250, 204, 21, 0.3)',
+    highlighterColor: '#fef08a',
     highlighterWidth: 20,
     highlighterBlendMode: 'source-over',
     highlighterStraightLine: false,
@@ -577,7 +577,7 @@ class StateStore {
     this._toolSettings = {
       penColor: '#4f46e5',
       penWidth: 3,
-      highlighterColor: 'rgba(250, 204, 21, 0.3)',
+      highlighterColor: '#fef08a',
       highlighterWidth: 20,
       highlighterBlendMode: 'source-over',
       eraserMode: 'stroke',
@@ -728,8 +728,19 @@ class StateStore {
   /**
    * Ctrl-style toggling for thumbnail clicks. Anchoring is left to the caller:
    * shift-range needs the previous anchor, which only the click handler knows.
+   * When starting a multi-selection with Ctrl+Click while `_selectedPageIndices`
+   * is empty, the currently active (visually highlighted) page is included first.
    */
   public togglePageIndex(index: number) {
+    if (this._selectedPageIndices.size === 0 && this._activeDocument) {
+      if (
+        this._activePageIndex >= 0 &&
+        this._activePageIndex < this._activeDocument.pageCount &&
+        this._activePageIndex !== index
+      ) {
+        this._selectedPageIndices.add(this._activePageIndex);
+      }
+    }
     if (this._selectedPageIndices.has(index)) this._selectedPageIndices.delete(index);
     else this._selectedPageIndices.add(index);
     this.notify();
