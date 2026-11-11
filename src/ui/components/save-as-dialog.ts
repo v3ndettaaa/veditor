@@ -5,7 +5,7 @@
  */
 
 import { getIconSvg } from '../../utils/icons';
-import { t } from '../i18n';
+import { t, tr } from '../i18n';
 
 export interface SaveAsOptions {
   filename: string;
@@ -32,6 +32,7 @@ export class SaveAsDialogComponent {
   private _container: HTMLElement;
   private _opts: SaveAsDialogOpts;
   private _busy = false;
+  private _keyHandler?: (e: KeyboardEvent) => void;
 
   constructor(container: HTMLElement, opts: SaveAsDialogOpts) {
     this._container = container;
@@ -51,7 +52,7 @@ export class SaveAsDialogComponent {
         <div class="modal-dialog form-dialog" role="dialog" aria-modal="true" aria-label="${t('saveAs.title')}">
           <div class="panel-header">
             <span>${getIconSvg('save', 15)} ${t('saveAs.title')}</span>
-            <button id="saveas-close" class="icon-btn" title="Close" aria-label="Close">${getIconSvg('close', 14)}</button>
+            <button id="saveas-close" class="icon-btn" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">${getIconSvg('close', 14)}</button>
           </div>
           <div class="form-dialog-body">
             <label class="form-field">
@@ -63,30 +64,30 @@ export class SaveAsDialogComponent {
             <label class="form-field">
               <span class="form-label">${t('saveAs.quality')}</span>
               <select id="saveas-dpi" class="field">
-                <option value="72">72 DPI — smallest file</option>
-                <option value="150" selected>150 DPI — balanced (recommended)</option>
-                <option value="300">300 DPI — print quality</option>
-                <option value="600">600 DPI — largest file</option>
+                <option value="72">${tr('72 DPI — smallest file', '۷۲ DPI — کمترین حجم فایل')}</option>
+                <option value="150" selected>${tr('150 DPI — balanced (recommended)', '۱۵۰ DPI — متعادل (پیشنهادی)')}</option>
+                <option value="300">${tr('300 DPI — print quality', '۳۰۰ DPI — کیفیت چاپ')}</option>
+                <option value="600">${tr('600 DPI — largest file', '۶۰۰ DPI — بالاترین کیفیت و حجم')}</option>
               </select>
             </label>
 
             <label class="form-field">
-              <span class="form-label">Theme</span>
+              <span class="form-label">${tr('Theme', 'تم رنگی صفحات')}</span>
               <select id="saveas-theme" class="field">
-                <option value="light" ${this._opts.displayedDark ? '' : 'selected'}>Light — original page colors</option>
-                <option value="dark" ${this._opts.displayedDark ? 'selected' : ''}>Dark — as displayed in dark mode</option>
+                <option value="light" ${this._opts.displayedDark ? '' : 'selected'}>${tr('Light — original page colors', 'روشن — رنگ‌های اصلی صفحات')}</option>
+                <option value="dark" ${this._opts.displayedDark ? 'selected' : ''}>${tr('Dark — as displayed in dark mode', 'تاریک — همانند نمایش در حالت تاریک')}</option>
               </select>
             </label>
 
             <label class="form-field form-check">
-              <input id="saveas-flatten" type="checkbox" checked />
+              <input id="saveas-flatten" type="checkbox" />
               <span>${t('saveAs.flatten')}</span>
             </label>
             <div class="form-hint">${t('saveAs.flattenHint')}</div>
 
             <div class="form-field">
               <span class="form-label">${t('saveAs.pages')}</span>
-              <div style="display:flex; gap:8px; align-items:center;">
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <label style="display:flex; gap:4px; align-items:center;">
                   <input type="radio" name="saveas-range" value="all" checked /> ${t('saveAs.allPages')} (${this._opts.pageCount})
                 </label>
@@ -95,7 +96,7 @@ export class SaveAsDialogComponent {
                 </label>
                 ${this._opts.selectedPageIndices?.length ? `
                 <label style="display:flex; gap:4px; align-items:center;">
-                  <input type="radio" name="saveas-range" value="selected" /> Selected (${this._opts.selectedPageIndices.length})
+                  <input type="radio" name="saveas-range" value="selected" /> ${tr('Selected', 'انتخاب‌شده')} (${this._opts.selectedPageIndices.length})
                 </label>` : ''}
                 <input id="saveas-start" class="field" type="number" min="1" max="${this._opts.pageCount}" value="1" style="width:64px;" disabled />
                 <span>–</span>
@@ -115,6 +116,10 @@ export class SaveAsDialogComponent {
   }
 
   public destroy(): void {
+    if (this._keyHandler) {
+      window.removeEventListener('keydown', this._keyHandler, true);
+      this._keyHandler = undefined;
+    }
     this._container.innerHTML = '';
   }
 
@@ -130,6 +135,19 @@ export class SaveAsDialogComponent {
     q('#saveas-overlay')?.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).id === 'saveas-overlay') this.close();
     });
+
+    this._keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!this._busy) this.close();
+      } else if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName === 'INPUT' && (e.target as HTMLInputElement).type !== 'checkbox') {
+        e.preventDefault();
+        e.stopPropagation();
+        q<HTMLButtonElement>('#saveas-submit')?.click();
+      }
+    };
+    window.addEventListener('keydown', this._keyHandler, true);
 
     const radios = this._container.querySelectorAll<HTMLInputElement>('input[name="saveas-range"]');
     const start = q<HTMLInputElement>('#saveas-start');
@@ -149,7 +167,7 @@ export class SaveAsDialogComponent {
       }
       if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
       const dpi = Number(q<HTMLSelectElement>('#saveas-dpi')?.value || 150) as 72 | 150 | 300 | 600;
-      const flatten = q<HTMLInputElement>('#saveas-flatten')?.checked !== false;
+      const flatten = q<HTMLInputElement>('#saveas-flatten')?.checked === true;
       const darkMode = q<HTMLSelectElement>('#saveas-theme')?.value === 'dark';
       const custom = this._container.querySelector<HTMLInputElement>('input[name="saveas-range"]:checked')?.value === 'custom';
       let pageRange: { start: number; end: number } | undefined;

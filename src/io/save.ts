@@ -15,6 +15,7 @@ import { openSaveAsDialog, type SaveAsOptions } from '../ui/components/save-as-d
 import { isDesktop } from '../core/platform';
 import { isPdfDisplayedDark } from './save-policy';
 import { nativeSaveAsDialog, nativeWriteFile } from './native-fs';
+import { tr } from '../ui/i18n';
 
 const fileHandles = new Map<string, any>();
 
@@ -53,6 +54,15 @@ function hasCompositeAnnotations(): boolean {
   return false;
 }
 
+function hasUserPageRotations(): boolean {
+  for (const rot of Object.values(store.pageRotations)) {
+    if (((rot || 0) % 360 + 360) % 360 !== 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
   return pdfExporter.exportPDF({
     flatten: opts?.flatten ?? false,
@@ -60,14 +70,14 @@ async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8A
     pageRange: opts?.pageRange,
     pageIndices: opts?.pageIndices,
     darkMode: opts?.darkMode === true,
-    embedCompositeAnnotations: opts?.embedCompositeAnnotations ?? true
+    embedCompositeAnnotations: opts?.embedCompositeAnnotations ?? true,
+    bakePageRotations: opts?.bakePageRotations ?? true
   });
 }
 
 async function refreshEngineFromSavedBytes(docId: string, bytes: Uint8Array): Promise<void> {
-  // Reload so cached proxies/bitmaps match the saved file (notebook pattern).
-  pdfEngine.unloadDoc(docId);
-  const meta = await pdfEngine.loadFromBytes(bytes.slice(0), docId);
+  // Atomic hot-swap so cached proxies/bitmaps match the saved file without blanking the viewport.
+  const meta = await pdfEngine.loadFromBytes(bytes.slice(0), docId, true);
   const doc = store.openDocuments.get(docId) ?? store.activeDocument;
   if (doc && doc.id === docId) {
     doc.pageCount = meta.pageCount;
@@ -102,7 +112,7 @@ async function writeHandle(handle: any, bytes: Uint8Array): Promise<boolean> {
 export async function saveActiveDocument(): Promise<boolean> {
   const doc = store.activeDocument;
   if (!doc?.fileData) {
-    showToast('No PDF document loaded to save', 'error');
+    showToast(tr('No PDF document loaded to save', 'هیچ سند PDF برای ذخیره باز نیست'), 'error');
     return false;
   }
 
@@ -116,7 +126,7 @@ export async function saveActiveDocument(): Promise<boolean> {
         const filename = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
         desktopPath = (await nativeSaveAsDialog(filename)) ?? undefined;
         if (!desktopPath) {
-          showToast('Save cancelled', 'info');
+          showToast(tr('Save cancelled', 'ذخیره‌سازی لغو شد'), 'info');
           return false;
         }
       }
@@ -135,21 +145,22 @@ export async function saveActiveDocument(): Promise<boolean> {
         }
       } catch (err: any) {
         if (err?.name === 'AbortError') {
-          showToast('Save cancelled', 'info');
+          showToast(tr('Save cancelled', 'ذخیره‌سازی لغو شد'), 'info');
           return false;
         }
       }
     }
 
-    showToast('Saving…', 'progress');
+    showToast(tr('Saving…', 'در حال ذخیره…'), 'progress');
 
-    // Keep session bytes un-flattened for composite annotations so active tab stays editable
+    // Keep session bytes un-flattened and un-rotated (since store.pageRotations stays active in memory)
     const sessionBytes = await buildSavedBytes({
       flatten: false,
-      embedCompositeAnnotations: false
+      embedCompositeAnnotations: false,
+      bakePageRotations: false
     });
-    const diskBytes = hasCompositeAnnotations()
-      ? await buildSavedBytes({ flatten: false, embedCompositeAnnotations: true })
+    const diskBytes = (hasCompositeAnnotations() || hasUserPageRotations())
+      ? await buildSavedBytes({ flatten: false, embedCompositeAnnotations: true, bakePageRotations: true })
       : sessionBytes;
 
     doc.fileData = sessionBytes;
@@ -164,10 +175,13 @@ export async function saveActiveDocument(): Promise<boolean> {
         doc.lastModifiedAt = now;
         doc.lastSavedAt = now;
         await saveDocumentSession(doc, { includeBytes: true });
-        showToast('Saved', 'success');
+        showToast(tr('Saved', 'ذخیره شد'), 'success');
       } else {
         await saveDocumentSession(doc, { includeBytes: true });
-        showToast('Could not write to the original file (saved in session only)', 'error');
+        showToast(
+          tr('Could not write to the original file (saved in session only)', 'امکان نوشتن در فایل اصلی نبود (فقط در نشست برنامه ذخیره شد)'),
+          'error'
+        );
       }
       store.notify();
       viewportManager.updateLayout(true);
@@ -181,10 +195,10 @@ export async function saveActiveDocument(): Promise<boolean> {
       if (wrote) {
         doc.lastSavedAt = now;
         await saveDocumentSession(doc, { includeBytes: true });
-        showToast('Saved directly to original file', 'success');
+        showToast(tr('Saved directly to original file', 'مستقیماً در فایل اصلی ذخیره شد'), 'success');
       } else {
         await saveDocumentSession(doc, { includeBytes: true });
-        showToast('Saved in session', 'success');
+        showToast(tr('Saved in session', 'در نشست برنامه ذخیره شد'), 'success');
       }
     } else {
       await pdfExporter.saveToFile(diskBytes, doc.name);
@@ -192,14 +206,14 @@ export async function saveActiveDocument(): Promise<boolean> {
       doc.lastModifiedAt = now;
       doc.lastSavedAt = now;
       await saveDocumentSession(doc, { includeBytes: true });
-      showToast('Saved', 'success');
+      showToast(tr('Saved', 'ذخیره شد'), 'success');
     }
     store.notify();
     viewportManager.updateLayout(true);
     return true;
   } catch (e: any) {
     console.error('Save failed:', e);
-    showToast(`Save failed: ${e.message}`, 'error');
+    showToast(tr(`Save failed: ${e.message}`, `خطا در ذخیره‌سازی: ${e.message}`), 'error');
     return false;
   }
 }
@@ -214,7 +228,7 @@ async function writeExportedBytes(
     if (!path) return { chosenName: suggestedFilename, cancelled: true };
     const wrote = await nativeWriteFile(path, bytes);
     if (!wrote) {
-      showToast('Could not write the file to disk', 'error');
+      showToast(tr('Could not write the file to disk', 'امکان نوشتن فایل روی دیسک نبود'), 'error');
       return { chosenName: suggestedFilename, cancelled: true };
     }
     return { chosenName: path.split(/[\\/]/).pop() || suggestedFilename, nativeFilePath: path, cancelled: false };
@@ -227,12 +241,12 @@ async function writeExportedBytes(
 /**
  * Save As: opens the options dialog (name, location hint, quality, pages),
  * then always prompts for file/location via the OS picker or download.
- * Cancelling anywhere touches nothing. The saved copy becomes active.
+ * Cancelling anywhere touches nothing.
  */
 export async function saveActiveDocumentAs(): Promise<boolean> {
   const doc = store.activeDocument;
   if (!doc?.fileData) {
-    showToast('No PDF document loaded to save', 'error');
+    showToast(tr('No PDF document loaded to save', 'هیچ سند PDF برای ذخیره باز نیست'), 'error');
     return false;
   }
   const suggested = doc.name.endsWith('.pdf') ? doc.name : `${doc.name}.pdf`;
@@ -252,14 +266,15 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
       onClose: () => resolve(false),
       onSubmit: async (opts: SaveAsOptions) => {
         try {
-          showToast('Preparing Save As…', 'progress');
+          showToast(tr('Preparing Save As…', 'در حال آماده‌سازی فایل…'), 'progress');
           const diskBytes = await buildSavedBytes({
             dpi: opts.dpi,
             flatten: opts.flatten,
             darkMode: opts.darkMode === true,
             pageRange: opts.pageRange,
             pageIndices: opts.pageIndices,
-            embedCompositeAnnotations: true
+            embedCompositeAnnotations: true,
+            bakePageRotations: true
           });
           const result = await writeExportedBytes(diskBytes, opts.filename);
           if (result.cancelled) {
@@ -267,49 +282,31 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
             return;
           }
           const chosenName = result.chosenName;
+          const isPartialPageExport = Boolean(opts.pageRange || opts.pageIndices?.length);
+
+          // If exporting only a subset of pages, leave the currently open full document untouched!
+          if (isPartialPageExport) {
+            showToast(tr(`Saved selected pages as ${chosenName}`, `صفحات انتخابی با نام ${chosenName} ذخیره شد`), 'success');
+            resolve(true);
+            return;
+          }
 
           if (opts.flatten) {
-            // Flattened export baked all annotations into the PDF page streams;
-            // clear in-memory annotations so they are not drawn twice.
+            // Flattened export baked all annotations and rotations into the PDF page streams;
+            // clear in-memory annotations and user rotations so they are not applied twice.
             doc.annotations = {};
-            if (opts.pageRange || opts.pageIndices?.length) {
-              const sourcePages = opts.pageIndices?.length
-                ? opts.pageIndices
-                : Array.from(
-                  { length: opts.pageRange!.end - opts.pageRange!.start + 1 },
-                  (_, offset) => opts.pageRange!.start - 1 + offset
-                );
-              doc.activePageIndex = Math.max(0, sourcePages.indexOf(doc.activePageIndex));
+            for (const k of Object.keys(store.pageRotations)) {
+              delete store.pageRotations[Number(k)];
             }
             doc.fileData = diskBytes;
           } else {
-            if (opts.pageRange || opts.pageIndices?.length) {
-              const sourcePages = opts.pageIndices?.length
-                ? opts.pageIndices
-                : Array.from(
-                  { length: opts.pageRange!.end - opts.pageRange!.start + 1 },
-                  (_, offset) => opts.pageRange!.start - 1 + offset
-                );
-              const selectedAnnotations: typeof doc.annotations = {};
-              sourcePages.forEach((sourceIndex, targetIndex) => {
-                const annotations = doc.annotations[sourceIndex];
-                if (!annotations?.length) return;
-                selectedAnnotations[targetIndex] = annotations.map(annotation => ({
-                  ...annotation,
-                  pageIndex: targetIndex
-                }));
-              });
-              doc.annotations = selectedAnnotations;
-              doc.activePageIndex = Math.max(0, sourcePages.indexOf(doc.activePageIndex));
-            }
-            const sessionBytes = hasCompositeAnnotations()
+            const sessionBytes = (hasCompositeAnnotations() || hasUserPageRotations())
               ? await buildSavedBytes({
                   dpi: opts.dpi,
                   flatten: false,
                   darkMode: opts.darkMode === true,
-                  pageRange: opts.pageRange,
-                  pageIndices: opts.pageIndices,
-                  embedCompositeAnnotations: false
+                  embedCompositeAnnotations: false,
+                  bakePageRotations: false
                 })
               : diskBytes;
             doc.fileData = sessionBytes;
@@ -328,11 +325,11 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
           await refreshEngineFromSavedBytes(doc.id, doc.fileData);
           store.notify();
           viewportManager.updateLayout(true);
-          showToast(`Saved as ${chosenName}`, 'success');
+          showToast(tr(`Saved as ${chosenName}`, `با نام ${chosenName} ذخیره شد`), 'success');
           resolve(true);
         } catch (e: any) {
           console.error('Save As failed:', e);
-          showToast(`Save As failed: ${e.message}`, 'error');
+          showToast(tr(`Save As failed: ${e.message}`, `خطا در ذخیره با نام جدید: ${e.message}`), 'error');
           resolve(false);
         }
       }

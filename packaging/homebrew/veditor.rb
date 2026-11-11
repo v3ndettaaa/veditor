@@ -1,5 +1,5 @@
 cask "veditor" do
-  version "3.6.0"
+  version "4.0.0"
   sha256 :no_check
 
   url "https://github.com/v3ndettaaa/veditor/releases/download/v#{version}/veditor_#{version}_aarch64.dmg"

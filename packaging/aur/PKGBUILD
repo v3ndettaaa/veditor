@@ -1,6 +1,6 @@
 # Maintainer: v3ndettaaa <https://github.com/v3ndettaaa/veditor>
 pkgname=veditor-bin
-pkgver=3.6.0
+pkgver=4.0.0
 pkgrel=1
 pkgdesc="Native-grade desktop PDF editor & annotation workspace built with Tauri v2 and Rust"
 arch=('x86_64')

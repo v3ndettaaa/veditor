@@ -6,6 +6,7 @@
 
 import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
+import { pageActions } from '../../core/page-actions';
 import { getIconSvg } from '../../utils/icons';
 import { t, tr } from '../i18n';
 
@@ -381,20 +382,21 @@ export class ViewControlsComponent {
     });
 
     this._container.querySelector('#view-rotate-cw')?.addEventListener('click', (e) => {
-      // Single commit: rotate notifies once → rotation path lays out once.
-      if ((e as MouseEvent).shiftKey) {
-        store.rotateAllPages(90);
-      } else {
-        store.rotatePage(store.activePageIndex, 90);
-      }
+      const doc = store.activeDocument;
+      if (!doc) return;
+      const indices = (e as MouseEvent).shiftKey
+        ? Array.from({ length: doc.pageCount }, (_, i) => i)
+        : [store.activePageIndex];
+      void pageActions.rotatePages(indices, 90).then(() => store.notify());
     });
 
     this._container.querySelector('#view-rotate-ccw')?.addEventListener('click', (e) => {
-      if ((e as MouseEvent).shiftKey) {
-        store.rotateAllPages(-90);
-      } else {
-        store.rotatePage(store.activePageIndex, -90);
-      }
+      const doc = store.activeDocument;
+      if (!doc) return;
+      const indices = (e as MouseEvent).shiftKey
+        ? Array.from({ length: doc.pageCount }, (_, i) => i)
+        : [store.activePageIndex];
+      void pageActions.rotatePages(indices, -90).then(() => store.notify());
     });
 
     this._container.querySelector('#view-invert-doc')?.addEventListener('click', () => {

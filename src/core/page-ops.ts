@@ -20,7 +20,8 @@ import {
   Layer,
   PageCropMargins,
   PageInfo,
-  PDFBookmarkItem
+  PDFBookmarkItem,
+  UserBookmarkItem
 } from './types';
 
 /** old page index -> new page index. Absent = the page was removed. */
@@ -35,6 +36,7 @@ export interface PageSnapshot {
   layers: Record<number, Layer[]>;
   rotations: Record<number, number>;
   bookmarks: PDFBookmarkItem[];
+  userBookmarks?: UserBookmarkItem[];
   activePageIndex: number;
 }
 
@@ -334,7 +336,22 @@ export async function resetPdfPageCrops(
         const nativeRot = ((Math.round(page.getRotation().angle) % 360) + 360) % 360;
         const userRot = ((Math.round(userRotations[idx] || 0) % 360) + 360) % 360;
         const effRot = (nativeRot + userRot) % 360;
-        if (effRot === 0) {
+        if (effRot === 90) {
+          visualOffsets[idx] = {
+            dx: oy - curMb.y,
+            dy: ox - curMb.x
+          };
+        } else if (effRot === 180) {
+          visualOffsets[idx] = {
+            dx: (curMb.x + curMb.width) - (ox + ow),
+            dy: oy - curMb.y
+          };
+        } else if (effRot === 270) {
+          visualOffsets[idx] = {
+            dx: (curMb.y + curMb.height) - (oy + oh),
+            dy: (curMb.x + curMb.width) - (ox + ow)
+          };
+        } else {
           visualOffsets[idx] = {
             dx: ox - curMb.x,
             dy: (curMb.y + curMb.height) - (oy + oh)
@@ -434,6 +451,20 @@ export function remapBookmarks(
   return out;
 }
 
+export function remapUserBookmarks(
+  bookmarks: UserBookmarkItem[],
+  map: PageIndexMap
+): UserBookmarkItem[] {
+  if (!bookmarks?.length) return [];
+  const out: UserBookmarkItem[] = [];
+  for (const bm of bookmarks) {
+    const target = map.get(bm.pageIndex);
+    if (target === undefined) continue;
+    out.push({ ...bm, pageIndex: target });
+  }
+  return out;
+}
+
 /**
  * Builds the old -> new index map for one operation. `order` is the surviving
  * page indices in their final order; anything not listed is dropped.
@@ -524,6 +555,7 @@ export function capturePageSnapshot(
     layers: clone(doc.layers ?? {}),
     rotations: { ...rotations },
     bookmarks: clone(doc.bookmarks ?? []),
+    userBookmarks: clone(doc.userBookmarks ?? []),
     activePageIndex: doc.activePageIndex
   };
 }
@@ -541,6 +573,9 @@ export function applyPageSnapshot(
   doc.annotations = clone(snapshot.annotations);
   doc.layers = clone(snapshot.layers);
   doc.bookmarks = clone(snapshot.bookmarks);
+  if (snapshot.userBookmarks !== undefined) {
+    doc.userBookmarks = clone(snapshot.userBookmarks);
+  }
   doc.activePageIndex = Math.max(0, Math.min(snapshot.pageCount - 1, snapshot.activePageIndex));
   doc.lastModifiedAt = Date.now();
 
@@ -560,6 +595,9 @@ export function applyRecordMap(
   doc.annotations = remapPageRecord(doc.annotations ?? {}, map);
   doc.layers = remapPageRecord(doc.layers ?? {}, map);
   doc.bookmarks = remapBookmarks(doc.bookmarks ?? [], map);
+  if (doc.userBookmarks?.length) {
+    doc.userBookmarks = remapUserBookmarks(doc.userBookmarks, map);
+  }
   if (doc.activePageIndex >= doc.pageCount) doc.activePageIndex = doc.pageCount - 1;
   if (doc.activePageIndex < 0) doc.activePageIndex = 0;
   doc.lastModifiedAt = Date.now();

@@ -3,7 +3,7 @@
  * Supports high-resolution annotation flattening and native vector/composite embedding.
  */
 
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { store } from '../core/store';
 import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
@@ -35,6 +35,13 @@ export interface PDFExportOptions {
    * Defaults to true.
    */
   embedCompositeAnnotations?: boolean;
+  /**
+   * When true (default), bakes user page rotations from `store.pageRotations`
+   * into the exported PDF's `/Rotate` dictionary so external PDF viewers and
+   * saved files preserve page rotations. Set to false for in-memory session
+   * bytes where `store.pageRotations` remains active on top of native rotation.
+   */
+  bakePageRotations?: boolean;
 }
 
 export class PDFExporter {
@@ -50,6 +57,18 @@ export class PDFExporter {
     // Load original PDF using pdf-lib to preserve structure and metadata
     const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
     const fallbackBakedIds = new Set<string>();
+
+    // Bake user-applied page rotations into the PDF /Rotate dictionary when exporting to disk
+    if (options.bakePageRotations !== false) {
+      const pdfPages = pdfDoc.getPages();
+      for (let idx = 0; idx < pdfPages.length; idx++) {
+        const userRot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
+        if (userRot !== 0) {
+          const nativeRot = ((pdfPages[idx].getRotation().angle % 360) + 360) % 360;
+          pdfPages[idx].setRotation(degrees((nativeRot + userRot) % 360));
+        }
+      }
+    }
 
     // Bidirectionally sync Veditor pen/highlighter vector ink into native PDF /Ink dicts
     if (!options.flatten) {
@@ -108,10 +127,16 @@ export class PDFExporter {
 
       if (!options.darkMode && pageAnnotations.length === 0) continue;
 
+      const crop = pdfPage.getCropBox();
+      const media = pdfPage.getMediaBox();
+      const boxX = Math.max(crop.x, media.x);
+      const boxY = Math.max(crop.y, media.y);
+      const width = Math.max(1, Math.min(crop.x + crop.width, media.x + media.width) - boxX);
+      const height = Math.max(1, Math.min(crop.y + crop.height, media.y + media.height) - boxY);
+
       if (options.darkMode) {
         // Dark theme baking: renders the page through the same inversion the
         // viewer applies, then overlays annotations in their original colors.
-        const { width, height } = pdfPage.getSize();
         const dpiScale = options.dpi / 72;
         const totalRotation = store.pageRotations[i] || 0;
 
@@ -131,12 +156,11 @@ export class PDFExporter {
 
             const jpgBytes = await this.canvasToBytes(darkCanvas, 'image/jpeg', 0.92);
             const embeddedImg = await pdfDoc.embedJpg(jpgBytes);
-            pdfPage.drawImage(embeddedImg, { x: 0, y: 0, width, height, opacity: 1.0 });
+            pdfPage.drawImage(embeddedImg, { x: boxX, y: boxY, width, height, opacity: 1.0 });
           }
         }
       } else if (options.flatten) {
         // High-DPI Flattening onto the page content stream
-        const { width, height } = pdfPage.getSize();
         const dpiScale = options.dpi / 72; // e.g. 150 / 72 = 2.08x
 
         // Create offscreen canvas at high resolution
@@ -153,8 +177,8 @@ export class PDFExporter {
           const pngBytes = await this.canvasToBytes(offCanvas, 'image/png');
           const embeddedPng = await pdfDoc.embedPng(pngBytes);
           pdfPage.drawImage(embeddedPng, {
-            x: 0,
-            y: 0,
+            x: boxX,
+            y: boxY,
             width,
             height,
             opacity: 1.0
@@ -172,7 +196,6 @@ export class PDFExporter {
             fallbackBakedIds.has(a.id)
         );
         if (compositeAnns.length > 0 && typeof document !== 'undefined') {
-          const { width, height } = pdfPage.getSize();
           const dpiScale = (options.dpi || 150) / 72;
           const offCanvas = document.createElement('canvas');
           offCanvas.width = Math.max(1, Math.floor(width * dpiScale));
@@ -184,8 +207,8 @@ export class PDFExporter {
             const pngBytes = await this.canvasToBytes(offCanvas, 'image/png');
             const embeddedPng = await pdfDoc.embedPng(pngBytes);
             pdfPage.drawImage(embeddedPng, {
-              x: 0,
-              y: 0,
+              x: boxX,
+              y: boxY,
               width,
               height,
               opacity: 1.0

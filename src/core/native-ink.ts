@@ -156,8 +156,12 @@ export function syncNativeInkAnnotations(
 
   for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
     const page = pages[pageIdx];
-    const pageHeight = page.getHeight();
-    const pageWidth = page.getWidth();
+    const crop = page.getCropBox();
+    const media = page.getMediaBox();
+    const boxX = Math.max(crop.x, media.x);
+    const boxY = Math.max(crop.y, media.y);
+    const pageWidth = Math.max(1, Math.min(crop.x + crop.width, media.x + media.width) - boxX);
+    const pageHeight = Math.max(1, Math.min(crop.y + crop.height, media.y + media.height) - boxY);
     const rotation = page.getRotation()?.angle || 0;
 
     const veditorInkAnns = (annotationsByPage[pageIdx] || []).filter(
@@ -196,12 +200,14 @@ export function syncNativeInkAnnotations(
       const filteredPoints = ann.points;
       if (filteredPoints.length < 2) continue;
 
-      // Coordinate conversion: screen (0 top) -> PDF (0 bottom) with rotation handling
+      // Coordinate conversion: screen (0 top) -> PDF (boxX/boxY bottom-left) with rotation handling
       const inkListCoords: number[] = [];
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
       for (const pt of filteredPoints) {
-        const [pdfX, pdfY] = screenToPdfPoint(pt.x, pt.y, pageWidth, pageHeight, rotation);
+        const [relX, relY] = screenToPdfPoint(pt.x, pt.y, pageWidth, pageHeight, rotation);
+        const pdfX = boxX + relX;
+        const pdfY = boxY + relY;
         inkListCoords.push(pdfX, pdfY);
         if (pdfX < minX) minX = pdfX;
         if (pdfY < minY) minY = pdfY;
@@ -210,8 +216,8 @@ export function syncNativeInkAnnotations(
       }
 
       const pad = Math.max(2, strokeWidth);
-      const rectLlx = Math.max(0, minX - pad);
-      const rectLly = Math.max(0, minY - pad);
+      const rectLlx = Math.max(boxX, minX - pad);
+      const rectLly = Math.max(boxY, minY - pad);
       const rectUrx = maxX + pad;
       const rectUry = maxY + pad;
 

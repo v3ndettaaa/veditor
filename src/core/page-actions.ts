@@ -279,6 +279,7 @@ class PageActions {
     const rotations = store.pageRotations;
     const before = capturePageSnapshot(doc, rotations, { omitBytes: true });
     rotatePageRecords(rotations, list, deltaDeg);
+    doc.lastModifiedAt = Date.now();
     const after = capturePageSnapshot(doc, rotations, { omitBytes: true });
 
     history.pushCommitted(new PageOpsCommand(

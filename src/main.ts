@@ -2517,7 +2517,7 @@ class VeditorApp {
             stampTool.primeImage(dataUrl, probe);
             this.insertPastedImage(dataUrl, probe.naturalWidth, probe.naturalHeight);
           };
-          probe.onerror = () => showToast('Could not read pasted image', 'error');
+          probe.onerror = () => showToast(tr('Could not read pasted image', 'امکان خواندن تصویر الصاق‌شده نبود'), 'error');
           probe.src = dataUrl;
         };
         reader.readAsDataURL(file);
@@ -2532,8 +2532,9 @@ class VeditorApp {
     if (!doc) return;
     const pageIndex = store.activePageIndex;
     const page = doc.pages?.[pageIndex];
-    const pageWidth = page?.width ?? 612;
-    const pageHeight = page?.height ?? 792;
+    const rotSize = page ? rotatedPageSize(page, store.pageRotations[pageIndex] || 0) : { width: 612, height: 792 };
+    const pageWidth = rotSize.width;
+    const pageHeight = rotSize.height;
 
     // CSS pixels → PDF points (96dpi → 72dpi), then cap to 60% of the page so
     // large screenshots land as a manageable, still-resizable size.
@@ -2555,7 +2556,7 @@ class VeditorApp {
     store.setActiveTool('select');
     store.selectAnnotation(annotation.id);
     this.repaintAllRenderedAnnotations();
-    showToast('Image pasted onto page', 'success');
+    showToast(tr('Image pasted onto page', 'تصویر روی صفحه قرار گرفت'), 'success');
   }
 
   private setupGlobalShortcuts() {
@@ -2631,7 +2632,7 @@ class VeditorApp {
         if (key === 'c' && store.textSelection?.text) {
           e.preventDefault();
           void navigator.clipboard?.writeText(store.textSelection.text).then(() => {
-            showToast('Copied text to clipboard', 'info');
+            showToast(tr('Copied text to clipboard', 'متن در کلیپ‌بورد کپی شد'), 'info');
           }).catch(() => {});
           return;
         } else if (key === 'z') {
@@ -2669,7 +2670,10 @@ class VeditorApp {
           const activeDoc = store.activeDocument;
           if (activeDoc) {
             if (isDocumentDirty(activeDoc.id)) {
-              nativeConfirm('This document has unsaved changes. Close without saving?').then(ok => {
+              nativeConfirm(
+                tr('This document has unsaved changes. Close without saving?', 'این سند تغییرات ذخیره‌نشده دارد. بدون ذخیره‌سازی بسته شود؟'),
+                tr('Unsaved changes', 'تغییرات ذخیره‌نشده')
+              ).then(ok => {
                 if (ok) {
                   forgetFileHandle(activeDoc.id);
                   store.closeDocumentTab(activeDoc.id);
@@ -2774,9 +2778,15 @@ class VeditorApp {
     if (dirty.length === 0) return true;
     const names = dirty.map(d => d.name).join(', ');
     const message = dirty.length > 1
-      ? `You have unsaved changes in ${dirty.length} documents (${names}). Quit without saving?`
-      : `"${names}" has unsaved changes. Quit without saving?`;
-    return nativeConfirm(message, 'Unsaved changes');
+      ? tr(
+          `You have unsaved changes in ${dirty.length} documents (${names}). Quit without saving?`,
+          `تغییرات ذخیره‌نشده در ${dirty.length} سند (${names}) وجود دارد. بدون ذخیره خارج می‌شوید؟`
+        )
+      : tr(
+          `"${names}" has unsaved changes. Quit without saving?`,
+          `سند «${names}» تغییرات ذخیره‌نشده دارد. بدون ذخیره خارج می‌شوید؟`
+        );
+    return nativeConfirm(message, tr('Unsaved changes', 'تغییرات ذخیره‌نشده'));
   }
 
   private resolveWebPdfUrl(rawUrl: string): string {

@@ -5,7 +5,7 @@
  */
 
 import { store } from '../../core/store';
-import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
+import { history, BulkModifyCommand, DeleteAnnotationsCommand } from '../../core/history';
 import { selectionManager } from '../../annotations/selection';
 import { normalizeHighlighterColor } from '../../annotations/spline';
 import { getIconSvg } from '../../utils/icons';
@@ -343,14 +343,29 @@ export class PropertiesPanelComponent {
       }
     };
 
+    const executeBatchModify = (mutator: (ann: Annotation) => Annotation | null) => {
+      const byPage = new Map<number, Array<{ prev: Annotation; next: Annotation }>>();
+      for (const ann of selectedAnnotations) {
+        const next = mutator(ann);
+        if (!next) continue;
+        const pagePairs = byPage.get(ann.pageIndex) ?? [];
+        pagePairs.push({ prev: { ...ann }, next });
+        byPage.set(ann.pageIndex, pagePairs);
+      }
+      for (const [pageIdx, pairs] of byPage.entries()) {
+        if (pairs.length > 0) {
+          history.execute(new BulkModifyCommand(pageIdx, pairs));
+        }
+      }
+    };
+
     const applyStrokeColor = (val: string) => {
       updateLivePreview(val);
-      selectedAnnotations.forEach(ann => {
-        const prev = { ...ann };
+      executeBatchModify(ann => {
         const next = { ...ann };
         if ('color' in next) (next as any).color = val;
         if ('strokeColor' in next) (next as any).strokeColor = val;
-        history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+        return next;
       });
       store.setActivePageIndex(store.activePageIndex);
     };
@@ -400,12 +415,11 @@ export class PropertiesPanelComponent {
       const noFillBtn = this._container.querySelector('#prop-no-fill-btn');
       noFillBtn?.classList.toggle('active', val === 'transparent');
 
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if ('fillColor' in ann) {
-          const prev = { ...ann };
-          const next = { ...ann, fillColor: val };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+          return { ...ann, fillColor: val };
         }
+        return null;
       });
       store.setActivePageIndex(store.activePageIndex);
     };
@@ -460,15 +474,15 @@ export class PropertiesPanelComponent {
       if (fillOpSlider && document.activeElement !== fillOpSlider) fillOpSlider.value = String(pct);
       if (fillOpSlider) fillOpSlider.style.setProperty('--slider-pct', `${sliderPercent(pct, 0, 100)}%`);
       if (fillOpNum && document.activeElement !== fillOpNum) fillOpNum.value = String(pct);
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if ('fillColor' in ann || ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' || ann.type === 'freeform-shape') {
           const prev = { ...ann } as any;
           const nextFillColor = (!prev.fillColor || prev.fillColor === 'transparent') && pct > 0
             ? (store.toolSettings.shapeFillColor !== 'transparent' ? store.toolSettings.shapeFillColor : (prev.strokeColor || '#6366f1'))
             : prev.fillColor;
-          const next = { ...prev, fillColor: pct === 0 ? 'transparent' : nextFillColor, fillOpacity: fillOp };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+          return { ...prev, fillColor: pct === 0 ? 'transparent' : nextFillColor, fillOpacity: fillOp };
         }
+        return null;
       });
       store.updateToolSettings({ shapeFillOpacity: fillOp });
       store.setActivePageIndex(store.activePageIndex);
@@ -488,11 +502,9 @@ export class PropertiesPanelComponent {
 
     const applyStrokeWidth = (val: number) => {
       updateLivePreview(undefined, val);
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if ('strokeWidth' in ann) {
-          const prev = { ...ann };
-          const next = { ...ann, strokeWidth: val };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+          return { ...ann, strokeWidth: val };
         } else if ('fontSize' in ann) {
           const a = ann as any;
           const nf = Math.max(8, Math.min(120, val));
@@ -504,8 +516,7 @@ export class PropertiesPanelComponent {
             a.fontWeight,
             a.fontStyle
           );
-          const prev = { ...ann };
-          const next = {
+          return {
             ...ann,
             fontSize: nf,
             box: {
@@ -515,21 +526,20 @@ export class PropertiesPanelComponent {
               height: measured.height
             }
           };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
         }
+        return null;
       });
       store.setActivePageIndex(store.activePageIndex);
     };
 
     const applyOpacity = (val: number) => {
       updateLivePreview(undefined, undefined, val);
-      selectedAnnotations.forEach(ann => {
-        const prev = { ...ann };
+      executeBatchModify(ann => {
         const next = { ...ann, opacity: val };
         if (ann.type === 'highlighter') {
           (next as any).color = normalizeHighlighterColor((ann as any).color, val);
         }
-        history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+        return next;
       });
       store.setActivePageIndex(store.activePageIndex);
     };
@@ -573,12 +583,11 @@ export class PropertiesPanelComponent {
       if (cornerRadSlider && document.activeElement !== cornerRadSlider) cornerRadSlider.value = String(r);
       if (cornerRadSlider) cornerRadSlider.style.setProperty('--slider-pct', `${sliderPercent(r, 0, 48)}%`);
       if (cornerRadNum && document.activeElement !== cornerRadNum) cornerRadNum.value = String(r);
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if (ann.type === 'rectangle' || ann.type === 'polygon' || ann.type === 'freeform-shape') {
-          const prev = { ...ann };
-          const next = { ...ann, cornerRadius: r };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+          return { ...ann, cornerRadius: r };
         }
+        return null;
       });
       store.updateToolSettings({ shapeCornerRadius: r });
       store.setActivePageIndex(store.activePageIndex);
@@ -634,23 +643,31 @@ export class PropertiesPanelComponent {
       const nextOn = !currentlyOn;
       outlineSwitch.setAttribute('aria-pressed', String(nextOn));
       outlineSwitch.querySelector('.gn-switch')?.classList.toggle('is-on', nextOn);
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if (ann.type === 'rectangle' || ann.type === 'ellipse' || ann.type === 'polygon' ||
             ann.type === 'freeform-shape') {
-          const prev = { ...ann };
-          const next = { ...ann, outline: nextOn };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, next));
+          return { ...ann, outline: nextOn };
         }
+        return null;
       });
       store.setActivePageIndex(store.activePageIndex);
     });
 
-    // Delete button
+    // Delete button (grouped by pageIndex so multi-page selections delete cleanly)
     this._container.querySelector('#prop-delete-btn')?.addEventListener('click', () => {
-      const pageIndex = firstAnn.pageIndex;
-      history.execute(new DeleteAnnotationsCommand(pageIndex, selectedAnnotations));
+      const byPage = new Map<number, Annotation[]>();
+      for (const ann of selectedAnnotations) {
+        const list = byPage.get(ann.pageIndex) ?? [];
+        list.push(ann);
+        byPage.set(ann.pageIndex, list);
+      }
+      for (const [pageIdx, list] of byPage.entries()) {
+        if (list.length > 0) {
+          history.execute(new DeleteAnnotationsCommand(pageIdx, list));
+        }
+      }
       store.clearSelection();
-      store.setActivePageIndex(pageIndex);
+      store.setActivePageIndex(firstAnn.pageIndex);
     });
 
     // Align buttons
@@ -658,10 +675,8 @@ export class PropertiesPanelComponent {
       btn.addEventListener('click', () => {
         const alignType = btn.getAttribute('data-align') as any;
         const aligned = selectionManager.alignAnnotations(selectedAnnotations, alignType);
-        aligned.forEach(ann => {
-          const prev = selectedAnnotations.find(a => a.id === ann.id)!;
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, prev, ann));
-        });
+        const alignedById = new Map(aligned.map(a => [a.id, a]));
+        executeBatchModify(ann => alignedById.get(ann.id) ?? null);
         store.setActivePageIndex(store.activePageIndex);
       });
     });
@@ -670,11 +685,11 @@ export class PropertiesPanelComponent {
     const noteTextColInput = this._container.querySelector<HTMLInputElement>('#prop-note-textcolor');
     noteTextColInput?.addEventListener('input', () => {
       const val = noteTextColInput.value;
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if (ann.type === 'sticky-note') {
-          const next = { ...ann, textColor: val, updatedAt: Date.now() };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+          return { ...ann, textColor: val, updatedAt: Date.now() };
         }
+        return null;
       });
       store.updateToolSettings({ noteTextColor: val });
       store.setActivePageIndex(store.activePageIndex);
@@ -683,11 +698,11 @@ export class PropertiesPanelComponent {
     const noteAuthorInput = this._container.querySelector<HTMLInputElement>('#prop-note-author');
     noteAuthorInput?.addEventListener('change', () => {
       const val = noteAuthorInput.value;
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if (ann.type === 'sticky-note') {
-          const next = { ...ann, author: val, updatedAt: Date.now() };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+          return { ...ann, author: val, updatedAt: Date.now() };
         }
+        return null;
       });
       store.updateToolSettings({ noteAuthor: val });
       store.setActivePageIndex(store.activePageIndex);
@@ -695,7 +710,7 @@ export class PropertiesPanelComponent {
 
     this._container.querySelector('#prop-note-collapse-btn')?.addEventListener('click', () => {
       let anyCollapsed = false;
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if (ann.type === 'sticky-note') {
           const pageMeta = store.activeDocument?.pages?.[ann.pageIndex];
           const rot = (((store.pageRotations?.[ann.pageIndex] ?? pageMeta?.rotation ?? 0) % 360) + 360) % 360;
@@ -706,8 +721,9 @@ export class PropertiesPanelComponent {
             ? stickyNoteTool.expandStickyNoteForPage(ann, pageW, pageH)
             : stickyNoteTool.collapseStickyNote(ann);
           if (next.collapsed) anyCollapsed = true;
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+          return next;
         }
+        return null;
       });
       if (anyCollapsed) {
         store.setActiveTool('select');
@@ -716,11 +732,11 @@ export class PropertiesPanelComponent {
     });
 
     this._container.querySelector('#prop-note-clear-ink-btn')?.addEventListener('click', () => {
-      selectedAnnotations.forEach(ann => {
+      executeBatchModify(ann => {
         if (ann.type === 'sticky-note' && (ann.strokes?.length ?? 0) > 0) {
-          const next = { ...ann, strokes: [], updatedAt: Date.now() };
-          history.execute(new ModifyAnnotationCommand(ann.pageIndex, ann, next));
+          return { ...ann, strokes: [], updatedAt: Date.now() };
         }
+        return null;
       });
       store.setActivePageIndex(store.activePageIndex);
     });
