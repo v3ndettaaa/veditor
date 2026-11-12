@@ -252,7 +252,9 @@ export interface UserBookmarkItem {
   id: string;
   title: string;
   pageIndex: number;
+  note?: string;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export interface PageCropMargins {

@@ -20,6 +20,6 @@ source=("${pkgname}-${pkgver}.deb::${url}/releases/download/v${pkgver}/veditor_$
 sha256sums=('SKIP')
 
 package() {
-  bsdtar -xf "${srcdir}/data.tar.gz" -C "${pkgdir}/"
+  bsdtar -xf "${srcdir}"/data.tar.* -C "${pkgdir}/"
   install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
 }

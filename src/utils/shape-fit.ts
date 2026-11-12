@@ -173,7 +173,16 @@ export function fitStroke(raw: Point[]): FittedShape | null {
   if (closure > 0.25 && meanDev / diag < 0.08) {
     // Arrowhead hook: path notably longer than the chord.
     if (len / Math.max(endDist, 1) > 1.18) {
-      return { kind: 'arrow', p0: { ...first }, p1: { ...last } };
+      let apex = last;
+      let maxD = endDist;
+      for (const p of raw) {
+        const d = distance(first, p);
+        if (d > maxD) {
+          maxD = d;
+          apex = p;
+        }
+      }
+      return { kind: 'arrow', p0: { ...first }, p1: { ...apex } };
     }
     return { kind: 'line', p0: { ...first }, p1: { ...last } };
   }

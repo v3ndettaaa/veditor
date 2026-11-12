@@ -12,12 +12,13 @@ export class DataExporter {
     if (!doc) throw new Error('No active document');
 
     const payload = {
-      version: '1.0.0',
+      version: '4.0.0',
       generator: 'veditor',
       documentName: doc.name,
       pageCount: doc.pageCount,
       exportedAt: Date.now(),
-      annotations: doc.annotations
+      annotations: doc.annotations,
+      userBookmarks: doc.userBookmarks || []
     };
 
     return JSON.stringify(payload, null, 2);
@@ -29,9 +30,16 @@ export class DataExporter {
 
     try {
       const parsed = JSON.parse(jsonString);
+      let importedAny = false;
       if (parsed.annotations && typeof parsed.annotations === 'object') {
-        // Merge or replace annotations
         doc.annotations = { ...doc.annotations, ...parsed.annotations };
+        importedAny = true;
+      }
+      if (Array.isArray(parsed.userBookmarks)) {
+        doc.userBookmarks = [...parsed.userBookmarks];
+        importedAny = true;
+      }
+      if (importedAny) {
         doc.lastModifiedAt = Date.now();
         return true;
       }
@@ -54,24 +62,43 @@ export class DataExporter {
       for (const ann of annotations as Annotation[]) {
         const b = ann.box;
         const rectStr = `${b.x.toFixed(2)},${b.y.toFixed(2)},${(b.x + b.width).toFixed(2)},${(b.y + b.height).toFixed(2)}`;
+        const opAttr = typeof ann.opacity === 'number' && ann.opacity < 1 ? ` opacity="${ann.opacity.toFixed(2)}"` : '';
 
-        if (ann.type === 'pen' && ann.points) {
+        if ((ann.type === 'pen' || ann.type === 'highlighter') && ann.points && ann.points.length > 0) {
           const gestures = ann.points.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(';');
-          xfdf += `    <ink page="${pageIndex}" rect="${rectStr}" color="${ann.color}" width="${ann.strokeWidth}">\n`;
+          xfdf += `    <ink page="${pageIndex}" rect="${rectStr}" color="${escapeXml(ann.color)}" width="${ann.strokeWidth}"${opAttr}>\n`;
           xfdf += `      <gesture>${gestures}</gesture>\n`;
           xfdf += `    </ink>\n`;
-        } else if (ann.type === 'rectangle') {
-          xfdf += `    <square page="${pageIndex}" rect="${rectStr}" color="${ann.strokeColor}" width="${ann.strokeWidth}" />\n`;
-        } else if (ann.type === 'ellipse') {
-          xfdf += `    <circle page="${pageIndex}" rect="${rectStr}" color="${ann.strokeColor}" width="${ann.strokeWidth}" />\n`;
+        } else if (ann.type === 'rectangle' || ann.type === 'ellipse') {
+          const tag = ann.type === 'rectangle' ? 'square' : 'circle';
+          const fillAttr = ann.fillColor && ann.fillColor !== 'transparent' ? ` interior-color="${escapeXml(ann.fillColor)}"` : '';
+          const effOpacity = (ann.opacity ?? 1) * (ann.fillOpacity ?? 1);
+          const shapeOpAttr = effOpacity < 1 ? ` opacity="${effOpacity.toFixed(2)}"` : opAttr;
+          xfdf += `    <${tag} page="${pageIndex}" rect="${rectStr}" color="${escapeXml(ann.strokeColor)}" width="${ann.strokeWidth}"${fillAttr}${shapeOpAttr} />\n`;
+        } else if ((ann.type === 'line' || ann.type === 'arrow') && ann.points && ann.points.length >= 2) {
+          const p0 = ann.points[0];
+          const p1 = ann.points[ann.points.length - 1];
+          const headAttr = ann.type === 'arrow' || ann.arrowEnd ? ` tail="ClosedArrow"` : '';
+          const startAttr = ann.arrowStart ? ` head="ClosedArrow"` : '';
+          xfdf += `    <line page="${pageIndex}" rect="${rectStr}" start="${p0.x.toFixed(2)},${p0.y.toFixed(2)}" end="${p1.x.toFixed(2)},${p1.y.toFixed(2)}" color="${escapeXml(ann.strokeColor)}" width="${ann.strokeWidth}"${startAttr}${headAttr}${opAttr} />\n`;
+        } else if ((ann.type === 'polygon' || ann.type === 'freeform-shape') && ann.points && ann.points.length >= 3) {
+          const vertices = ann.points.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(';');
+          const fillAttr = ann.fillColor && ann.fillColor !== 'transparent' ? ` interior-color="${escapeXml(ann.fillColor)}"` : '';
+          const effOpacity = (ann.opacity ?? 1) * (ann.fillOpacity ?? 1);
+          const shapeOpAttr = effOpacity < 1 ? ` opacity="${effOpacity.toFixed(2)}"` : opAttr;
+          xfdf += `    <polygon page="${pageIndex}" rect="${rectStr}" color="${escapeXml(ann.strokeColor)}" width="${ann.strokeWidth}"${fillAttr}${shapeOpAttr}>\n`;
+          xfdf += `      <vertices>${vertices}</vertices>\n`;
+          xfdf += `    </polygon>\n`;
         } else if (ann.type === 'text') {
-          xfdf += `    <freetext page="${pageIndex}" rect="${rectStr}" color="${ann.color}">\n`;
+          xfdf += `    <freetext page="${pageIndex}" rect="${rectStr}" color="${escapeXml(ann.color)}"${opAttr}>\n`;
           xfdf += `      <contents>${escapeXml(ann.text)}</contents>\n`;
           xfdf += `    </freetext>\n`;
         } else if (ann.type === 'sticky-note') {
-          xfdf += `    <text page="${pageIndex}" rect="${rectStr}" color="${ann.color}" title="${escapeXml(ann.author || '')}">\n`;
+          xfdf += `    <text page="${pageIndex}" rect="${rectStr}" color="${escapeXml(ann.color)}" title="${escapeXml(ann.author || '')}"${opAttr}>\n`;
           xfdf += `      <contents>${escapeXml(ann.text || '')}</contents>\n`;
           xfdf += `    </text>\n`;
+        } else if (ann.type === 'stamp') {
+          xfdf += `    <stamp page="${pageIndex}" rect="${rectStr}" subject="${escapeXml(ann.presetKey || 'Custom')}"${opAttr} />\n`;
         }
       }
     }

@@ -546,6 +546,12 @@ input[type="range"] {
 }
 
 /* Bookmarks & Outline Tree */
+.bookmark-add-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .bookmark-add-box {
   display: flex;
   align-items: center;
@@ -559,6 +565,12 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.bookmark-note-input {
+  width: 100%;
+  height: 30px;
+  font-size: 11.5px;
+}
+
 .bookmark-add-btn {
   flex-shrink: 0;
   height: 32px;
@@ -568,10 +580,25 @@ input[type="range"] {
   white-space: nowrap;
 }
 
+.bookmark-card-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .bookmark-item {
   border-radius: 8px;
   padding: 7px 10px;
   gap: 8px;
+  align-items: flex-start;
+}
+
+.bookmark-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .bookmark-item-title {
@@ -581,6 +608,14 @@ input[type="range"] {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.bookmark-note-preview {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .bookmark-page-pill {
@@ -601,6 +636,7 @@ input[type="range"] {
   color: var(--accent-contrast);
 }
 
+.bookmark-edit-btn,
 .bookmark-delete-btn {
   display: inline-flex;
   align-items: center;
@@ -614,12 +650,52 @@ input[type="range"] {
   cursor: pointer;
   opacity: 0.65;
   transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.bookmark-edit-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--accent);
+  opacity: 1;
 }
 
 .bookmark-delete-btn:hover {
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
   opacity: 1;
+}
+
+.bookmark-inline-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-medium);
+}
+
+.bookmark-inline-editor.is-hidden {
+  display: none;
+}
+
+.bookmark-edit-title-input {
+  height: 30px;
+  font-size: 12px;
+}
+
+.bookmark-edit-note-input {
+  min-height: 48px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.bookmark-inline-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .outline-tree-node {

@@ -4,7 +4,7 @@
  */
 
 import { Point, ShapeAnnotation, ToolType, BoundingBox } from '../../core/types';
-import { computePointsBoundingBox, traceRoundedPolygon, fillLineRibbon } from '../../utils/geometry';
+import { computePointsBoundingBox, traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead } from '../../utils/geometry';
 import { SHAPE_CORNER_RADIUS } from '../engine';
 
 export type ConstrainedShapeType = 'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'freeform-shape';
@@ -232,36 +232,24 @@ export class ShapesTool {
         fillLineRibbon(ctx, sp.x, sp.y, cp.x, cp.y, this._strokeWidth);
       }
     } else if (this._type === 'arrow') {
+      const dx = cp.x - sp.x;
+      const dy = cp.y - sp.y;
+      const len = Math.hypot(dx, dy);
+      const arrowGeom = len > 0.001
+        ? computeArrowHeadGeometry(sp, cp, this._strokeWidth)
+        : null;
+      const shaftEnd = arrowGeom ? arrowGeom.shaftEnd : cp;
       ctx.fillStyle = this._strokeColor;
       if (this._strokeStyle === 'dashed' || this._strokeStyle === 'dotted') {
         ctx.beginPath();
         ctx.moveTo(sp.x, sp.y);
-        ctx.lineTo(cp.x, cp.y);
+        ctx.lineTo(shaftEnd.x, shaftEnd.y);
         ctx.stroke();
       } else {
-        fillLineRibbon(ctx, sp.x, sp.y, cp.x, cp.y, this._strokeWidth);
+        fillLineRibbon(ctx, sp.x, sp.y, shaftEnd.x, shaftEnd.y, this._strokeWidth);
       }
-      // Arrowhead as filled polygon
-      const dx = cp.x - sp.x;
-      const dy = cp.y - sp.y;
-      const len = Math.hypot(dx, dy);
       if (len > 0.001) {
-        ctx.setLineDash([]);
-        const headLen = Math.max(12, this._strokeWidth * 4);
-        const angle = Math.atan2(dy, dx);
-        ctx.beginPath();
-        ctx.moveTo(cp.x, cp.y);
-        ctx.lineTo(
-          cp.x - headLen * Math.cos(angle - Math.PI / 6),
-          cp.y - headLen * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-          cp.x - headLen * Math.cos(angle + Math.PI / 6),
-          cp.y - headLen * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fillStyle = this._strokeColor;
-        ctx.fill();
+        drawArrowHead(ctx, sp, cp, this._strokeWidth, this._strokeColor);
       }
     } else if (this._type === 'polygon') {
       if (this._polygonPoints.length > 0) {
@@ -380,28 +368,12 @@ export class ShapesTool {
   }
 
   private drawArrow(ctx: CanvasRenderingContext2D, from: Point, to: Point) {
-    const headLen = Math.max(12, this._strokeWidth * 4);
-    const angle = Math.atan2(to.y - from.y, to.x - from.x);
-
+    const geom = computeArrowHeadGeometry(from, to, this._strokeWidth);
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
+    ctx.lineTo(geom.shaftEnd.x, geom.shaftEnd.y);
     ctx.stroke();
-
-    // Arrowhead
-    ctx.beginPath();
-    ctx.moveTo(to.x, to.y);
-    ctx.lineTo(
-      to.x - headLen * Math.cos(angle - Math.PI / 6),
-      to.y - headLen * Math.sin(angle - Math.PI / 6)
-    );
-    ctx.lineTo(
-      to.x - headLen * Math.cos(angle + Math.PI / 6),
-      to.y - headLen * Math.sin(angle + Math.PI / 6)
-    );
-    ctx.closePath();
-    ctx.fillStyle = this._strokeColor;
-    ctx.fill();
+    drawArrowHead(ctx, from, to, this._strokeWidth, this._strokeColor);
   }
 }
 

@@ -13,7 +13,7 @@ import {
   StickyNoteAnnotation,
   StickyNoteStroke
 } from '../../core/types';
-import { isPointInBox, traceRoundedPolygon, fillLineRibbon } from '../../utils/geometry';
+import { isPointInBox, traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead } from '../../utils/geometry';
 import { renderSmoothStroke } from '../spline';
 import { textTool } from './text';
 
@@ -999,31 +999,26 @@ export class StickyNoteTool {
         if (outline) ctx.stroke();
       } else if ((sh.type === 'line' || sh.type === 'arrow') && sh.points && sh.points.length >= 2) {
         const pts = sh.points;
+        const isArrow = sh.type === 'arrow';
+        const arrowGeom = isArrow
+          ? computeArrowHeadGeometry(pts[pts.length - 2], pts[pts.length - 1], w)
+          : null;
         if (sh.strokeStyle === 'dashed' || sh.strokeStyle === 'dotted') {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          for (let i = 1; i < pts.length; i++) {
+            const endPt = isArrow && i === pts.length - 1 && arrowGeom ? arrowGeom.shaftEnd : pts[i];
+            ctx.lineTo(endPt.x, endPt.y);
+          }
           ctx.stroke();
         } else {
           for (let i = 0; i < pts.length - 1; i++) {
-            fillLineRibbon(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+            const endPt = isArrow && i === pts.length - 2 && arrowGeom ? arrowGeom.shaftEnd : pts[i + 1];
+            fillLineRibbon(ctx, pts[i].x, pts[i].y, endPt.x, endPt.y, w);
           }
         }
-        if (sh.type === 'arrow') {
-          ctx.setLineDash([]);
-          const prev = pts[pts.length - 2];
-          const tip = pts[pts.length - 1];
-          const headLen = Math.max(12, w * 4);
-          const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
-          ctx.beginPath();
-          ctx.moveTo(tip.x, tip.y);
-          ctx.lineTo(tip.x - headLen * Math.cos(angle - Math.PI / 6), tip.y - headLen * Math.sin(angle - Math.PI / 6));
-          ctx.lineTo(tip.x - headLen * Math.cos(angle + Math.PI / 6), tip.y - headLen * Math.sin(angle + Math.PI / 6));
-          ctx.closePath();
-          ctx.fillStyle = sh.strokeColor;
-          ctx.fill();
-          ctx.lineWidth = Math.min(2, w * 0.5);
-          ctx.stroke();
+        if (isArrow) {
+          drawArrowHead(ctx, pts[pts.length - 2], pts[pts.length - 1], w, sh.strokeColor);
         }
       } else if ((sh.type === 'polygon' || sh.type === 'freeform-shape') && sh.points && sh.points.length >= 2) {
         ctx.beginPath();

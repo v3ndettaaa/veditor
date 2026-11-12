@@ -131,6 +131,81 @@ export function fillLineRibbon(ctx: CanvasRenderingContext2D, x1: number, y1: nu
   ctx.fillStyle = prevFill;
 }
 
+export interface ArrowHeadGeometry {
+  /** Length of each arrowhead wing from the tip (in page units). */
+  headLen: number;
+  /** Direction angle of the arrow segment in radians. */
+  angle: number;
+  /** Half-angle spread of the arrowhead wings in radians. */
+  wingAngle: number;
+  /** Left wing vertex. */
+  leftWing: Point;
+  /** Right wing vertex. */
+  rightWing: Point;
+  /** Shortened endpoint for the shaft segment so thick caps don't poke past the sharp tip. */
+  shaftEnd: Point;
+}
+
+/**
+ * Computes a sleek, proportional arrowhead geometry that scales smoothly with
+ * both `strokeWidth` and the segment length (`prev` -> `tip`), ensuring short
+ * arrows and thin/medium strokes never have oversized arrowheads.
+ */
+export function computeArrowHeadGeometry(
+  prev: Point,
+  tip: Point,
+  strokeWidth: number
+): ArrowHeadGeometry {
+  const w = Math.max(1, strokeWidth || 2);
+  const dx = tip.x - prev.x;
+  const dy = tip.y - prev.y;
+  const shaftLen = Math.hypot(dx, dy);
+  const angle = Math.atan2(dy, dx);
+  const targetLen = Math.max(5.5, w * 2.1 + 2.0);
+  const headLen = shaftLen > 0.001
+    ? Math.min(targetLen, Math.max(3.0, shaftLen * 0.32))
+    : targetLen;
+  const wingAngle = Math.PI / 7.5; // ~24° sleek half-angle
+  const leftWing: Point = {
+    x: tip.x - headLen * Math.cos(angle - wingAngle),
+    y: tip.y - headLen * Math.sin(angle - wingAngle)
+  };
+  const rightWing: Point = {
+    x: tip.x - headLen * Math.cos(angle + wingAngle),
+    y: tip.y - headLen * Math.sin(angle + wingAngle)
+  };
+  const pullback = shaftLen > 0.001 ? Math.min(shaftLen * 0.55, headLen * 0.58) : 0;
+  const shaftEnd: Point = {
+    x: tip.x - Math.cos(angle) * pullback,
+    y: tip.y - Math.sin(angle) * pullback
+  };
+  return { headLen, angle, wingAngle, leftWing, rightWing, shaftEnd };
+}
+
+/**
+ * Renders a crisp, proportional filled arrowhead at `tip` oriented from `prev`.
+ */
+export function drawArrowHead(
+  ctx: CanvasRenderingContext2D,
+  prev: Point,
+  tip: Point,
+  strokeWidth: number,
+  color: string
+): ArrowHeadGeometry {
+  const geom = computeArrowHeadGeometry(prev, tip, strokeWidth);
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(geom.leftWing.x, geom.leftWing.y);
+  ctx.lineTo(geom.rightWing.x, geom.rightWing.y);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.restore();
+  return geom;
+}
+
 export function isPointInBox(p: Point, box: BoundingBox): boolean {
   if (box.rotation) {
     // Rotate point back by -rotation around box center

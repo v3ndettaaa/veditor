@@ -1,6 +1,6 @@
 pkgbase = veditor-bin
 	pkgdesc = Native-grade desktop PDF editor & annotation workspace built with Tauri v2 and Rust
-	pkgver = 1.1.2
+	pkgver = 4.0.0
 	pkgrel = 1
 	url = https://github.com/v3ndettaaa/veditor
 	arch = x86_64
@@ -14,7 +14,7 @@ pkgbase = veditor-bin
 	conflicts = veditor
 	conflicts = veditor-git
 	options = !strip
-	source = veditor-bin-1.1.2.deb::https://github.com/v3ndettaaa/veditor/releases/download/v1.1.2/VEditor_1.1.2_amd64.deb
+	source = veditor-bin-4.0.0.deb::https://github.com/v3ndettaaa/veditor/releases/download/v4.0.0/veditor_4.0.0_amd64.deb
 	sha256sums = SKIP
 
 pkgname = veditor-bin

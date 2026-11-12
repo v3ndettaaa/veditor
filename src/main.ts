@@ -738,6 +738,14 @@ class VeditorApp {
           }
         }
       }
+      const extractedUserBookmarks = !baseAnnotations
+        ? pdfEngine.getLastExtractedUserBookmarks()
+        : [];
+      const existingOrInitialBookmarks = existingSession?.userBookmarks?.length
+        ? existingSession.userBookmarks
+        : initialState?.userBookmarks?.length
+          ? initialState.userBookmarks
+          : extractedUserBookmarks;
 
       const session: DocumentSession = {
         id: docId,
@@ -746,7 +754,7 @@ class VeditorApp {
         pageCount,
         pages,
         bookmarks,
-        userBookmarks: existingSession?.userBookmarks || initialState?.userBookmarks || [],
+        userBookmarks: existingOrInitialBookmarks,
         annotations: importedAnnotations,
         layers: {},
         activePageIndex: initialState?.activePageIndex ?? 0,
@@ -1660,8 +1668,23 @@ class VeditorApp {
     });
 
     if (typeof ResizeObserver !== 'undefined' && this._scrollContainer) {
-      const resizeObserver = new ResizeObserver(() => {
-        viewportManager.updateLayout(true);
+      let resizeRafId: number | null = null;
+      let lastObservedWidth = 0;
+      let lastObservedHeight = 0;
+      const resizeObserver = new ResizeObserver((entries) => {
+        const rect = entries[0]?.contentRect;
+        if (rect) {
+          const w = Math.round(rect.width);
+          const h = Math.round(rect.height);
+          if (w === lastObservedWidth && h === lastObservedHeight) return;
+          lastObservedWidth = w;
+          lastObservedHeight = h;
+        }
+        if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
+        resizeRafId = requestAnimationFrame(() => {
+          resizeRafId = null;
+          viewportManager.updateLayout(false);
+        });
       });
       resizeObserver.observe(this._scrollContainer);
     }
@@ -1860,8 +1883,10 @@ class VeditorApp {
       // Pre-warm PDF text layout and interactive links for on-screen pages
       void pdfEngine.getPageTextLayout(pageIndex);
       void this.populatePageLinks(pageIndex, p, docId);
-      p.needsRepaint = false;
-      this.repaintPageAnnotations(pageIndex, p);
+      if (p.needsRepaint) {
+        p.needsRepaint = false;
+        this.repaintPageAnnotations(pageIndex, p);
+      }
     }
 
     // 4b. Tier 2 Preload Buffer Render: Pages in the preload window (1, 3, or 5 pages

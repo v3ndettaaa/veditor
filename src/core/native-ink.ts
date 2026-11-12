@@ -132,6 +132,17 @@ export function parseColorRgb(colorStr: string): [number, number, number] {
   return [0, 0, 0];
 }
 
+/** Extracts alpha factor [0..1] from an rgba() string if present. */
+export function parseColorAlpha(colorStr: string): number | null {
+  if (!colorStr) return null;
+  const rgbaMatch = colorStr.match(/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\s*\)/i);
+  if (rgbaMatch) {
+    const a = parseFloat(rgbaMatch[1]);
+    if (Number.isFinite(a)) return Math.max(0, Math.min(1, a));
+  }
+  return null;
+}
+
 /** Quick presence check for /Ink annotations. */
 export function bytesMayContainInkAnnotations(bytes: Uint8Array): boolean {
   return new TextDecoder('latin1').decode(bytes).includes('/Ink');
@@ -237,6 +248,11 @@ export function syncNativeInkAnnotations(
       // Update Dictionary attributes per ISO 32000-1
       annotDict.set(PDFName.of('VEditorManaged'), PDFNumber.of(1));
       annotDict.set(PDFName.of('VEditorTool'), PDFString.of(ann.type));
+      if (ann.type === 'highlighter' && (ann as HighlighterAnnotation).tipShape) {
+        annotDict.set(PDFName.of('VEditorTipShape'), PDFString.of((ann as HighlighterAnnotation).tipShape!));
+      } else {
+        annotDict.delete(PDFName.of('VEditorTipShape'));
+      }
       annotDict.set(PDFName.of('Rect'), pdfDoc.context.obj([rectLlx, rectLly, rectUrx, rectUry]));
       annotDict.set(PDFName.of('F'), PDFNumber.of(4)); // Print flag
       annotDict.set(PDFName.of('C'), pdfDoc.context.obj([r, g, b]));
@@ -249,11 +265,20 @@ export function syncNativeInkAnnotations(
       );
       annotDict.set(PDFName.of('InkList'), pdfDoc.context.obj([[...inkListCoords]]));
 
-      const opacity = Math.max(0, Math.min(1, ann.type === 'highlighter' ? 0.35 : (ann.opacity ?? 1)));
+      const colorAlpha = parseColorAlpha(ann.color);
+      const rawOpacity = ann.type === 'highlighter'
+        ? (typeof ann.opacity === 'number' && Number.isFinite(ann.opacity) && ann.opacity < 1
+            ? ann.opacity
+            : (colorAlpha ?? (typeof ann.opacity === 'number' && Number.isFinite(ann.opacity) ? ann.opacity : 0.35)))
+        : (ann.opacity ?? colorAlpha ?? 1);
+      const opacity = Math.max(0.05, Math.min(1, rawOpacity));
       annotDict.set(PDFName.of('CA'), PDFNumber.of(opacity));
 
+      const isChisel = ann.type === 'highlighter' && (ann as HighlighterAnnotation).tipShape === 'chisel';
+      const capJoin = isChisel ? '0 J\n0 j' : '1 J\n1 j';
+
       // EMIT_ISO: Generate /AP /N FormXObject appearance stream
-      let streamContent = `1 J\n1 j\n/GS gs\n${strokeWidth} w\n${r} ${g} ${b} RG\n`;
+      let streamContent = `${capJoin}\n/GS gs\n${strokeWidth} w\n${r} ${g} ${b} RG\n`;
       streamContent += `${inkListCoords[0].toFixed(2)} ${inkListCoords[1].toFixed(2)} m\n`;
       for (let i = 2; i + 1 < inkListCoords.length; i += 2) {
         streamContent += `${inkListCoords[i].toFixed(2)} ${inkListCoords[i + 1].toFixed(2)} l\n`;
@@ -348,3 +373,28 @@ export function extractNativeInkToolMap(pdfDoc: PDFDocument): Map<string, 'pen' 
   }
   return toolMap;
 }
+
+export function extractNativeInkMetaMap(pdfDoc: PDFDocument): Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }> {
+  const metaMap = new Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }>();
+  for (const page of pdfDoc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      const dict = annots.lookupMaybe(i, PDFDict);
+      const subtype = dict?.lookupMaybe(PDFName.of('Subtype'), PDFName);
+      if (subtype?.asString() !== INK_NAME || !dict) continue;
+      const nm = dict.lookupMaybe(PDFName.of('NM'), PDFString)?.asString();
+      if (!nm) continue;
+      const tool = dict.lookupMaybe(PDFName.of('VEditorTool'), PDFString)?.asString();
+      const tipShape = dict.lookupMaybe(PDFName.of('VEditorTipShape'), PDFString)?.asString();
+      const ca = dict.lookupMaybe(PDFName.of('CA'), PDFNumber)?.asNumber();
+      metaMap.set(nm, {
+        tool: tool === 'highlighter' || tool === 'pen' ? tool : undefined,
+        tipShape: tipShape === 'chisel' || tipShape === 'round' ? tipShape : undefined,
+        opacity: typeof ca === 'number' && Number.isFinite(ca) ? ca : undefined
+      });
+    }
+  }
+  return metaMap;
+}
+

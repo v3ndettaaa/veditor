@@ -370,27 +370,70 @@ class StateStore {
     this.notify();
   }
 
-  public addUserBookmark(pageIndex: number, title?: string) {
+  public addUserBookmark(pageIndex: number, title?: string, note?: string) {
     if (!this._activeDocument) return;
     const list = [...(this._activeDocument.userBookmarks || [])];
     const cleanTitle = (title || '').trim() || `Page ${pageIndex + 1}`;
+    const cleanNote = (note || '').trim();
     const existingIdx = list.findIndex(b => b.pageIndex === pageIndex && b.title === cleanTitle);
-    if (existingIdx >= 0) return;
+    const now = Date.now();
+    if (existingIdx >= 0) {
+      if (cleanNote && list[existingIdx].note !== cleanNote) {
+        list[existingIdx] = { ...list[existingIdx], note: cleanNote, updatedAt: now };
+        this._activeDocument.userBookmarks = list;
+        this._activeDocument.lastModifiedAt = now;
+        this._openDocuments.set(this._activeDocument.id, this._activeDocument);
+        this.notify();
+      }
+      return;
+    }
     list.push({
-      id: `bm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      id: `bm_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       title: cleanTitle,
       pageIndex,
-      createdAt: Date.now()
+      ...(cleanNote ? { note: cleanNote } : {}),
+      createdAt: now,
+      updatedAt: now
     });
     list.sort((a, b) => a.pageIndex - b.pageIndex || a.createdAt - b.createdAt);
     this._activeDocument.userBookmarks = list;
+    this._activeDocument.lastModifiedAt = now;
     this._openDocuments.set(this._activeDocument.id, this._activeDocument);
     this.notify();
   }
 
+  public updateUserBookmark(bookmarkId: string, patch: { title?: string; note?: string }) {
+    if (!this._activeDocument || !this._activeDocument.userBookmarks) return;
+    const now = Date.now();
+    let changed = false;
+    this._activeDocument.userBookmarks = this._activeDocument.userBookmarks.map((bm) => {
+      if (bm.id !== bookmarkId) return bm;
+      const nextTitle = patch.title !== undefined ? (patch.title.trim() || bm.title) : bm.title;
+      const nextNote = patch.note !== undefined ? patch.note.trim() : (bm.note || '');
+      if (nextTitle === bm.title && nextNote === (bm.note || '')) return bm;
+      changed = true;
+      const updated = { ...bm, title: nextTitle, updatedAt: now };
+      if (nextNote) {
+        updated.note = nextNote;
+      } else {
+        delete updated.note;
+      }
+      return updated;
+    });
+    if (changed) {
+      this._activeDocument.lastModifiedAt = now;
+      this._openDocuments.set(this._activeDocument.id, this._activeDocument);
+      this.notify();
+    }
+  }
+
   public removeUserBookmark(bookmarkId: string) {
     if (!this._activeDocument || !this._activeDocument.userBookmarks) return;
+    const prevLen = this._activeDocument.userBookmarks.length;
     this._activeDocument.userBookmarks = this._activeDocument.userBookmarks.filter(b => b.id !== bookmarkId);
+    if (this._activeDocument.userBookmarks.length !== prevLen) {
+      this._activeDocument.lastModifiedAt = Date.now();
+    }
     this._openDocuments.set(this._activeDocument.id, this._activeDocument);
     this.notify();
   }

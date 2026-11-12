@@ -499,7 +499,8 @@ body.no-page-shadows .pdf-page-container {
   box-shadow: 4px 0 24px -8px rgba(0, 0, 0, 0.18);
   display: flex;
   flex-direction: column;
-  transition: width var(--transition-normal), transform var(--transition-normal);
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
   z-index: 30;
 }
 
@@ -509,6 +510,7 @@ body.no-page-shadows .pdf-page-container {
   border-inline-end-color: transparent;
   box-shadow: none;
   transform: translateX(-100%);
+  pointer-events: none;
 }
 
 [dir="rtl"] .app-sidebar.collapsed {
@@ -1826,13 +1828,18 @@ input.prop-num-input::-webkit-inner-spin-button {
   contain: layout style paint;
 }
 
+body.invert-pdf-document .pdf-page-container {
+  background-color: #141416;
+}
+
 .pdf-page-canvas {
   position: absolute;
   top: 0;
   left: 0;
   pointer-events: none;
   z-index: 1;
-  transition: filter 0.2s ease;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .pdf-chunk-canvas {
@@ -1842,6 +1849,7 @@ input.prop-num-input::-webkit-inner-spin-button {
 
 body.invert-pdf-document .pdf-page-canvas {
   filter: invert(0.92) hue-rotate(180deg) brightness(0.95) contrast(1.05);
+  will-change: filter, transform;
 }
 
 .annotation-canvas {
@@ -1850,6 +1858,8 @@ body.invert-pdf-document .pdf-page-canvas {
   left: 0;
   pointer-events: none;
   z-index: 3;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .annot-chunk-canvas {
@@ -1859,6 +1869,8 @@ body.invert-pdf-document .pdf-page-canvas {
   pointer-events: none;
   z-index: 4;
   display: none;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* The cursor itself is set inline from src/ui/cursor.ts, which draws the
@@ -1871,6 +1883,8 @@ body.invert-pdf-document .pdf-page-canvas {
   z-index: 5;
   touch-action: none;
   cursor: crosshair;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .scratch-chunk-canvas {
@@ -1880,6 +1894,8 @@ body.invert-pdf-document .pdf-page-canvas {
   pointer-events: none;
   z-index: 6;
   display: none;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* Floating View Controls (Bottom-Right) */
@@ -2176,7 +2192,8 @@ html, body, .app-container {
   border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  transition: width var(--transition-normal), transform var(--transition-normal);
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
   z-index: 30;
 }
 
@@ -2184,6 +2201,7 @@ html, body, .app-container {
   width: 0;
   overflow: hidden;
   transform: translateX(100%);
+  pointer-events: none;
 }
 
 .panel-header {

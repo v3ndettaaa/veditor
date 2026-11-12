@@ -15,7 +15,7 @@ export function shapeHasOutline(ann: Pick<ShapeAnnotation, 'type' | 'outline'>):
   return ann.outline !== false;
 }
 import { store } from '../core/store';
-import { traceRoundedPolygon, fillLineRibbon } from '../utils/geometry';
+import { traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead } from '../utils/geometry';
 
 /** Default fillet radius (page pt) for shape corners; ~”a little radius”. */
 export const SHAPE_CORNER_RADIUS = 0.75;
@@ -387,41 +387,28 @@ export class AnnotationEngine {
       if (outline) ctx.stroke();
     } else if ((ann.type === 'line' || ann.type === 'arrow') && ann.points?.length >= 2) {
       const pts = ann.points;
+      const isArrow = ann.type === 'arrow';
+      const arrowGeom = isArrow
+        ? computeArrowHeadGeometry(pts[pts.length - 2], pts[pts.length - 1], w)
+        : null;
       ctx.fillStyle = ann.strokeColor;
       if (ann.strokeStyle === 'dashed' || ann.strokeStyle === 'dotted') {
         ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
         for (let i = 1; i < pts.length; i++) {
-          ctx.lineTo(pts[i].x, pts[i].y);
+          const endPt = isArrow && i === pts.length - 1 && arrowGeom ? arrowGeom.shaftEnd : pts[i];
+          ctx.lineTo(endPt.x, endPt.y);
         }
         ctx.stroke();
       } else {
         for (let i = 0; i < pts.length - 1; i++) {
-          fillLineRibbon(ctx, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+          const endPt = isArrow && i === pts.length - 2 && arrowGeom ? arrowGeom.shaftEnd : pts[i + 1];
+          fillLineRibbon(ctx, pts[i].x, pts[i].y, endPt.x, endPt.y, w);
         }
       }
 
-      if (ann.type === 'arrow') {
-        ctx.setLineDash([]);
-        const prev = pts[pts.length - 2];
-        const tip = pts[pts.length - 1];
-        const headLen = Math.max(12, w * 4);
-        const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
-        // Fill the arrowhead as a closed polygon matching the ribbon cap so
-        // the head blends seamlessly with the anti-aliased shaft.
-        ctx.beginPath();
-        ctx.moveTo(tip.x, tip.y);
-        ctx.lineTo(
-          tip.x - headLen * Math.cos(angle - Math.PI / 6),
-          tip.y - headLen * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-          tip.x - headLen * Math.cos(angle + Math.PI / 6),
-          tip.y - headLen * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fillStyle = ann.strokeColor;
-        ctx.fill();
+      if (isArrow) {
+        drawArrowHead(ctx, pts[pts.length - 2], pts[pts.length - 1], w, ann.strokeColor);
       }
     } else if (ann.points && ann.points.length > 1) {
       // Polygons and recognized freeform shapes get filleted corners so they

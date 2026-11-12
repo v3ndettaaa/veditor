@@ -114,11 +114,13 @@ export class SidePanelsComponent {
     const activeTab = store.activeSidebarTab;
     const doc = store.activeDocument;
 
-    const outlineSig = doc ? `${doc.bookmarks?.length ?? 0}:${doc.userBookmarks?.length ?? 0}` : '0:0';
+    const userBmSig = (doc?.userBookmarks || [])
+      .map(b => `${b.id}:${b.pageIndex}:${b.title}:${b.note || ''}`)
+      .join(',');
+    const outlineSig = doc ? `${doc.bookmarks?.length ?? 0}:${userBmSig}` : '0:';
     const historySig = activeTab === 'history' ? String(history.historyList.length) : '0';
 
     const renderKey = [
-      isOpen && doc ? 1 : 0,
       activeTab,
       doc?.id ?? '',
       doc?.pageCount ?? 0,
@@ -131,17 +133,31 @@ export class SidePanelsComponent {
     // Auto-collapse sidebar whenever sidebarOpen is false OR there is no active PDF document
     if (!isOpen || !doc) {
       this._container.classList.add('collapsed');
-      this._thumbObserver?.disconnect();
+      if (this._thumbObserver) {
+        this._thumbObserver.disconnect();
+        this._thumbObserver = null;
+      }
       this._thumbWarmupToken++;
-      this._lastRenderKey = renderKey;
+      if (!doc) {
+        this._lastRenderKey = '';
+      }
       return;
     }
+
+    const wasCollapsed = this._container.classList.contains('collapsed');
+    this._container.classList.remove('collapsed');
 
     if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') {
       this.syncPageSelection();
       this.syncPageBadges();
+      this.syncOutlineState();
       if (activeTab === 'search') {
         this.syncActiveSearchCard();
+      } else if (activeTab === 'thumbnails' && (wasCollapsed || !this._thumbObserver)) {
+        const contentArea = this._container.querySelector<HTMLElement>('#sidebar-tab-content');
+        if (contentArea) {
+          this.fillThumbnails(contentArea, doc.id, doc.pages.length, this._structureRevision);
+        }
       }
       return;
     }
@@ -151,8 +167,6 @@ export class SidePanelsComponent {
       this._anchorDocId = doc?.id ?? null;
       this._pageAnchor = null;
     }
-
-    this._container.classList.remove('collapsed');
 
     const lang = store.appSettings.language;
     const tabTitleMap: Record<string, string> = {
@@ -229,6 +243,36 @@ export class SidePanelsComponent {
       this._lastActivePageIndex = -1;
     }
     this.syncPageSelection();
+    this.syncOutlineState();
+  }
+
+  private syncOutlineState(): void {
+    const lang = store.appSettings.language;
+    const curPage = store.activePageIndex + 1;
+
+    const addBtnLabel = this._container.querySelector<HTMLElement>('#add-page-bookmark-btn span');
+    if (addBtnLabel) {
+      const nextText = lang === 'fa' ? `افزودن ص ${curPage}` : `+ Page ${curPage}`;
+      if (addBtnLabel.textContent !== nextText) {
+        addBtnLabel.textContent = nextText;
+      }
+    }
+
+    const titleInput = this._container.querySelector<HTMLInputElement>('#custom-bookmark-input');
+    if (titleInput) {
+      const nextPlaceholder = lang === 'fa' ? `عنوان نشانک (صفحه ${curPage})…` : `Bookmark title (Page ${curPage})…`;
+      if (titleInput.placeholder !== nextPlaceholder) {
+        titleInput.placeholder = nextPlaceholder;
+      }
+    }
+
+    this._container.querySelectorAll<HTMLElement>('.bookmark-item[data-bookmark-page]').forEach(item => {
+      const pageIdx = parseInt(item.getAttribute('data-bookmark-page') || '-1', 10);
+      const isCurrent = pageIdx === store.activePageIndex;
+      if (item.classList.contains('is-current') !== isCurrent) {
+        item.classList.toggle('is-current', isCurrent);
+      }
+    });
   }
 
   private syncPageSelection(): void {
@@ -487,14 +531,19 @@ export class SidePanelsComponent {
 
       el.innerHTML = `
         <div class="panel-stack">
-          <div class="bookmark-add-box">
-            <input type="text" id="custom-bookmark-input" class="field bookmark-add-input" dir="auto"
-                   placeholder="${lang === 'fa' ? `عنوان نشانک (صفحه ${curPage})…` : `Bookmark title (Page ${curPage})…`}"
-                   aria-label="${lang === 'fa' ? 'عنوان نشانک' : 'Bookmark title'}">
-            <button type="button" class="primary-btn is-sm bookmark-add-btn" id="add-page-bookmark-btn" title="${lang === 'fa' ? 'نشانه‌گذاری صفحه فعلی' : 'Bookmark current page'}">
-              ${getIconSvg('bookmarkPlus', 14)}
-              <span>${lang === 'fa' ? `افزودن ص ${curPage}` : `+ Page ${curPage}`}</span>
-            </button>
+          <div class="bookmark-add-stack">
+            <div class="bookmark-add-box">
+              <input type="text" id="custom-bookmark-input" class="field bookmark-add-input" dir="auto"
+                     placeholder="${lang === 'fa' ? `عنوان نشانک (صفحه ${curPage})…` : `Bookmark title (Page ${curPage})…`}"
+                     aria-label="${lang === 'fa' ? 'عنوان نشانک' : 'Bookmark title'}">
+              <button type="button" class="primary-btn is-sm bookmark-add-btn" id="add-page-bookmark-btn" title="${lang === 'fa' ? 'نشانه‌گذاری صفحه فعلی' : 'Bookmark current page'}">
+                ${getIconSvg('bookmarkPlus', 14)}
+                <span>${lang === 'fa' ? `افزودن ص ${curPage}` : `+ Page ${curPage}`}</span>
+              </button>
+            </div>
+            <input type="text" id="custom-bookmark-note-input" class="field bookmark-note-input" dir="auto"
+                   placeholder="${lang === 'fa' ? 'یادداشت کوتاه برای این نشانک (اختیاری)…' : 'Add a note for this bookmark (optional)…'}"
+                   aria-label="${lang === 'fa' ? 'یادداشت نشانک' : 'Bookmark note'}">
           </div>
 
           ${userBookmarks.length > 0 ? `
@@ -504,44 +553,67 @@ export class SidePanelsComponent {
             </div>
             <div class="panel-stack">
               ${userBookmarks.map(ub => `
-                <div class="list-card is-interactive bookmark-item ${ub.pageIndex === store.activePageIndex ? 'is-current' : ''}"
-                     data-bookmark-page="${ub.pageIndex}">
-                  <span class="list-card-icon" style="color:var(--accent);">${getIconSvg('bookmark', 13)}</span>
-                  <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(ub.title)}</span>
-                  <span class="bookmark-page-pill">${ub.pageIndex + 1}</span>
-                  <button type="button" class="bookmark-delete-btn" data-remove-bookmark="${escapeHtml(ub.id)}" title="${lang === 'fa' ? 'حذف نشانک' : 'Remove bookmark'}" aria-label="${lang === 'fa' ? 'حذف نشانک' : 'Remove bookmark'}">
-                    ${getIconSvg('close', 11)}
-                  </button>
+                <div class="bookmark-card-wrapper" data-bookmark-wrapper="${escapeHtml(ub.id)}">
+                  <div class="list-card is-interactive bookmark-item ${ub.pageIndex === store.activePageIndex ? 'is-current' : ''}"
+                       data-bookmark-page="${ub.pageIndex}">
+                    <span class="list-card-icon" style="color:var(--accent);">${getIconSvg('bookmark', 13)}</span>
+                    <div class="bookmark-item-body">
+                      <span class="list-card-title bookmark-item-title" dir="auto">${escapeHtml(ub.title)}</span>
+                      ${ub.note ? `<div class="bookmark-note-preview" dir="auto">${escapeHtml(ub.note)}</div>` : ''}
+                    </div>
+                    <span class="bookmark-page-pill">${ub.pageIndex + 1}</span>
+                    <button type="button" class="bookmark-edit-btn" data-edit-bookmark="${escapeHtml(ub.id)}" title="${lang === 'fa' ? 'ویرایش عنوان و یادداشت' : 'Edit title & note'}" aria-label="${lang === 'fa' ? 'ویرایش نشانک' : 'Edit bookmark'}">
+                      ${getIconSvg('pen', 11)}
+                    </button>
+                    <button type="button" class="bookmark-delete-btn" data-remove-bookmark="${escapeHtml(ub.id)}" title="${lang === 'fa' ? 'حذف نشانک' : 'Remove bookmark'}" aria-label="${lang === 'fa' ? 'حذف نشانک' : 'Remove bookmark'}">
+                      ${getIconSvg('close', 11)}
+                    </button>
+                  </div>
+                  <div class="bookmark-inline-editor is-hidden" data-bookmark-editor="${escapeHtml(ub.id)}">
+                    <input type="text" class="field bookmark-edit-title-input" data-edit-bm-title="${escapeHtml(ub.id)}" dir="auto"
+                           value="${escapeHtml(ub.title)}"
+                           placeholder="${lang === 'fa' ? 'عنوان نشانک…' : 'Bookmark title…'}">
+                    <textarea class="field bookmark-edit-note-input" data-edit-bm-note="${escapeHtml(ub.id)}" dir="auto" rows="2"
+                              placeholder="${lang === 'fa' ? 'یادداشت برای این نشانک…' : 'Note for this bookmark…'}">${escapeHtml(ub.note || '')}</textarea>
+                    <div class="bookmark-inline-editor-actions">
+                      <button type="button" class="secondary-btn is-compact" data-cancel-bm="${escapeHtml(ub.id)}">${lang === 'fa' ? 'انصراف' : 'Cancel'}</button>
+                      <button type="button" class="primary-btn is-compact" data-save-bm="${escapeHtml(ub.id)}">${lang === 'fa' ? 'ذخیره' : 'Save'}</button>
+                    </div>
+                  </div>
                 </div>
               `).join('')}
             </div>
           ` : ''}
 
-          <div class="sidebar-section-bar" style="margin-top:${userBookmarks.length > 0 ? '8px' : '2px'};">
-            <span class="sidebar-section-label">${lang === 'fa' ? 'فهرست مطالب کتاب' : 'Document Outline'}</span>
-            ${pdfOutline.length > 0 ? `<span class="badge">${pdfOutline.length}</span>` : ''}
-          </div>
-
-          ${pdfOutline.length === 0 ? `
+          ${pdfOutline.length > 0 ? `
+            <div class="sidebar-section-bar" style="margin-top:${userBookmarks.length > 0 ? '8px' : '2px'};">
+              <span class="sidebar-section-label">${lang === 'fa' ? 'فهرست مطالب کتاب' : 'Document Outline'}</span>
+              <span class="badge">${pdfOutline.length}</span>
+            </div>
+            <div class="panel-stack outline-tree-root">
+              ${this.renderOutlineTreeHtml(pdfOutline, 0)}
+            </div>
+          ` : userBookmarks.length === 0 ? `
+            <div class="sidebar-section-bar" style="margin-top:2px;">
+              <span class="sidebar-section-label">${lang === 'fa' ? 'فهرست مطالب کتاب' : 'Document Outline'}</span>
+            </div>
             <div class="sidebar-empty-state">
               <div class="sidebar-empty-icon">${getIconSvg('bookOpen', 22)}</div>
               <div class="sidebar-empty-title">${lang === 'fa' ? 'فهرستی در این پی‌دی‌اف ثبت نشده است' : 'No table of contents in this PDF'}</div>
               <div class="sidebar-empty-sub">${lang === 'fa' ? 'می‌توانید از دکمه بالا برای نشانه‌گذاری صفحات دلخواه استفاده کنید.' : 'Use the button above to bookmark any page for quick access.'}</div>
             </div>
-          ` : `
-            <div class="panel-stack outline-tree-root">
-              ${this.renderOutlineTreeHtml(pdfOutline, 0)}
-            </div>
-          `}
+          ` : ''}
         </div>
       `;
 
       const bookmarkInput = el.querySelector<HTMLInputElement>('#custom-bookmark-input');
+      const bookmarkNoteInput = el.querySelector<HTMLInputElement>('#custom-bookmark-note-input');
       const addBookmarkBtn = el.querySelector<HTMLButtonElement>('#add-page-bookmark-btn');
       const handleAddBookmark = () => {
         const pageIdx = store.activePageIndex;
         const customTitle = bookmarkInput?.value.trim() || `${lang === 'fa' ? 'صفحه' : 'Page'} ${pageIdx + 1}`;
-        store.addUserBookmark(pageIdx, customTitle);
+        const customNote = bookmarkNoteInput?.value.trim() || undefined;
+        store.addUserBookmark(pageIdx, customTitle, customNote);
         triggerAutoSave();
         showToast(lang === 'fa' ? `صفحه ${pageIdx + 1} نشانه‌گذاری شد` : `Bookmarked Page ${pageIdx + 1}`, 'success');
       };
@@ -552,6 +624,53 @@ export class SidePanelsComponent {
           e.preventDefault();
           handleAddBookmark();
         }
+      });
+      bookmarkNoteInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleAddBookmark();
+        }
+      });
+
+      el.querySelectorAll<HTMLElement>('[data-edit-bookmark]').forEach((editBtn) => {
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const bmId = editBtn.getAttribute('data-edit-bookmark');
+          if (!bmId) return;
+          const editor = el.querySelector<HTMLElement>(`[data-bookmark-editor="${CSS.escape(bmId)}"]`);
+          if (!editor) return;
+          const isHidden = editor.classList.toggle('is-hidden');
+          if (!isHidden) {
+            const noteInput = editor.querySelector<HTMLTextAreaElement>(`[data-edit-bm-note="${CSS.escape(bmId)}"]`);
+            noteInput?.focus();
+          }
+        });
+      });
+
+      el.querySelectorAll<HTMLElement>('[data-cancel-bm]').forEach((cancelBtn) => {
+        cancelBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const bmId = cancelBtn.getAttribute('data-cancel-bm');
+          if (!bmId) return;
+          const editor = el.querySelector<HTMLElement>(`[data-bookmark-editor="${CSS.escape(bmId)}"]`);
+          editor?.classList.add('is-hidden');
+        });
+      });
+
+      el.querySelectorAll<HTMLElement>('[data-save-bm]').forEach((saveBtn) => {
+        saveBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const bmId = saveBtn.getAttribute('data-save-bm');
+          if (!bmId) return;
+          const titleField = el.querySelector<HTMLInputElement>(`[data-edit-bm-title="${CSS.escape(bmId)}"]`);
+          const noteField = el.querySelector<HTMLTextAreaElement>(`[data-edit-bm-note="${CSS.escape(bmId)}"]`);
+          store.updateUserBookmark(bmId, {
+            title: titleField?.value.trim() || undefined,
+            note: noteField?.value.trim() ?? ''
+          });
+          triggerAutoSave();
+          showToast(lang === 'fa' ? 'نشانک بروزرسانی شد' : 'Bookmark updated', 'success');
+        });
       });
 
       el.querySelectorAll<HTMLElement>('[data-remove-bookmark]').forEach((delBtn) => {
@@ -567,7 +686,8 @@ export class SidePanelsComponent {
 
       el.querySelectorAll<HTMLElement>('[data-bookmark-page]').forEach((itemEl) => {
         itemEl.addEventListener('click', (e) => {
-          if ((e.target as HTMLElement).closest('[data-remove-bookmark]')) return;
+          const target = e.target as HTMLElement;
+          if (target.closest('[data-remove-bookmark]') || target.closest('[data-edit-bookmark]')) return;
           const pageIdx = parseInt(itemEl.getAttribute('data-bookmark-page') || '-1', 10);
           if (Number.isFinite(pageIdx) && pageIdx >= 0 && pageIdx < doc.pageCount) {
             viewportManager.navigateWithJumpHistory(pageIdx);
@@ -1136,6 +1256,13 @@ export class SidePanelsComponent {
     const warmupToken = ++this._thumbWarmupToken;
     const inFlight = new Set<number>();
 
+    // O(N) single-pass lookup map instead of O(N^2) el.querySelector('[data-thumb-frame="..."]')
+    const frameByIndex = new Map<number, HTMLElement>();
+    el.querySelectorAll<HTMLElement>('[data-thumb-frame]').forEach((f) => {
+      const idx = Number(f.dataset.thumbFrame);
+      if (Number.isFinite(idx)) frameByIndex.set(idx, f);
+    });
+
     const fillFrame = async (idx: number): Promise<void> => {
       if (idx < 0 || idx >= pageCount) return;
       const key = `${docId}:${revision}:${idx}`;
@@ -1158,7 +1285,7 @@ export class SidePanelsComponent {
         this._prevThumbnailByPage.set(`${docId}:${idx}`, src);
       }
 
-      const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
+      const frame = frameByIndex.get(idx) ?? el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
       if (!frame || !frame.isConnected) return;
       const existingImg = frame.querySelector<HTMLImageElement>('img');
       if (existingImg) {
@@ -1182,17 +1309,17 @@ export class SidePanelsComponent {
       frame.prepend(img);
     };
 
-    // 1. Immediate priority batch around the current page (activePageIndex ± 6)
+    // 1. Immediate priority batch around the current page (activePageIndex ± 4)
     const center = store.activePageIndex;
     const priorityIndices: number[] = [];
-    for (let radius = 0; radius <= 6; radius++) {
+    for (let radius = 0; radius <= 4; radius++) {
       const a = center - radius;
       const b = center + radius;
       if (a >= 0 && a < pageCount) priorityIndices.push(a);
       if (radius > 0 && b >= 0 && b < pageCount) priorityIndices.push(b);
     }
 
-    // 2. Wide-margin IntersectionObserver for instant scroll lookahead
+    // 2. Smooth-margin IntersectionObserver for scroll lookahead without flooding open transition
     this._thumbObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
@@ -1201,27 +1328,27 @@ export class SidePanelsComponent {
         const idx = Number(frame.dataset.thumbFrame);
         if (Number.isFinite(idx)) void fillFrame(idx);
       }
-    }, { rootMargin: '1400px' });
+    }, { rootMargin: '480px' });
 
-    for (let idx = 0; idx < pageCount; idx++) {
-      const frame = el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
-      const existingImg = frame?.querySelector('img');
-      if (frame && (!existingImg || existingImg.hasAttribute('data-stale'))) {
+    for (const [, frame] of frameByIndex) {
+      const existingImg = frame.querySelector('img');
+      if (!existingImg || existingImg.hasAttribute('data-stale')) {
         this._thumbObserver.observe(frame);
       }
     }
 
-    // 3. Run priority pages immediately in parallel, then pre-warm remaining pages in background batches of 4
+    // 3. Yield one frame so sidebar slide-in animation starts at 60fps, then warm thumbnails in gentle batches
     void (async () => {
-      const batchSize = 4;
+      await new Promise<void>(r => requestAnimationFrame(() => r()));
+      const batchSize = 2;
       for (let i = 0; i < priorityIndices.length; i += batchSize) {
-        if (warmupToken !== this._thumbWarmupToken || store.activeDocument?.id !== docId) return;
+        if (warmupToken !== this._thumbWarmupToken || store.activeDocument?.id !== docId || !store.sidebarOpen) return;
         const slice = priorityIndices.slice(i, i + batchSize);
         await Promise.all(slice.map(idx => fillFrame(idx)));
+        await new Promise(r => setTimeout(r, 12));
       }
 
-      // Background pre-warm remaining pages up to 160 pages so scrolling never hits shimmer
-      const maxWarmup = Math.min(pageCount, 160);
+      const maxWarmup = Math.min(pageCount, 120);
       for (let idx = 0; idx < maxWarmup; idx += batchSize) {
         if (warmupToken !== this._thumbWarmupToken || store.activeDocument?.id !== docId || !store.sidebarOpen) return;
         const batch: number[] = [];
@@ -1232,7 +1359,7 @@ export class SidePanelsComponent {
         }
         if (batch.length > 0) {
           await Promise.all(batch.map(p => fillFrame(p)));
-          await new Promise(r => setTimeout(r, 8));
+          await new Promise(r => setTimeout(r, 16));
         }
       }
     })();

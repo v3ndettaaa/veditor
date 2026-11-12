@@ -40,7 +40,9 @@ import {
   HandleType,
   getAnnotationSelectionBox,
   moveAnnotationEndpoint,
-  moveAnnotationVertex
+  moveAnnotationVertex,
+  computeHandleLoupePlacement,
+  resolveDraggedHandleTargetPoint
 } from '../annotations/selection';
 import { floatingPropsBar } from '../ui/components/floating-props';
 import { openInlineEditor } from '../ui/components/inline-editor';
@@ -91,6 +93,12 @@ export class PointerHandler {
    * individual corner freely (holding Shift always toggles the opposite behavior).
    */
   private _rectCornerLockMode: boolean = false;
+  /** Current page-space target coordinate of the active handle-drag magnifier loupe, or null. */
+  private _activeLoupeTarget: Point | null = null;
+
+  public get activeHandleLoupeTarget(): Point | null {
+    return this._activeLoupeTarget;
+  }
 
   public get rectCornerLockMode(): boolean {
     return this._rectCornerLockMode;
@@ -1025,7 +1033,7 @@ export class PointerHandler {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         // A press on the current selection's handles or body is a transform,
         // never a new lasso — the controls behave identically to Select.
-        if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) break;
+        if (!additive && this.tryBeginSelectDrag(pt, pageIndex, scratchCanvas)) break;
         if (!additive) {
           store.clearSelection();
           store.setTextSelection(null);
@@ -1054,7 +1062,7 @@ export class PointerHandler {
         // is impossible once something is already selected.
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         // 1. Grab a transform handle or the selection body to start a drag.
-        if (!additive && this.tryBeginSelectDrag(pt, pageIndex)) {
+        if (!additive && this.tryBeginSelectDrag(pt, pageIndex, scratchCanvas)) {
           store.setTextSelection(null);
           break;
         }
@@ -1110,7 +1118,7 @@ export class PointerHandler {
    * selection's handles or body. Shared by the Select and Lasso tools so the
    * transform controls behave the same regardless of the active tool.
    */
-  private tryBeginSelectDrag(pt: Point, pageIndex: number): boolean {
+  private tryBeginSelectDrag(pt: Point, pageIndex: number, scratchCanvas?: HTMLCanvasElement): boolean {
     const doc = store.activeDocument;
     if (!doc) return false;
     const pageAnns = doc.annotations[pageIndex] || [];
@@ -1137,14 +1145,30 @@ export class PointerHandler {
       !isVertexHandle
         ? rotatePoint(pt, boxCenter(merged), -singleRot)
         : { x: pt.x, y: pt.y };
+    const mode = hit === 'body' ? 'move' : hit === 'rot' ? 'rotate' : 'resize';
     this._selectDrag = {
-      mode: hit === 'body' ? 'move' : hit === 'rot' ? 'rotate' : 'resize',
+      mode,
       handle: hit,
       pageIndex,
       originals,
       merged: { ...merged },
       startPt
     };
+    if (mode === 'resize') {
+      const targetPt = resolveDraggedHandleTargetPoint(selected[0], hit, pt);
+      this._activeLoupeTarget = targetPt;
+      if (this._pageScratchCtx && this._pageScratchCanvas && scratchCanvas) {
+        const c = this._pageScratchCtx;
+        const cv = this._pageScratchCanvas;
+        const rs = store.zoom * this.renderDpr();
+        c.clearRect(0, 0, cv.width, cv.height);
+        this.withScratchOffset(c, cv, () => {
+          this.renderHandleLoupe(c, scratchCanvas, pageIndex, targetPt, rs);
+        });
+      }
+    } else {
+      this._activeLoupeTarget = null;
+    }
     return true;
   }
 
@@ -1440,6 +1464,19 @@ export class PointerHandler {
             }
           }
           onNeedRepaint();
+          if (drag.mode === 'resize') {
+            const firstId = drag.originals.keys().next().value;
+            const currentAnn = firstId
+              ? doc?.annotations[pageIndex]?.find(a => a.id === firstId)
+              : undefined;
+            const targetPt = resolveDraggedHandleTargetPoint(currentAnn, drag.handle, lastPt);
+            this._activeLoupeTarget = targetPt;
+            this.withScratchOffset(ctx, activeScratch, () => {
+              this.renderHandleLoupe(ctx, scratchCanvas, pageIndex, targetPt, renderScale);
+            });
+          } else {
+            this._activeLoupeTarget = null;
+          }
         } else if (this._textSelectDrag && this._textSelectDrag.pageIndex === pageIndex) {
           const layout = pdfEngine.getCachedPageTextLayout(pageIndex);
           if (layout) {
@@ -2040,6 +2077,7 @@ export class PointerHandler {
   private commitSelectDrag(): void {
     const drag = this._selectDrag;
     this._selectDrag = null;
+    this._activeLoupeTarget = null;
     if (!drag) return;
     const doc = store.activeDocument;
     if (!doc?.annotations[drag.pageIndex]) return;
@@ -2053,6 +2091,150 @@ export class PointerHandler {
     if (pairs.length > 0) {
       history.pushCommitted(new BulkModifyCommand(drag.pageIndex, pairs));
     }
+  }
+
+  /**
+   * Renders a precision circular magnifier loupe above (or below near the top edge)
+   * the dragged shape vertex/endpoint/resize indicator handle so the user can see
+   * the exact PDF content and corner position beneath the pointer.
+   */
+  private renderHandleLoupe(
+    ctx: CanvasRenderingContext2D,
+    scratchCanvas: HTMLCanvasElement,
+    pageIndex: number,
+    targetPt: Point,
+    renderScale: number
+  ): void {
+    const pageBounds = this.getPageBounds(pageIndex, scratchCanvas);
+    const zoom = Math.max(store.zoom || 1, 0.25);
+    const invZoom = 1 / zoom;
+    const placement = computeHandleLoupePlacement(targetPt, pageBounds.width, pageBounds.height, zoom);
+    const { loupeCenter, radiusPage, magnification } = placement;
+    const isDarkPdf = typeof document !== 'undefined' && document.body?.classList.contains('invert-pdf-document');
+
+    ctx.save();
+    ctx.scale(renderScale, renderScale);
+
+    // 1. Subtle connector stem & target indicator ring at the exact corner coordinate
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([2.5 * invZoom, 2.5 * invZoom]);
+    ctx.moveTo(targetPt.x, targetPt.y);
+    ctx.lineTo(loupeCenter.x, loupeCenter.y);
+    ctx.strokeStyle = 'rgba(79, 70, 229, 0.55)';
+    ctx.lineWidth = 1.2 * invZoom;
+    ctx.stroke();
+    ctx.restore();
+
+    // 2. Outer drop shadow & opaque backing disc for the lens
+    ctx.save();
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.32)';
+    ctx.shadowBlur = 14 * invZoom;
+    ctx.shadowOffsetY = 4 * invZoom;
+    ctx.beginPath();
+    ctx.arc(loupeCenter.x, loupeCenter.y, radiusPage, 0, Math.PI * 2);
+    ctx.fillStyle = isDarkPdf ? '#14171f' : '#ffffff';
+    ctx.fill();
+    ctx.restore();
+
+    // 3. Clipped magnified view (2.5x) of the underlying PDF page + annotations
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(loupeCenter.x, loupeCenter.y, radiusPage, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.translate(loupeCenter.x, loupeCenter.y);
+    ctx.scale(magnification, magnification);
+    ctx.translate(-targetPt.x, -targetPt.y);
+
+    // 3a. Composite underlying PDF page canvas (respecting dark mode inversion if active)
+    const container = scratchCanvas.parentElement;
+    const pdfCanvas = container?.querySelector<HTMLCanvasElement>('.pdf-page-canvas:not(.pdf-chunk-canvas)');
+    if (pdfCanvas && pdfCanvas.width > 1 && pdfCanvas.height > 1 && pageBounds.width > 0 && pageBounds.height > 0) {
+      ctx.save();
+      if (isDarkPdf) {
+        ctx.filter = 'invert(0.9) hue-rotate(180deg)';
+      }
+      ctx.drawImage(pdfCanvas, 0, 0, pageBounds.width, pageBounds.height);
+      ctx.restore();
+    }
+
+    // 3b. Render background paper grid/lines (if enabled) and vector-crisp annotations at 2.5x
+    if (store.appSettings.backgroundPattern !== 'none' && pageBounds.width > 0 && pageBounds.height > 0) {
+      annotationEngine.renderBackgroundPattern(
+        ctx,
+        pageBounds.width,
+        pageBounds.height,
+        store.appSettings.backgroundPattern,
+        1.0,
+        store.appSettings.gridSize
+      );
+    }
+    annotationEngine.renderAnnotationsToCanvas(ctx, pageIndex, 1.0);
+    ctx.restore();
+
+    // 4. Precision crosshair reticle inside the loupe (with an unobstructed center gap)
+    ctx.save();
+    const gap = 3.5 * invZoom;
+    const arm = radiusPage * 0.58;
+    ctx.strokeStyle = isDarkPdf ? 'rgba(165, 180, 252, 0.78)' : 'rgba(79, 70, 229, 0.72)';
+    ctx.lineWidth = 1.1 * invZoom;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    // Horizontal arms
+    ctx.moveTo(loupeCenter.x - arm, loupeCenter.y);
+    ctx.lineTo(loupeCenter.x - gap, loupeCenter.y);
+    ctx.moveTo(loupeCenter.x + gap, loupeCenter.y);
+    ctx.lineTo(loupeCenter.x + arm, loupeCenter.y);
+    // Vertical arms
+    ctx.moveTo(loupeCenter.x, loupeCenter.y - arm);
+    ctx.lineTo(loupeCenter.x, loupeCenter.y - gap);
+    ctx.moveTo(loupeCenter.x, loupeCenter.y + gap);
+    ctx.lineTo(loupeCenter.x, loupeCenter.y + arm);
+    ctx.stroke();
+
+    // Center precision target ring
+    ctx.beginPath();
+    ctx.arc(loupeCenter.x, loupeCenter.y, gap, 0, Math.PI * 2);
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.3 * invZoom;
+    ctx.stroke();
+
+    // Coordinate readout pill at the bottom of the lens
+    const coordText = `${Math.round(targetPt.x)}, ${Math.round(targetPt.y)}`;
+    ctx.font = `600 ${9.5 * invZoom}px Inter, -apple-system, sans-serif`;
+    const pillW = Math.max(42 * invZoom, ctx.measureText(coordText).width + 10 * invZoom);
+    const pillH = 14 * invZoom;
+    const pillX = loupeCenter.x - pillW / 2;
+    const pillY = loupeCenter.y + radiusPage - pillH - 4 * invZoom;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+    ctx.beginPath();
+    if ((ctx as any).roundRect) {
+      (ctx as any).roundRect(pillX, pillY, pillW, pillH, 4 * invZoom);
+    } else {
+      ctx.rect(pillX, pillY, pillW, pillH);
+    }
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(coordText, loupeCenter.x, pillY + pillH / 2);
+
+    // 5. Double-ring lens bezel (crisp white inner ring + indigo outer ring)
+    ctx.beginPath();
+    ctx.arc(loupeCenter.x, loupeCenter.y, radiusPage - 1.5 * invZoom, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.lineWidth = 2.0 * invZoom;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(loupeCenter.x, loupeCenter.y, radiusPage, 0, Math.PI * 2);
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 2.2 * invZoom;
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
   }
 
   /** Renders the dashed rubber band for region selection. */

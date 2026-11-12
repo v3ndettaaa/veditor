@@ -34,26 +34,6 @@ export function isDocumentDirty(docId: string): boolean {
   return (doc.lastModifiedAt ?? 0) > (doc.lastSavedAt ?? doc.createdAt ?? 0);
 }
 
-function hasCompositeAnnotations(): boolean {
-  const doc = store.activeDocument;
-  if (!doc) return false;
-  for (const key of Object.keys(doc.annotations)) {
-    const anns = doc.annotations[Number(key)] || [];
-    if (
-      anns.some(
-        (a) =>
-          a.type === 'signature' ||
-          a.type === 'measure-distance' ||
-          a.type === 'measure-angle' ||
-          a.type === 'measure-area'
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function hasUserPageRotations(): boolean {
   for (const rot of Object.values(store.pageRotations)) {
     if (((rot || 0) % 360 + 360) % 360 !== 0) {
@@ -153,18 +133,19 @@ export async function saveActiveDocument(): Promise<boolean> {
 
     showToast(tr('Saving…', 'در حال ذخیره…'), 'progress');
 
-    // Keep session bytes un-flattened and un-rotated (since store.pageRotations stays active in memory)
+    // Keep session bytes un-flattened and un-rotated (since store.pageRotations stays active in memory).
+    // Composite annotations are embedded as removable VEditorComposite /Stamp annotations, so only
+    // user page rotations require a second build pass.
     const sessionBytes = await buildSavedBytes({
       flatten: false,
-      embedCompositeAnnotations: false,
+      embedCompositeAnnotations: true,
       bakePageRotations: false
     });
-    const diskBytes = (hasCompositeAnnotations() || hasUserPageRotations())
+    const diskBytes = hasUserPageRotations()
       ? await buildSavedBytes({ flatten: false, embedCompositeAnnotations: true, bakePageRotations: true })
       : sessionBytes;
 
     doc.fileData = sessionBytes;
-    await refreshEngineFromSavedBytes(doc.id, sessionBytes);
 
     if (isDesktop() && desktopPath) {
       const wrote = await nativeWriteFile(desktopPath, diskBytes);
@@ -184,7 +165,6 @@ export async function saveActiveDocument(): Promise<boolean> {
         );
       }
       store.notify();
-      viewportManager.updateLayout(true);
       return wrote;
     }
 
@@ -209,7 +189,6 @@ export async function saveActiveDocument(): Promise<boolean> {
       showToast(tr('Saved', 'ذخیره شد'), 'success');
     }
     store.notify();
-    viewportManager.updateLayout(true);
     return true;
   } catch (e: any) {
     console.error('Save failed:', e);
@@ -300,12 +279,12 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
             }
             doc.fileData = diskBytes;
           } else {
-            const sessionBytes = (hasCompositeAnnotations() || hasUserPageRotations())
+            const sessionBytes = hasUserPageRotations()
               ? await buildSavedBytes({
                   dpi: opts.dpi,
                   flatten: false,
                   darkMode: opts.darkMode === true,
-                  embedCompositeAnnotations: false,
+                  embedCompositeAnnotations: true,
                   bakePageRotations: false
                 })
               : diskBytes;
@@ -322,9 +301,13 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
           if (tab) tab.name = chosenName;
           if (result.handle) rememberFileHandle(doc.id, result.handle);
           await saveDocumentSession(doc, { includeBytes: true });
-          await refreshEngineFromSavedBytes(doc.id, doc.fileData);
-          store.notify();
-          viewportManager.updateLayout(true);
+          if (opts.flatten || opts.darkMode) {
+            await refreshEngineFromSavedBytes(doc.id, doc.fileData);
+            store.notify();
+            viewportManager.updateLayout(true);
+          } else {
+            store.notify();
+          }
           showToast(tr(`Saved as ${chosenName}`, `با نام ${chosenName} ذخیره شد`), 'success');
           resolve(true);
         } catch (e: any) {

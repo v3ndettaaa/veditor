@@ -4,9 +4,9 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist';
-import { PDFDocument, PDFName } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFString } from 'pdf-lib';
 import { importNativeAnnotations, stripImportedNativeAnnotations } from './native-annotations';
-import { PageInfo, PDFBookmarkItem, PDFLinkItem, PenAnnotation, HighlighterAnnotation, StrokePoint } from './types';
+import { Annotation, PageInfo, PDFBookmarkItem, PDFLinkItem, PenAnnotation, HighlighterAnnotation, StrokePoint, UserBookmarkItem } from './types';
 import { extensionApi } from '../utils/browser-compat';
 import { store } from './store';
 import {
@@ -16,8 +16,9 @@ import {
   resolveRenderDpr
 } from '../utils/dpi';
 import {
-  stripNativeInkAnnotationsFromBytes,
+  stripNativeInkAnnotations,
   extractNativeInkToolMap,
+  extractNativeInkMetaMap,
   bytesMayContainInkAnnotations
 } from './native-ink';
 import { extractPageTextLayout, getTextRangeRects, PageTextLayout } from './pdf-text-layout';
@@ -154,18 +155,19 @@ export class PDFEngine {
       prev.renderedBitmaps = this._renderedBitmaps;
     }
 
-    // Clone bytes and strip native /Ink annotations from the render copy so
-    // PDF.js does not bake them into the base raster underneath our editable
-    // vector strokes (caller's original Uint8Array stays untouched for import).
-    let dataCopy: Uint8Array = await stripNativeInkAnnotationsFromBytes(data.slice(0));
+    // Clone bytes and strip native /Ink + VEditor annotations from the render copy
+    // in a single pass so PDF.js does not bake them into the base raster underneath
+    // our editable vector strokes (caller's original Uint8Array stays untouched).
+    let dataCopy: Uint8Array = data.slice(0);
     try {
       const renderDocument = await PDFDocument.load(dataCopy, { ignoreEncryption: true, updateMetadata: false });
-      const stripped = stripImportedNativeAnnotations(renderDocument);
-      if (stripped) {
-        dataCopy = new Uint8Array(await renderDocument.save());
+      const inkStripped = stripNativeInkAnnotations(renderDocument);
+      const nativeStripped = stripImportedNativeAnnotations(renderDocument);
+      if (inkStripped || nativeStripped) {
+        dataCopy = new Uint8Array(await renderDocument.save({ useObjectStreams: false }));
       }
     } catch (e) {
-      console.warn('Could not strip native non-ink annotations for rendering:', e);
+      console.warn('Could not strip native annotations for rendering:', e);
     }
 
     const localBase = resolveAssetUrl('');
@@ -414,21 +416,77 @@ export class PDFEngine {
    * open, never on every reload, so re-opening a session never duplicates
    * strokes that were already imported.
    */
+  private _lastExtractedBookmarks: UserBookmarkItem[] = [];
+
+  public getLastExtractedUserBookmarks(): UserBookmarkItem[] {
+    return this._lastExtractedBookmarks;
+  }
+
+  private parseVEditorStateFromDoc(pdfDoc: PDFDocument): {
+    userBookmarks: UserBookmarkItem[];
+    compositeAnnotations: Array<{ pageIndex: number; annotation: Annotation }>;
+  } {
+    const userBookmarks: UserBookmarkItem[] = [];
+    const compositeAnnotations: Array<{ pageIndex: number; annotation: Annotation }> = [];
+    try {
+      const rawObj = pdfDoc.context.lookup(pdfDoc.catalog.get(PDFName.of('VEditorState')));
+      const jsonStr =
+        rawObj instanceof PDFHexString || rawObj instanceof PDFString
+          ? rawObj.decodeText()
+          : undefined;
+      if (!jsonStr) return { userBookmarks, compositeAnnotations };
+      const parsed = JSON.parse(jsonStr);
+      if (Array.isArray(parsed?.userBookmarks)) {
+        for (const bm of parsed.userBookmarks) {
+          if (bm && typeof bm.id === 'string' && typeof bm.title === 'string' && typeof bm.pageIndex === 'number') {
+            userBookmarks.push({
+              id: bm.id,
+              title: bm.title,
+              pageIndex: bm.pageIndex,
+              ...(typeof bm.note === 'string' && bm.note.trim() ? { note: bm.note.trim() } : {}),
+              createdAt: typeof bm.createdAt === 'number' ? bm.createdAt : Date.now(),
+              ...(typeof bm.updatedAt === 'number' ? { updatedAt: bm.updatedAt } : {})
+            });
+          }
+        }
+      }
+      if (parsed?.compositeAnnotations && typeof parsed.compositeAnnotations === 'object') {
+        for (const [pageKey, list] of Object.entries(parsed.compositeAnnotations)) {
+          const pageIndex = Number(pageKey);
+          if (!Number.isInteger(pageIndex) || pageIndex < 0 || !Array.isArray(list)) continue;
+          for (const ann of list) {
+            if (ann && typeof ann === 'object' && typeof (ann as any).id === 'string' && typeof (ann as any).type === 'string') {
+              compositeAnnotations.push({ pageIndex, annotation: { ...(ann as Annotation), pageIndex } });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse VEditorState from PDF catalog:', e);
+    }
+    return { userBookmarks, compositeAnnotations };
+  }
+
   public async extractNativeAnnotations(bytes: Uint8Array) {
     let toolMap: Map<string, 'pen' | 'highlighter'> | undefined;
+    let metaMap: Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }> | undefined;
     const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
     if (bytesMayContainInkAnnotations(bytes)) {
       try {
         toolMap = extractNativeInkToolMap(pdfDoc);
+        metaMap = extractNativeInkMetaMap(pdfDoc);
       } catch (_) {}
     }
-    const inkStrokes = await this.extractNativeInkStrokes(bytes, toolMap);
-    return [...inkStrokes, ...importNativeAnnotations(pdfDoc)];
+    const { userBookmarks, compositeAnnotations } = this.parseVEditorStateFromDoc(pdfDoc);
+    this._lastExtractedBookmarks = userBookmarks;
+    const inkStrokes = await this.extractNativeInkStrokes(bytes, toolMap, metaMap);
+    return [...inkStrokes, ...importNativeAnnotations(pdfDoc), ...compositeAnnotations];
   }
 
   public async extractNativeInkStrokes(
     bytes: Uint8Array,
-    toolMap?: Map<string, 'pen' | 'highlighter'>
+    toolMap?: Map<string, 'pen' | 'highlighter'>,
+    metaMap?: Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }>
   ): Promise<Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }>> {
     if (!bytesMayContainInkAnnotations(bytes)) return [];
     const results: Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }> = [];
@@ -460,12 +518,16 @@ export class PDFEngine {
             ? `#${colorEntries.slice(0, 3).map((c: number) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('')}`
             : '#000000';
           const width = Number.isFinite(a.borderStyle?.width) && a.borderStyle.width > 0 ? a.borderStyle.width : 1.5;
-          const opacity = Number.isFinite(a.opacity) ? a.opacity : 1;
           const annotationName = typeof a.annotationName === 'string' && a.annotationName
             ? a.annotationName
             : (typeof a.id === 'string' && a.id ? a.id : '');
+          const inkMeta = annotationName ? metaMap?.get(annotationName) : undefined;
+          const opacity = typeof inkMeta?.opacity === 'number' && Number.isFinite(inkMeta.opacity)
+            ? inkMeta.opacity
+            : (Number.isFinite(a.opacity) ? a.opacity : 1);
 
           const isHighlighter =
+            inkMeta?.tool === 'highlighter' ||
             (annotationName && toolMap?.get(annotationName) === 'highlighter') ||
             (opacity <= 0.5 && width >= 10);
 
@@ -493,8 +555,9 @@ export class PDFEngine {
               : (annotationName || `ink_${Math.random().toString(36).slice(2, 10)}_${now.toString(36)}`);
 
             if (isHighlighter) {
+              const effOpacity = Math.max(0.05, Math.min(1, opacity));
               const hlColor = color.startsWith('#') && color.length === 7
-                ? `rgba(${parseInt(color.slice(1, 3), 16)}, ${parseInt(color.slice(3, 5), 16)}, ${parseInt(color.slice(5, 7), 16)}, ${Math.max(0.18, Math.min(0.6, opacity))})`
+                ? `rgba(${parseInt(color.slice(1, 3), 16)}, ${parseInt(color.slice(3, 5), 16)}, ${parseInt(color.slice(5, 7), 16)}, ${effOpacity})`
                 : color;
               results.push({
                 pageIndex: n - 1,
@@ -506,12 +569,12 @@ export class PDFEngine {
                   box: { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
                   createdAt: now,
                   updatedAt: now,
-                  opacity: Math.max(0.18, Math.min(0.6, opacity)),
+                  opacity: effOpacity,
                   points,
                   color: hlColor,
                   strokeWidth: width,
                   blendMode: 'source-over',
-                  tipShape: 'round'
+                  tipShape: inkMeta?.tipShape || 'round'
                 }
               });
             } else {

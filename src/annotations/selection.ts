@@ -367,6 +367,175 @@ export type HandleType =
   | `vertex:${number}`
   | null;
 
+export interface ShapeHandleMetrics {
+  /** Characteristic span of the shape (shortest edge or minimum box dimension, in page units). */
+  characteristicSpan: number;
+  /** Normalized scale factor in [0.36, 1.0] proportional to shape size. */
+  sizeFactor: number;
+  /** Inner white/indigo circle radius for vertex & endpoint handles (in page units). */
+  handleRadius: number;
+  /** Soft outer halo radius around vertex handles (in page units). */
+  outerRadius: number;
+  /** Precision center dot radius inside vertex handles (in page units). */
+  centerDotRadius: number;
+  /** Ring stroke width for handles (in page units). */
+  strokeWidth: number;
+  /** Side length for square/rounded-rect box resize handles (in page units). */
+  boxHandleSize: number;
+  /** Distance from the top of the bounding box to the rotation handle (in page units). */
+  rotDist: number;
+  /** Edge pill width/length for rectangle side handles (in page units). */
+  edgePillLong: number;
+  /** Edge pill thickness for rectangle side handles (in page units). */
+  edgePillShort: number;
+}
+
+/**
+ * Computes handle radii, stroke widths, and rotation stem distance proportional
+ * to the drawn shape's geometry so small shapes never get overwhelmed by large indicators.
+ */
+export function computeShapeHandleMetrics(
+  box: BoundingBox,
+  vertices?: Point[] | null,
+  isClosed: boolean = true,
+  zoom: number = 1.0
+): ShapeHandleMetrics {
+  let characteristicSpan = Math.max(4, Math.min(box.width || 0, box.height || 0));
+  if (vertices && vertices.length >= 2) {
+    if (vertices.length === 2) {
+      characteristicSpan = Math.max(4, distance(vertices[0], vertices[1]));
+    } else {
+      let minEdge = Infinity;
+      for (let i = 0; i + 1 < vertices.length; i++) {
+        const d = distance(vertices[i], vertices[i + 1]);
+        if (d > 0.5 && d < minEdge) minEdge = d;
+      }
+      if (isClosed && vertices.length >= 3) {
+        const closeD = distance(vertices[vertices.length - 1], vertices[0]);
+        if (closeD > 0.5 && closeD < minEdge) minEdge = closeD;
+      }
+      const boxMin = Math.min(box.width || Infinity, box.height || Infinity);
+      const rawSpan = Math.min(minEdge, boxMin > 0 ? boxMin : minEdge);
+      characteristicSpan = Math.max(4, Number.isFinite(rawSpan) ? rawSpan : 32);
+    }
+  } else if (!Number.isFinite(characteristicSpan) || characteristicSpan <= 0) {
+    characteristicSpan = Math.max(4, Math.hypot(box.width || 0, box.height || 0));
+  }
+
+  const safeZoom = Math.max(0.5, zoom || 1);
+  const zoomDampen = safeZoom > 1 ? 1 / Math.pow(safeZoom, 0.5) : 1;
+  const t = Math.max(0, Math.min(1, (characteristicSpan - 6) / (72 - 6)));
+  const sizeFactor = (0.32 + 0.68 * t) * zoomDampen;
+  const handleRadius = Math.max(1.35, Math.min(4.2 * sizeFactor, characteristicSpan * 0.14));
+  const outerRadius = handleRadius * 1.36;
+  const centerDotRadius = Math.max(0.55, handleRadius * 0.32);
+  const strokeWidth = Math.max(0.95, Math.min(1.65, 1.65 * sizeFactor));
+  const boxHandleSize = Math.max(2.4, Math.min(6.8 * sizeFactor, characteristicSpan * 0.22));
+  const rotDist = Math.max(10, Math.round(22 * (0.42 + 0.58 * t) * zoomDampen));
+  const edgePillLong = Math.max(4.5, 8.5 * sizeFactor);
+  const edgePillShort = Math.max(2.0, 3.4 * sizeFactor);
+
+  return {
+    characteristicSpan,
+    sizeFactor,
+    handleRadius,
+    outerRadius,
+    centerDotRadius,
+    strokeWidth,
+    boxHandleSize,
+    rotDist,
+    edgePillLong,
+    edgePillShort
+  };
+}
+
+export interface HandleLoupePlacement {
+  /** Center of the circular magnifier lens in page coordinates. */
+  loupeCenter: Point;
+  /** Radius of the circular magnifier lens in page coordinates. */
+  radiusPage: number;
+  /** Zoom magnification factor inside the lens (relative to current page view). */
+  magnification: number;
+  /** True when the loupe flipped below the target point to avoid clipping at the top edge. */
+  placedBelow: boolean;
+}
+
+/**
+ * Computes the screen-constant, boundary-clamped placement for the precision
+ * magnifier loupe shown while dragging a shape corner/vertex/resize handle.
+ */
+export function computeHandleLoupePlacement(
+  targetPt: Point,
+  pageWidth: number,
+  pageHeight: number,
+  zoom: number = 1.0
+): HandleLoupePlacement {
+  const safeZoom = Math.max(zoom || 1, 0.25);
+  const radiusPage = 46 / safeZoom;
+  const offsetDist = 72 / safeZoom;
+  const edgePad = 8 / safeZoom;
+  const topThreshold = radiusPage + edgePad;
+
+  const placedBelow = targetPt.y - offsetDist < topThreshold;
+  const rawY = placedBelow ? targetPt.y + offsetDist : targetPt.y - offsetDist;
+
+  const minX = radiusPage + edgePad;
+  const maxX = pageWidth > minX * 2 ? pageWidth - radiusPage - edgePad : Math.max(minX, targetPt.x);
+  const minY = radiusPage + edgePad;
+  const maxY = pageHeight > minY * 2 ? pageHeight - radiusPage - edgePad : Math.max(minY, rawY);
+
+  return {
+    loupeCenter: {
+      x: pageWidth > 0 ? Math.max(minX, Math.min(maxX, targetPt.x)) : targetPt.x,
+      y: pageHeight > 0 ? Math.max(minY, Math.min(maxY, rawY)) : rawY
+    },
+    radiusPage,
+    magnification: 2.5,
+    placedBelow
+  };
+}
+
+/**
+ * Resolves the exact page-space coordinate of the dragged indicator handle on `ann`
+ * so the magnifier loupe crosshair stays locked onto the true shape corner/vertex.
+ */
+export function resolveDraggedHandleTargetPoint(
+  ann: Annotation | undefined,
+  handle: Exclude<HandleType, null>,
+  fallbackPt: Point
+): Point {
+  if (!ann) return fallbackPt;
+  if (handle === 'start' || handle === 'end') {
+    const endpoints = getAnnotationEndpoints(ann);
+    if (endpoints) return handle === 'start' ? endpoints[0] : endpoints[1];
+    return fallbackPt;
+  }
+  if (typeof handle === 'string' && handle.startsWith('vertex:')) {
+    const idx = parseInt(handle.slice(7), 10);
+    const verts = getAnnotationVertices(ann);
+    if (verts && idx >= 0 && idx < verts.length) {
+      return verts[idx];
+    }
+    return fallbackPt;
+  }
+  const b = ann.box;
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  const handleMap: Partial<Record<Exclude<HandleType, null>, Point>> = {
+    nw: { x: b.x, y: b.y },
+    n: { x: cx, y: b.y },
+    ne: { x: b.x + b.width, y: b.y },
+    e: { x: b.x + b.width, y: cy },
+    se: { x: b.x + b.width, y: b.y + b.height },
+    s: { x: cx, y: b.y + b.height },
+    sw: { x: b.x, y: b.y + b.height },
+    w: { x: b.x, y: cy }
+  };
+  const pt = handleMap[handle];
+  if (!pt) return fallbackPt;
+  return ann.rotation ? rotatePoint(pt, { x: cx, y: cy }, ann.rotation) : pt;
+}
+
 export class SelectionManager {
   private _handleSize = 8;
   private _rotHandleDistance = 24;
@@ -381,9 +550,11 @@ export class SelectionManager {
       // 1. Two-point line / arrow endpoint handles ('start' and 'end')
       const endpoints = getAnnotationEndpoints(ann);
       if (endpoints) {
+        const segLen = distance(endpoints[0], endpoints[1]);
+        const endpointGrab = Math.min(10 / safeScale, Math.max(4.5 / safeScale, segLen * 0.34));
         const startDistance = distance(point, endpoints[0]);
         const endDistance = distance(point, endpoints[1]);
-        if (Math.min(startDistance, endDistance) <= 10 / safeScale) {
+        if (Math.min(startDistance, endDistance) <= endpointGrab) {
           return startDistance <= endDistance ? 'start' : 'end';
         }
         const strokePad = Math.max(8 / safeScale, ((ann as ShapeAnnotation).strokeWidth || 2) * 0.75);
@@ -397,7 +568,16 @@ export class SelectionManager {
       if (isVertexSelectionShape(ann)) {
         const vertices = getAnnotationVertices(ann);
         if (vertices && vertices.length >= 2) {
-          const grabRadius = 10.5 / safeScale;
+          const isClosed =
+            ann.type === 'polygon' ||
+            ann.type === 'freeform-shape' ||
+            ann.type === 'rectangle' ||
+            ann.type === 'measure-area';
+          const metrics = computeShapeHandleMetrics(ann.box, vertices, isClosed);
+          const grabRadius = Math.min(
+            10.5 / safeScale,
+            Math.max(4.5 / safeScale, metrics.characteristicSpan * 0.34)
+          );
           let bestIdx = -1;
           let bestDist = grabRadius;
           for (let i = 0; i < vertices.length; i++) {
@@ -418,7 +598,7 @@ export class SelectionManager {
           const cy = box.y + box.height / 2;
 
           // Rotation handle above shape
-          const rotPt: Point = { x: cx, y: box.y - this._rotHandleDistance };
+          const rotPt: Point = { x: cx, y: box.y - metrics.rotDist };
           if (distance(local, rotPt) <= 10 / safeScale) {
             return 'rot';
           }
@@ -432,8 +612,9 @@ export class SelectionManager {
               s: { x: cx, y: box.y + box.height },
               w: { x: box.x, y: cy }
             };
+            const edgeGrab = Math.min(9.5 / safeScale, Math.max(4 / safeScale, metrics.characteristicSpan * 0.25));
             for (const [k, pt] of Object.entries(edgeHandles) as Array<['n' | 'e' | 's' | 'w', Point]>) {
-              if (distance(local, pt) <= 9.5 / safeScale) {
+              if (distance(local, pt) <= edgeGrab) {
                 return k;
               }
             }
@@ -446,10 +627,6 @@ export class SelectionManager {
             return null;
           }
 
-          const isClosed =
-            ann.type === 'polygon' ||
-            ann.type === 'freeform-shape' ||
-            ann.type === 'measure-area';
           for (let i = 0; i + 1 < vertices.length; i++) {
             if (distanceToSegment(point, vertices[i], vertices[i + 1]) <= strokePad) {
               return 'body';
@@ -483,24 +660,25 @@ export class SelectionManager {
    */
   public hitTestHandles(point: Point, box: BoundingBox, scale: number = 1.0, rotation: number = 0): HandleType {
     const local = rotation ? rotatePoint(point, boxCenter(box), -rotation) : point;
-    // Scale handle size adaptively: on small boxes scale down from 8px to 5px so handles stay proportional
-    const minDim = Math.min(box.width, box.height) * scale;
-    const baseHs = Math.max(5, Math.min(this._handleSize, minDim / 4));
-    const hs = baseHs / scale;
-    const rotDist = this._rotHandleDistance;
+    const safeScale = Math.max(scale, 0.25);
+    const metrics = computeShapeHandleMetrics(box);
+    const hs = metrics.boxHandleSize;
+    const rotDist = metrics.rotDist;
 
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
     let bestHandle: HandleType | null = null;
-    // Generous grab zones: handles draw only a few CSS pixels wide on HiDPI
-    // screens, so the hit area must be meaningfully larger than the visual.
-    let bestDist = hs * 2.4;
+    const handleGrab = Math.min(
+      Math.max(hs * 1.9, 9 / safeScale),
+      Math.max(4.5 / safeScale, metrics.characteristicSpan * 0.36)
+    );
+    let bestDist = handleGrab * 1.15;
 
     // Rotation handle (tested in the unrotated frame like everything else)
     const rotPt: Point = { x: cx, y: box.y - rotDist };
     const dRot = distance(local, rotPt);
-    if (dRot <= hs * 2.2) {
+    if (dRot <= Math.max(hs * 2.0, 9 / safeScale)) {
       bestHandle = 'rot';
       bestDist = dRot;
     }
@@ -524,7 +702,7 @@ export class SelectionManager {
 
     for (const [key, pt] of Object.entries(handles)) {
       const d = distance(local, pt);
-      if (d <= hs * 2.0 && d < bestDist) {
+      if (d <= handleGrab && d < bestDist) {
         bestDist = d;
         bestHandle = key as HandleType;
       }
@@ -798,6 +976,8 @@ export class SelectionManager {
       return;
     }
 
+    const metrics = computeShapeHandleMetrics(ann.box, vertices, isClosed);
+
     // 2. Rotation stem & handle + side handles for rectangles (in rotated frame)
     const endpoints = getAnnotationEndpoints(ann);
     if (!endpoints) {
@@ -805,9 +985,8 @@ export class SelectionManager {
       const rot = ann.rotation || 0;
       const cx = box.x + box.width / 2;
       const cy = box.y + box.height / 2;
-      const rotDist = this._rotHandleDistance;
-      const minDim = Math.min(box.width, box.height);
-      const hs = Math.max(5, Math.min(this._handleSize, minDim / 4));
+      const rotDist = metrics.rotDist;
+      const hs = metrics.boxHandleSize;
 
       ctx.save();
       if (rot) {
@@ -822,7 +1001,7 @@ export class SelectionManager {
       ctx.moveTo(cx, box.y);
       ctx.lineTo(cx, box.y - rotDist);
       ctx.strokeStyle = '#4f46e5';
-      ctx.lineWidth = 1.4;
+      ctx.lineWidth = Math.max(1.0, 1.4 * metrics.sizeFactor);
       ctx.stroke();
 
       ctx.save();
@@ -834,29 +1013,31 @@ export class SelectionManager {
       ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#4f46e5';
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = metrics.strokeWidth;
       ctx.stroke();
 
       ctx.fillStyle = '#4f46e5';
       ctx.beginPath();
-      ctx.arc(cx, box.y - rotDist, 1.8, 0, Math.PI * 2);
+      ctx.arc(cx, box.y - rotDist, metrics.centerDotRadius, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
 
       // For rectangles, also render subtle edge-midpoint handles (n, e, s, w)
       // so both free-corner dragging (via corner circles) and 90-degree edge resizing work seamlessly
       if (ann.type === 'rectangle' && box.width >= 24 && box.height >= 24) {
+        const ehLong = metrics.edgePillLong;
+        const ehShort = metrics.edgePillShort;
         const edgeHandles = [
-          { x: cx, y: box.y, w: 10, h: 4 },
-          { x: box.x + box.width, y: cy, w: 4, h: 10 },
-          { x: cx, y: box.y + box.height, w: 10, h: 4 },
-          { x: box.x, y: cy, w: 4, h: 10 }
+          { x: cx, y: box.y, w: ehLong, h: ehShort },
+          { x: box.x + box.width, y: cy, w: ehShort, h: ehLong },
+          { x: cx, y: box.y + box.height, w: ehLong, h: ehShort },
+          { x: box.x, y: cy, w: ehShort, h: ehLong }
         ];
         ctx.save();
         ctx.setLineDash([]);
         ctx.fillStyle = '#ffffff';
         ctx.strokeStyle = '#4f46e5';
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = Math.max(1.0, 1.4 * metrics.sizeFactor);
         for (const eh of edgeHandles) {
           ctx.beginPath();
           if ((ctx as any).roundRect) {
@@ -873,11 +1054,12 @@ export class SelectionManager {
       ctx.restore();
     }
 
-    // 3. Circular draggable vertex handles on every corner / vertex of the shape
+    // 3. Circular draggable vertex handles on every corner / vertex of the shape,
+    // scaled proportionally to the shape's dimensions so small shapes stay clean and unobstructed.
     ctx.save();
     ctx.setLineDash([]);
-    const outerRadius = 7.5;
-    const handleRadius = 5.2;
+    const outerRadius = metrics.outerRadius;
+    const handleRadius = metrics.handleRadius;
     for (const pt of vertices) {
       // Soft halo for clear visual affordance
       ctx.fillStyle = 'rgba(79, 70, 229, 0.16)';
@@ -888,7 +1070,7 @@ export class SelectionManager {
       // Crisp white vertex circle with indigo ring
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = '#4f46e5';
-      ctx.lineWidth = 1.9;
+      ctx.lineWidth = metrics.strokeWidth;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, handleRadius, 0, Math.PI * 2);
       ctx.fill();
@@ -897,7 +1079,7 @@ export class SelectionManager {
       // Precision center dot
       ctx.fillStyle = '#4f46e5';
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 1.8, 0, Math.PI * 2);
+      ctx.arc(pt.x, pt.y, metrics.centerDotRadius, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
@@ -920,9 +1102,9 @@ export class SelectionManager {
     const cy = box.y + box.height / 2;
     const rx = Math.max(1, box.width / 2);
     const ry = Math.max(1, box.height / 2);
-    const minDim = Math.min(box.width, box.height);
-    const hs = Math.max(5, Math.min(this._handleSize, minDim / 4));
-    const rotDist = this._rotHandleDistance;
+    const metrics = computeShapeHandleMetrics(box);
+    const hs = metrics.boxHandleSize;
+    const rotDist = metrics.rotDist;
 
     ctx.save();
     ctx.scale(scale, scale);
@@ -951,18 +1133,18 @@ export class SelectionManager {
     ctx.moveTo(cx, box.y);
     ctx.lineTo(cx, box.y - rotDist);
     ctx.strokeStyle = '#4f46e5';
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = Math.max(1.0, 1.4 * metrics.sizeFactor);
     ctx.stroke();
 
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#4f46e5';
-    ctx.lineWidth = 1.8;
+    ctx.lineWidth = metrics.strokeWidth;
     ctx.beginPath();
     ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    // Cardinal & corner handles
+    // Cardinal & corner handles scaled proportionally to ellipse size
     const handles: Point[] = [
       { x: cx, y: box.y },
       { x: box.x + box.width, y: cy },
@@ -973,12 +1155,13 @@ export class SelectionManager {
       { x: box.x + box.width, y: box.y + box.height },
       { x: box.x, y: box.y + box.height }
     ];
+    const ellipseHandleR = Math.max(1.8, metrics.handleRadius * 0.92);
     for (const h of handles) {
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = '#4f46e5';
-      ctx.lineWidth = 1.7;
+      ctx.lineWidth = metrics.strokeWidth;
       ctx.beginPath();
-      ctx.arc(h.x, h.y, 4.6, 0, Math.PI * 2);
+      ctx.arc(h.x, h.y, ellipseHandleR, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -1005,9 +1188,9 @@ export class SelectionManager {
       ctx.translate(-c.x, -c.y);
     }
 
-    const minDim = Math.min(box.width, box.height);
-    const hs = Math.max(5, Math.min(this._handleSize, minDim / 4));
-    const rotDist = this._rotHandleDistance;
+    const metrics = computeShapeHandleMetrics(box);
+    const hs = metrics.boxHandleSize;
+    const rotDist = metrics.rotDist;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
     const isCompact = box.width < 36 || box.height < 36;

@@ -6,6 +6,7 @@ import type { PDFFont } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import type { Annotation, BoundingBox, HighlighterAnnotation, Point, ShapeAnnotation, StampAnnotation, StickyNoteAnnotation, TextAnnotation } from './types';
 import { STAMP_PRESETS } from '../annotations/tools/stamp';
+import { computeArrowHeadGeometry } from '../utils/geometry';
 
 type QuadHighlight = HighlighterAnnotation & { quadPoints: Point[][] };
 type NativeAnnotation = TextAnnotation | ShapeAnnotation | QuadHighlight | StampAnnotation | StickyNoteAnnotation;
@@ -328,7 +329,7 @@ function parse(dict: PDFDict, page: PDFPage, pageIndex: number, id: string): Nat
   }
   const stored = get(dict, 'VEditorData');
   if (stored !== undefined) {
-    if (number(dict, 'VEditorNative', 0) !== 1) throw new Error('Unmarked internal data');
+    if (number(dict, 'VEditorNative', 0) < 1) throw new Error('Unmarked internal data');
     const json = text(stored);
     if (!json || json.length > 4000000) throw new Error('Invalid internal data');
     const data: unknown = JSON.parse(json);
@@ -378,7 +379,10 @@ function parse(dict: PDFDict, page: PDFPage, pageIndex: number, id: string): Nat
     if (!validModel(result)) throw new Error('Invalid highlight geometry');
     return result;
   }
+  const rawCa = get(dict, 'ca') !== undefined ? number(dict, 'ca', opacity) : undefined;
+  const parsedFillOpacity = rawCa !== undefined && opacity > 0 ? Math.max(0, Math.min(1, rawCa / opacity)) : undefined;
   const shape = { ...base, strokeColor: c, fillColor: nativeColor(dict, 'IC', 'transparent'),
+    ...(parsedFillOpacity !== undefined && parsedFillOpacity < 1 ? { fillOpacity: parsedFillOpacity } : {}),
     strokeWidth: stroke.width, strokeStyle: stroke.style, outline: stroke.width > 0 && c !== 'transparent', cornerRadius: 0 };
   if (subtype === 'Line') {
     const l = numbers(get(dict, 'L'), 4);
@@ -432,6 +436,7 @@ function entries(pdfDoc: PDFDocument): Entry[] {
         const raw = annots.get(index);
         const dict = pdfDoc.context.lookup(raw);
         if (!(dict instanceof PDFDict)) continue;
+        if (number(dict, 'VEditorComposite', 0) === 1) continue;
         const fallback = `native-${pageIndex}-${raw instanceof PDFRef ? `${raw.objectNumber}-${raw.generationNumber}` : directId(dict)}`;
         const nm = text(get(dict, 'NM'));
         let id = nm || fallback;
@@ -452,13 +457,25 @@ export function importNativeAnnotations(pdfDoc: PDFDocument): Array<{ pageIndex:
 
 export function stripImportedNativeAnnotations(pdfDoc: PDFDocument): boolean {
   const imported = entries(pdfDoc);
+  let anyChanged = imported.length > 0;
   pdfDoc.getPages().forEach((page, pageIndex) => {
     const removed = new Set(imported.filter(e => e.pageIndex === pageIndex).map(e => e.index));
+    let annots: PDFObject | undefined;
+    try { annots = get(page.node, 'Annots'); } catch { return; }
+    if (!(annots instanceof PDFArray)) return;
+    for (let index = 0; index < annots.size(); index++) {
+      try {
+        const dict = pdfDoc.context.lookup(annots.get(index));
+        if (dict instanceof PDFDict && number(dict, 'VEditorComposite', 0) === 1) {
+          removed.add(index);
+          anyChanged = true;
+        }
+      } catch { continue; }
+    }
     if (!removed.size) return;
-    const annots = get(page.node, 'Annots') as PDFArray;
     page.node.set(name('Annots'), pdfDoc.context.obj(annots.asArray().filter((_, index) => !removed.has(index))));
   });
-  return imported.length > 0;
+  return anyChanged;
 }
 
 function standardFont(ann: TextAnnotation): StandardFonts {
@@ -529,6 +546,47 @@ function encodeMixedLine(
   return { ops, width: totalWidth, usesFallback };
 }
 
+function formatStickyNoteLines(rawText: string, listStyle: 'none' | 'bullet' | 'number' = 'none'): string[] {
+  if (!rawText) return [];
+  const rawLines = rawText.split(/\r\n|\r|\n/);
+  if (listStyle === 'none') return rawLines;
+  let num = 1;
+  return rawLines.map((line) => {
+    if (!line.trim()) return line;
+    if (listStyle === 'bullet') return `- ${line}`;
+    return `${num++}. ${line}`;
+  });
+}
+
+function wrapLineForPdf(
+  line: string,
+  maxWidth: number,
+  primaryFont: PDFFont,
+  fallbackFont: PDFFont | undefined,
+  fontSize: number
+): string[] {
+  if (!line || maxWidth <= 10) return [line];
+  const measure = (s: string) => {
+    try { return primaryFont.widthOfTextAtSize(s, fontSize); }
+    catch { return fallbackFont ? fallbackFont.widthOfTextAtSize(s, fontSize) : s.length * fontSize * 0.55; }
+  };
+  if (measure(line) <= maxWidth) return [line];
+  const words = line.split(/(\s+)/);
+  const out: string[] = [];
+  let current = '';
+  for (const token of words) {
+    const candidate = current + token;
+    if (current && measure(candidate) > maxWidth) {
+      out.push(current.trimEnd());
+      current = token.trimStart();
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) out.push(current);
+  return out.length ? out : [line];
+}
+
 function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, original: Entry | undefined, font?: PDFFont, fallbackFont?: PDFFont): PDFDict {
   const ctx = pdfDoc.context;
   const dict = original ? original.dict.clone(ctx) : ctx.obj({ Type: 'Annot' });
@@ -550,9 +608,58 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     ops.push(`/${key} gs`, `${list(fill.rgb)} rg`, `${list(stroke.rgb)} RG`);
   };
   const path = (points: Point[], close = true) => {
+    if (!points.length) return;
     ops.push(`${list([points[0].x, points[0].y])} m`);
     for (const p of points.slice(1)) ops.push(`${list([p.x, p.y])} l`);
     if (close) ops.push('h');
+  };
+  const roundedPath = (points: Point[], radius: number, close = true) => {
+    if (!points.length) return;
+    if (!radius || radius <= 0 || points.length < 3) {
+      path(points, close);
+      return;
+    }
+    const len = points.length;
+    for (let i = 0; i < len; i++) {
+      const prev = points[(i - 1 + len) % len];
+      const curr = points[i];
+      const next = points[(i + 1) % len];
+      const dx1 = prev.x - curr.x, dy1 = prev.y - curr.y;
+      const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
+      const l1 = Math.hypot(dx1, dy1), l2 = Math.hypot(dx2, dy2);
+      const r = Math.min(radius, l1 * 0.45, l2 * 0.45);
+      if (r <= 0.1 || l1 < 1e-4 || l2 < 1e-4) {
+        ops.push(`${list([curr.x, curr.y])} ${i === 0 ? 'm' : 'l'}`);
+        continue;
+      }
+      const pStart = { x: curr.x + (dx1 / l1) * r, y: curr.y + (dy1 / l1) * r };
+      const pEnd = { x: curr.x + (dx2 / l2) * r, y: curr.y + (dy2 / l2) * r };
+      const cp1 = { x: pStart.x + (2 / 3) * (curr.x - pStart.x), y: pStart.y + (2 / 3) * (curr.y - pStart.y) };
+      const cp2 = { x: pEnd.x + (2 / 3) * (curr.x - pEnd.x), y: pEnd.y + (2 / 3) * (curr.y - pEnd.y) };
+      ops.push(`${list([pStart.x, pStart.y])} ${i === 0 ? 'm' : 'l'}`);
+      ops.push(`${list([cp1.x, cp1.y, cp2.x, cp2.y, pEnd.x, pEnd.y])} c`);
+    }
+    if (close) ops.push('h');
+  };
+  const roundedRect = (rx: number, ry: number, rw: number, rh: number, rad: number) => {
+    const r = Math.min(rad, rw / 2, rh / 2);
+    if (r <= 0) {
+      ops.push(`${list([rx, ry, rw, rh])} re`);
+      return;
+    }
+    const right = rx + rw, bottom = ry + rh, k = r * 0.5522847498307936;
+    ops.push(
+      `${list([rx + r, ry])} m`,
+      `${list([right - r, ry])} l`,
+      `${list([right - r + k, ry, right, ry + r - k, right, ry + r])} c`,
+      `${list([right, bottom - r])} l`,
+      `${list([right, bottom - r + k, right - r + k, bottom, right - r, bottom])} c`,
+      `${list([rx + r, bottom])} l`,
+      `${list([rx + r - k, bottom, rx, bottom - r + k, rx, bottom - r])} c`,
+      `${list([rx, ry + r])} l`,
+      `${list([rx, ry + r - k, rx + r - k, ry, rx + r, ry])} c`,
+      'h'
+    );
   };
   const rectangle = () => ops.push(`${list([b.x, b.y, b.width, b.height])} re`);
   let pad = 0;
@@ -604,50 +711,55 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     const borderCol: Color = { rgb: bg.rgb.map(c => Math.max(0, c * 0.78)), alpha: 1 };
     const fg = color(ann.textColor || '#3b2f1e');
     if (ann.collapsed) {
-      const s = 38, fold = 10;
+      const sw = Math.max(16, ann.iconWidth ?? 38);
+      const sh = Math.max(16, ann.iconHeight ?? 38);
+      const fold = Math.min(10, sw * 0.26, sh * 0.26);
       const ix = b.x, iy = b.y;
       paint(bg, borderCol);
       ops.push('1.25 w', '[] 0 d');
       path([
         { x: ix, y: iy },
-        { x: ix + s, y: iy },
-        { x: ix + s, y: iy + s - fold },
-        { x: ix + s - fold, y: iy + s },
-        { x: ix, y: iy + s }
+        { x: ix + sw, y: iy },
+        { x: ix + sw, y: iy + sh - fold },
+        { x: ix + sw - fold, y: iy + sh },
+        { x: ix, y: iy + sh }
       ], true);
       ops.push('B');
       const foldFill: Color = { rgb: bg.rgb.map(c => Math.max(0, c * 0.85)), alpha: 1 };
       paint(foldFill, borderCol);
       path([
-        { x: ix + s - fold, y: iy + s },
-        { x: ix + s - fold, y: iy + s - fold },
-        { x: ix + s, y: iy + s - fold }
+        { x: ix + sw - fold, y: iy + sh },
+        { x: ix + sw - fold, y: iy + sh - fold },
+        { x: ix + sw, y: iy + sh - fold }
       ], true);
       ops.push('B');
       paint(fg, fg);
       ops.push('1.5 w');
       for (const [ry, rw] of [[0.32, 0.72], [0.50, 0.72], [0.68, 0.50]]) {
-        path([{ x: ix + s * 0.22, y: iy + s * ry }, { x: ix + s * rw, y: iy + s * ry }], false);
+        path([{ x: ix + sw * 0.22, y: iy + sh * ry }, { x: ix + sw * rw, y: iy + sh * ry }], false);
         ops.push('S');
       }
       geometry.length = 0;
-      geometry.push(...corners({ x: ix, y: iy, width: s, height: s }));
+      geometry.push(...corners({ x: ix, y: iy, width: sw, height: sh }));
     } else {
       paint(bg, borderCol);
       ops.push('1 w', '[] 0 d');
-      rectangle();
+      roundedRect(b.x, b.y, b.width, b.height, 10);
       ops.push('B');
       // Header separator line
       ops.push('0.75 w');
       path([{ x: b.x + 12, y: b.y + 36 }, { x: b.x + b.width - 12, y: b.y + 36 }], false);
       ops.push('S');
-      // Typed text
+      // Typed text with listStyle + word wrapping
       if (font && ann.text) {
         paint(fg, fg);
         const padX = 16, topStart = b.y + 48;
+        const maxLineW = Math.max(20, b.width - padX * 2);
+        const formattedLines = formatStickyNoteLines(ann.text, ann.listStyle ?? 'none');
+        const wrappedLines = formattedLines.flatMap(l => wrapLineForPdf(l, maxLineW, font, fallbackFont, ann.fontSize));
         const ascent = font.heightAtSize(ann.fontSize, { descender: false });
         ops.push('BT', `/F0 ${n(ann.fontSize)} Tf`);
-        ann.text.split(/\r\n|\r|\n/).forEach((line, i) => {
+        wrappedLines.forEach((line, i) => {
           const top = topStart + i * ann.fontSize * 1.38;
           if (top + ascent > b.y + b.height - 28) return;
           const encodedLine = encodeMixedLine(line, font, fallbackFont, ann.fontSize);
@@ -666,6 +778,40 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
         const encodedAuthor = encodeMixedLine(ann.author.trim(), font, fallbackFont, authorSize);
         if (encodedAuthor.usesFallback) usedFallbackFont = true;
         ops.push('BT', `1 0 0 -1 ${list([b.x + 16, b.y + b.height - 13])} Tm`, ...encodedAuthor.ops, 'ET');
+      }
+      // Embedded items (shapes, highlights, text) inside sticky note
+      if (Array.isArray(ann.items)) {
+        for (const item of ann.items) {
+          if (!record(item)) continue;
+          if ((item.type === 'pen' || item.type === 'highlighter') && Array.isArray(item.points) && item.points.length >= 2) {
+            const ic = color(item.color || ann.textColor || '#3b2f1e');
+            ic.alpha *= typeof item.opacity === 'number' ? item.opacity : (item.type === 'highlighter' ? 0.35 : 1);
+            paint(ic, ic);
+            ops.push(`${n(Number(item.strokeWidth) || 2)} w`, '[] 0 d');
+            path(item.points as Point[], false);
+            ops.push('S');
+          } else if (['rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'freeform-shape'].includes(String(item.type)) && record(item.box)) {
+            const ib = item.box as BoundingBox;
+            const iRawFill = color(item.fillColor ?? 'transparent');
+            const iFillOp = typeof item.fillOpacity === 'number' ? Math.max(0, Math.min(1, item.fillOpacity)) : 1;
+            const iFill: Color = { rgb: iRawFill.rgb, alpha: iRawFill.alpha * iFillOp * (typeof item.opacity === 'number' ? item.opacity : 1) };
+            const iStroke = color(item.strokeColor ?? '#3b2f1e');
+            iStroke.alpha *= typeof item.opacity === 'number' ? item.opacity : 1;
+            const iWidth = item.outline === false ? 0 : (Number(item.strokeWidth) || 1.5);
+            paint(iFill, iStroke);
+            ops.push(`${n(iWidth)} w`, '[] 0 d');
+            if ((item.type === 'line' || item.type === 'arrow') && Array.isArray(item.points) && item.points.length >= 2) {
+              path(item.points as Point[], false);
+              ops.push('S');
+            } else if ((item.type === 'polygon' || item.type === 'freeform-shape') && Array.isArray(item.points) && item.points.length >= 3) {
+              roundedPath(item.points as Point[], Number(item.cornerRadius) || 0, true);
+              ops.push(iFill.alpha ? (iWidth > 0 ? 'B' : 'f') : (iWidth > 0 ? 'S' : 'n'));
+            } else {
+              roundedRect(ib.x, ib.y, ib.width, ib.height, Number(item.cornerRadius) || 0);
+              ops.push(iFill.alpha ? (iWidth > 0 ? 'B' : 'f') : (iWidth > 0 ? 'S' : 'n'));
+            }
+          }
+        }
       }
       // Freehand strokes inside note
       if (Array.isArray(ann.strokes)) {
@@ -695,17 +841,46 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     set('QuadPoints', ctx.obj(quads.flatMap(q => q.flatMap(p => { const v = transform(p); return [v.x, v.y]; }))));
     set('C', ctx.obj(fill.rgb));
   } else if (ann.type === 'stamp') {
-    const fill = color(ann.color || '#dc2626'), stroke = fill;
+    const stroke = color(ann.color || '#dc2626');
+    const bgFill: Color = { rgb: stroke.rgb, alpha: 0.08 };
     const preset = STAMP_PRESETS.find(p => p.key === ann.presetKey) || STAMP_PRESETS[0];
     set('Name', name('Approved'));
     set('Contents', PDFHexString.fromText(preset.label));
-    paint(fill, stroke);
-    ops.push(`${n(Math.max(1, b.height * 0.05))} w`, `${list([b.x, b.y, b.width, b.height])} re`, 'S');
-    ops.push('BT', `/F0 ${n(Math.max(6, b.height * 0.3))} Tf`, `${list(fill.rgb)} rg`,
-      `BT ${list([b.x + b.width / 2, cy - b.height * 0.1])} Td`, `${preset.label.replace(/[()\\]/g, '')} Tj`, 'ET');
+    const bw = Math.max(1.5, Math.min(b.width, b.height) * 0.045);
+    const r = Math.min(6, b.width * 0.1, b.height * 0.2);
+    pad = bw;
+    paint(bgFill, stroke);
+    ops.push(`${n(bw)} w`, '[] 0 d');
+    roundedRect(b.x, b.y, b.width, b.height, r);
+    ops.push('B');
+    if (preset.borderStyle === 'double') {
+      const inset = bw * 1.9;
+      if (b.width > inset * 2 + 4 && b.height > inset * 2 + 4) {
+        ops.push(`${n(bw * 0.55)} w`);
+        roundedRect(b.x + inset, b.y + inset, b.width - inset * 2, b.height - inset * 2, Math.max(2, r - inset * 0.5));
+        ops.push('S');
+      }
+    }
+    if (font) {
+      paint(stroke, stroke);
+      let fontSize = Math.max(6, Math.min(b.height * 0.36, (b.width * 0.82) / Math.max(preset.label.length * 0.62, 1)));
+      let encoded = encodeMixedLine(preset.label, font, fallbackFont, fontSize);
+      if (encoded.width > b.width * 0.84 && encoded.width > 0) {
+        fontSize = Math.max(5, fontSize * ((b.width * 0.84) / encoded.width));
+        encoded = encodeMixedLine(preset.label, font, fallbackFont, fontSize);
+      }
+      if (encoded.usesFallback) usedFallbackFont = true;
+      const ascent = font.heightAtSize(fontSize, { descender: false });
+      const tx = b.x + (b.width - encoded.width) / 2;
+      const ty = b.y + (b.height - ascent) / 2 + ascent * 0.88;
+      ops.push('BT', `1 0 0 -1 ${list([tx, ty])} Tm`, ...encoded.ops, 'ET');
+    }
     geometry.push(...corners(b));
   } else {
-    const fill = color((ann as ShapeAnnotation).fillColor ?? 'transparent'), stroke = color((ann as ShapeAnnotation).strokeColor);
+    const rawFill = color((ann as ShapeAnnotation).fillColor ?? 'transparent');
+    const fillOpacity = Math.max(0, Math.min(1, (ann as ShapeAnnotation).fillOpacity ?? 1));
+    const fill: Color = { rgb: rawFill.rgb, alpha: rawFill.alpha * fillOpacity };
+    const stroke = color((ann as ShapeAnnotation).strokeColor);
     const line = ann.type === 'line' || ann.type === 'arrow';
     const outline = (line || ann.outline !== false) && ann.strokeWidth > 0 && stroke.alpha > 0;
     const width = outline ? ann.strokeWidth : 0;
@@ -719,6 +894,8 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
     set('BS', bs);
     set('C', ctx.obj(stroke.alpha ? stroke.rgb : []));
     set('IC', ctx.obj(fill.alpha ? fill.rgb : []));
+    if (fillOpacity < 1) set('ca', PDFNumber.of(ann.opacity * fillOpacity));
+    else dict.delete(name('ca'));
     paint(fill, stroke, ann.blendMode === 'multiply');
     ops.push(`${n(width)} w`, `[${list(dash)}] 0 d`);
     if (line) {
@@ -732,21 +909,20 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
       endings.forEach((ending, i) => {
         if (ending === 'None') return;
         const tip = points[i], other = points[1 - i];
-        const direction = Math.atan2(tip.y - other.y, tip.x - other.x), length = Math.max(12, ann.strokeWidth * 4);
-        const head = [{ x: tip.x - length * Math.cos(direction - Math.PI / 6), y: tip.y - length * Math.sin(direction - Math.PI / 6) }, tip,
-          { x: tip.x - length * Math.cos(direction + Math.PI / 6), y: tip.y - length * Math.sin(direction + Math.PI / 6) }];
+        const geom = computeArrowHeadGeometry(other, tip, ann.strokeWidth);
+        const head = [geom.leftWing, tip, geom.rightWing];
         geometry.push(...head);
         paint(ending === 'ClosedArrow' ? (fill.alpha ? fill : stroke) : fill, stroke);
         ops.push('[] 0 d');
         path(head, ending === 'ClosedArrow');
-        ops.push(ending === 'ClosedArrow' ? 'B' : 'S');
+        ops.push(ending === 'ClosedArrow' ? 'f' : 'S');
       });
       set('L', ctx.obj(points.flatMap(p => { const v = transform(p); return [v.x, v.y]; })));
       set('LE', ctx.obj(endings.map(name)));
     } else if (ann.type === 'polygon' || ann.type === 'freeform-shape') {
       const points = ann.points ?? [];
       geometry.push(...points);
-      path(points, ann.type === 'polygon');
+      roundedPath(points, ann.cornerRadius ?? 0, true);
       ops.push(fill.alpha ? outline ? 'B' : 'f' : outline ? 'S' : 'n');
       set('Vertices', ctx.obj(points.flatMap(p => { const v = transform(p); return [v.x, v.y]; })));
     } else {
@@ -763,13 +939,7 @@ function build(pdfDoc: PDFDocument, page: PDFPage, ann: NativeAnnotation, origin
       } else {
         const r = Math.min(ann.cornerRadius ?? 0.75, b.width / 2, b.height / 2);
         if (!r) rectangle();
-        else {
-          const x = b.x, y = b.y, right = x + b.width, bottom = y + b.height, k = r * 0.5522847498307936;
-          ops.push(`${list([x + r, y])} m`, `${list([right - r, y])} l`, `${list([right - r + k, y, right, y + r - k, right, y + r])} c`,
-            `${list([right, bottom - r])} l`, `${list([right, bottom - r + k, right - r + k, bottom, right - r, bottom])} c`,
-            `${list([x + r, bottom])} l`, `${list([x + r - k, bottom, x, bottom - r + k, x, bottom - r])} c`,
-            `${list([x, y + r])} l`, `${list([x, y + r - k, x + r - k, y, x + r, y])} c`, 'h');
-        }
+        else roundedRect(b.x, b.y, b.width, b.height, r);
       }
       ops.push(fill.alpha ? outline ? 'B' : 'f' : outline ? 'S' : 'n');
     }
@@ -804,7 +974,14 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
     const candidates = (annotationsByPage[pageIndex] ?? []).filter(a => ['text', 'sticky-note', 'rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'freeform-shape', 'stamp'].includes(a.type) || (a.type === 'highlighter' && 'quadPoints' in a));
     if (!originals.length && !candidates.length) continue;
     if (annots !== undefined && !(annots instanceof PDFArray)) throw new Error('Cannot safely update malformed /Annots');
-    const keep = annots instanceof PDFArray ? annots.asArray().filter((_, i) => !originalIndices.has(i)) : [];
+    const keep = annots instanceof PDFArray ? annots.asArray().filter((item, i) => {
+      if (originalIndices.has(i)) return false;
+      try {
+        const d = pdfDoc.context.lookup(item);
+        if (d instanceof PDFDict && number(d, 'VEditorComposite', 0) === 1) return false;
+      } catch {}
+      return true;
+    }) : [];
     const replacements: Array<{ dict: PDFDict; ref?: PDFRef }> = [];
     const ids = new Set<string>();
     for (const candidate of candidates) {
@@ -819,12 +996,17 @@ export async function syncNativeAnnotations(pdfDoc: PDFDocument, annotationsByPa
       }
       let font: PDFFont | undefined;
       let fallbackFont: PDFFont | undefined;
-      if (ann.type === 'text' || ann.type === 'sticky-note') {
-        const fontName = ann.type === 'text' ? standardFont(ann) : StandardFonts.Helvetica;
+      if (ann.type === 'text' || ann.type === 'sticky-note' || ann.type === 'stamp') {
+        const fontName = ann.type === 'text' ? standardFont(ann) : ann.type === 'stamp' ? StandardFonts.HelveticaBold : StandardFonts.Helvetica;
         let baseFont = fonts.get(fontName);
         if (!baseFont) { baseFont = await pdfDoc.embedFont(fontName); fonts.set(fontName, baseFont); }
         font = baseFont;
-        const textToCheck = ann.type === 'sticky-note' ? `${ann.text || ''}\n${ann.author || ''}` : ann.text;
+        const presetLabel = ann.type === 'stamp' ? (STAMP_PRESETS.find(p => p.key === ann.presetKey) || STAMP_PRESETS[0]).label : '';
+        const textToCheck = ann.type === 'sticky-note'
+          ? `${formatStickyNoteLines(ann.text || '', ann.listStyle ?? 'none').join('\n')}\n${ann.author || ''}`
+          : ann.type === 'stamp'
+            ? presetLabel
+            : ann.text;
         try { for (const line of textToCheck.split(/\r\n|\r|\n/)) baseFont.encodeText(line); }
         catch {
           if (!unicodeFontProvider) throw new Error(`FreeText ${ann.id}: standard WinAnsi fonts cannot encode this text. Content was preserved; a Unicode font provider is required.`);

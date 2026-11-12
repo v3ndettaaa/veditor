@@ -1548,7 +1548,7 @@ export class ToolbarComponent {
                 x1="42" y1="45" x2="214" y2="21"
                 stroke="${strokeCol}" stroke-width="${sw}" stroke-linecap="round" ${dashAttr}/>
           <polyline class="gn-shape-preview-arrow-head"
-                    points="198 14 216 21 203 36"
+                    points="204 16 216 21 206 31"
                     stroke="${strokeCol}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
         </svg>
       `;
