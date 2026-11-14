@@ -924,29 +924,59 @@ export class ToolbarComponent {
                   `).join('')}
                 </div>
               </div>
+              <div class="gn-divider"></div>
+              <div class="gn-section">
+                <button type="button" id="stamp-upload-image-btn" class="secondary-btn" style="width:100%; justify-content:center; gap:8px; min-height:36px; font-size:12.5px; font-weight:600;" data-insert-custom-image title="${tr('Insert PNG, JPG, WebP, or SVG image onto page', 'افزودن تصویر دلخواه (PNG, JPG, WebP, SVG) روی صفحه')}">
+                  ${getIconSvg('imagePlus', 16)}
+                  <span>${tr('Insert Image from Device…', 'افزودن تصویر از دستگاه…')}</span>
+                </button>
+              </div>
             </div>
           </div>
 
           <!-- Measure with Goodnotes Popover Card -->
+          ${(() => {
+            const isMeasureActive = activeTool === 'measure-distance' || activeTool === 'measure-area' || activeTool === 'measure-angle';
+            const curMeasureMode = isMeasureActive ? activeTool : (s.measureMode || 'measure-distance');
+            const scaleVal = Number((s.measureScale ?? 1).toFixed(4));
+            return `
           <div class="tool-btn-wrapper ${this._pinnedTool === 'measure-distance' ? 'is-pinned' : ''}" data-wrapper-tool="measure-distance">
-            <button class="tool-btn has-popover ${activeTool === 'measure-distance' ? 'active' : ''}" data-tool="measure-distance" title="${t('tools.measure')}">
+            <button class="tool-btn has-popover ${isMeasureActive ? 'active' : ''}" data-tool="measure-distance" title="${t('tools.measure')}">
               ${getIconSvg('measure')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
-            <div class="tool-hover-card gn-popover gn-popover-compact">
+            <div class="tool-hover-card gn-popover">
               <div class="gn-popover-arrow"></div>
               <div class="gn-card-header">
                 <span class="gn-card-title">${t('tools.measure')}</span>
-                <span class="gn-card-meta measure-meta-badge">${s.measureUnit}</span>
+                <span class="gn-card-meta measure-meta-badge">${curMeasureMode === 'measure-angle' ? 'deg (°)' : (curMeasureMode === 'measure-area' ? `${s.measureUnit}²` : s.measureUnit)}</span>
               </div>
-              <div class="gn-preview-stage" style="height:52px;">
-                <svg class="gn-preview-svg" viewBox="0 0 260 52" fill="none" aria-hidden="true">
-                  <line x1="40" y1="28" x2="220" y2="28" stroke="var(--accent)" stroke-width="2"/>
-                  <line x1="40" y1="20" x2="40" y2="36" stroke="var(--accent)" stroke-width="2"/>
-                  <line x1="220" y1="20" x2="220" y2="36" stroke="var(--accent)" stroke-width="2"/>
-                  <text x="130" y="21" text-anchor="middle" fill="var(--text-primary)" font-size="11" font-weight="600" class="gn-measure-preview-text">100 ${s.measureUnit}</text>
-                </svg>
+              <div class="gn-preview-stage" style="height:58px;">
+                ${this.renderMeasurePreviewSvg(curMeasureMode, s.measureUnit, s.measureScale)}
               </div>
+
+              <!-- Measurement Mode Tiles: Distance / Area / Angle -->
+              <div class="gn-section">
+                <span class="gn-section-label" style="margin-bottom:6px; display:block;">${tr('Measurement Mode', 'حالت اندازه‌گیری')}</span>
+                <div class="gn-tile-grid cols-3" role="group" aria-label="${tr('Measurement mode', 'حالت اندازه‌گیری')}">
+                  <button type="button" class="gn-icon-tile mode-toggle-btn measure-mode-btn ${curMeasureMode === 'measure-distance' ? 'active' : ''}" data-measure-mode="measure-distance" title="${tr('Measure Distance (drag from start to end)', 'اندازه‌گیری فاصله (کشیدن از ابتدا تا انتها)')}">
+                    <span class="gn-tile-icon">${getIconSvg('measureDistance', 20)}</span>
+                    <span class="gn-tile-label">${tr('Distance', 'فاصله')}</span>
+                  </button>
+                  <button type="button" class="gn-icon-tile mode-toggle-btn measure-mode-btn ${curMeasureMode === 'measure-area' ? 'active' : ''}" data-measure-mode="measure-area" title="${tr('Measure Polygon Area (click vertices, double-click or Enter to finish)', 'اندازه‌گیری مساحت (کلیک روی رئوس، دابل‌کلیک برای پایان)')}">
+                    <span class="gn-tile-icon">${getIconSvg('measureArea', 20)}</span>
+                    <span class="gn-tile-label">${tr('Area', 'مساحت')}</span>
+                  </button>
+                  <button type="button" class="gn-icon-tile mode-toggle-btn measure-mode-btn ${curMeasureMode === 'measure-angle' ? 'active' : ''}" data-measure-mode="measure-angle" title="${tr('Measure 3-Point Angle (click start ray, vertex, end ray)', 'اندازه‌گیری زاویه ۳ نقطه‌ای (کلیک روی ضلع اول، رأس، ضلع دوم)')}">
+                    <span class="gn-tile-icon">${getIconSvg('measureAngle', 20)}</span>
+                    <span class="gn-tile-label">${tr('Angle', 'زاویه')}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Measurement Unit Selector -->
               <div class="gn-section">
                 <span class="gn-section-label" style="margin-bottom:6px; display:block;">${tr('Measurement Unit', 'واحد اندازه‌گیری')}</span>
                 <div class="gn-unit-grid">
@@ -955,8 +985,34 @@ export class ToolbarComponent {
                   `).join('')}
                 </div>
               </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Scale & Calibration -->
+              <div class="gn-section">
+                <div class="gn-section-header">
+                  <span class="gn-section-label">${tr('Scale Calibration (per pt)', 'مقیاس کالیبراسیون (هر pt)')}</span>
+                  <div class="gn-num-badge">
+                    <input type="number" id="hover-measure-scale-input" class="size-readout size-type-input measure-scale-readout"
+                           min="0.001" max="10000" step="0.05" value="${scaleVal}" title="${tr('Units per PDF point (e.g. 0.3528 for 1:1 mm)', 'مقدار واحد به ازای هر پوینت PDF')}" aria-label="${tr('Measurement scale factor', 'ضریب مقیاس اندازه‌گیری')}">
+                    <span class="gn-unit">×</span>
+                  </div>
+                </div>
+                <div class="size-pills-group" style="display:flex; gap:6px; margin-top:6px;">
+                  ${[
+                    { label: '1:1', val: 0.3528, tip: tr('1:1 Actual Size (1 pt = 0.3528 mm)', 'اندازه واقعی ۱:۱') },
+                    { label: '1:1 (pt/px)', val: 1, tip: tr('1.0× Raw Points', 'ضریب ۱ برابر') },
+                    { label: '1:50', val: 17.64, tip: tr('Architectural 1:50 scale', 'مقیاس نقشه‌کشی ۱:۵۰') },
+                    { label: '1:100', val: 35.28, tip: tr('Architectural 1:100 scale', 'مقیاس نقشه‌کشی ۱:۱۰۰') }
+                  ].map(preset => `
+                    <button type="button" class="size-pill measure-scale-pill ${Math.abs((s.measureScale ?? 1) - preset.val) < 0.01 ? 'active' : ''}" style="flex:1;" data-measure-scale="${preset.val}" title="${preset.tip}">${preset.label}</button>
+                  `).join('')}
+                </div>
+              </div>
             </div>
           </div>
+            `;
+          })()}
 
           <!-- Signature Pad Trigger -->
           <button class="tool-btn ${activeTool === 'signature' ? 'active' : ''}" id="toolbar-signature-btn" data-tool="signature" title="${t('tools.signature')}">
@@ -1474,14 +1530,36 @@ export class ToolbarComponent {
     });
 
     // 7. Measure Indicators
+    const activeTool = store.activeTool;
+    const isMeasureActive = activeTool === 'measure-distance' || activeTool === 'measure-area' || activeTool === 'measure-angle';
+    const curMeasureMode = isMeasureActive ? activeTool : (s.measureMode || 'measure-distance');
     const measureMeta = this._container.querySelector<HTMLElement>('.measure-meta-badge');
-    if (measureMeta) measureMeta.textContent = s.measureUnit;
-    const measureText = this._container.querySelector<SVGTextElement>('.gn-measure-preview-text');
-    if (measureText) measureText.textContent = `100 ${s.measureUnit}`;
+    if (measureMeta) {
+      measureMeta.textContent = curMeasureMode === 'measure-angle' ? 'deg (°)' : (curMeasureMode === 'measure-area' ? `${s.measureUnit}²` : s.measureUnit);
+    }
+    const measureStage = this._container.querySelector<HTMLElement>('[data-wrapper-tool="measure-distance"] .gn-preview-stage');
+    if (measureStage) {
+      measureStage.innerHTML = this.renderMeasurePreviewSvg(curMeasureMode, s.measureUnit, s.measureScale);
+    }
+
+    this._container.querySelectorAll('[data-measure-mode]').forEach(el => {
+      const m = el.getAttribute('data-measure-mode');
+      el.classList.toggle('active', m === curMeasureMode);
+    });
 
     this._container.querySelectorAll('[data-measure-unit]').forEach(el => {
       const u = el.getAttribute('data-measure-unit');
       el.classList.toggle('active', u === s.measureUnit);
+    });
+
+    const scaleInput = this._container.querySelector<HTMLInputElement>('#hover-measure-scale-input');
+    if (scaleInput && document.activeElement !== scaleInput) {
+      scaleInput.value = String(Number((s.measureScale ?? 1).toFixed(4)));
+    }
+
+    this._container.querySelectorAll('[data-measure-scale]').forEach(el => {
+      const val = parseFloat(el.getAttribute('data-measure-scale') || '1');
+      el.classList.toggle('active', Math.abs((s.measureScale ?? 1) - val) < 0.01);
     });
 
     // 8. Undo / Redo buttons reactive state
@@ -1498,6 +1576,43 @@ export class ToolbarComponent {
       redoBtn.style.opacity = history.canRedo ? '1' : '0.4';
       redoBtn.style.cursor = history.canRedo ? 'pointer' : 'not-allowed';
     }
+  }
+
+  private renderMeasurePreviewSvg(mode: string, unit: string, scale: number = 1): string {
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    if (mode === 'measure-angle') {
+      return `
+        <svg class="gn-preview-svg" viewBox="0 0 260 58" fill="none" aria-hidden="true">
+          <path d="M 74 46 L 160 12" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M 74 46 L 196 46" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+          <path d="M 112 46 A 38 38 0 0 0 109 32" stroke="var(--accent)" stroke-width="1.75" fill="var(--accent-subtle)"/>
+          <circle cx="74" cy="46" r="3" fill="var(--accent)"/>
+          <text x="142" y="34" text-anchor="middle" fill="var(--text-primary)" font-size="11" font-weight="600" class="gn-measure-preview-text">42.5°</text>
+        </svg>
+      `;
+    }
+    if (mode === 'measure-area') {
+      const sampleArea = (2500 * safeScale * safeScale).toFixed(1);
+      return `
+        <svg class="gn-preview-svg" viewBox="0 0 260 58" fill="none" aria-hidden="true">
+          <polygon points="64,12 192,15 180,48 56,44" fill="var(--accent-subtle)" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+          <circle cx="64" cy="12" r="2.5" fill="var(--accent)"/>
+          <circle cx="192" cy="15" r="2.5" fill="var(--accent)"/>
+          <circle cx="180" cy="48" r="2.5" fill="var(--accent)"/>
+          <circle cx="56" cy="44" r="2.5" fill="var(--accent)"/>
+          <text x="125" y="34" text-anchor="middle" fill="var(--text-primary)" font-size="11" font-weight="600" class="gn-measure-preview-text">${sampleArea} ${unit}²</text>
+        </svg>
+      `;
+    }
+    const sampleDist = (100 * safeScale).toFixed(1);
+    return `
+      <svg class="gn-preview-svg" viewBox="0 0 260 58" fill="none" aria-hidden="true">
+        <line x1="40" y1="34" x2="220" y2="34" stroke="var(--accent)" stroke-width="2"/>
+        <line x1="40" y1="26" x2="40" y2="42" stroke="var(--accent)" stroke-width="2"/>
+        <line x1="220" y1="26" x2="220" y2="42" stroke="var(--accent)" stroke-width="2"/>
+        <text x="130" y="24" text-anchor="middle" fill="var(--text-primary)" font-size="11" font-weight="600" class="gn-measure-preview-text">${sampleDist} ${unit}</text>
+      </svg>
+    `;
   }
 
   private renderShapePreviewSvg(s: typeof store.toolSettings, shapeType: string): string {
@@ -1756,8 +1871,18 @@ export class ToolbarComponent {
     // Tool buttons click & toggle pin
     this._container.querySelectorAll<HTMLElement>('.tool-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const tool = btn.getAttribute('data-tool') as ToolType;
-        if (!tool) return;
+        const rawTool = btn.getAttribute('data-tool') as ToolType;
+        if (!rawTool) return;
+
+        const tool = rawTool === 'measure-distance'
+          ? (store.toolSettings.measureMode || 'measure-distance')
+          : rawTool;
+
+        const wasPinned = this._pinnedTool === rawTool;
+        this.unpinAll();
+        if (tool !== 'signature' && tool !== 'scratchpad' && !wasPinned) {
+          this._pinnedTool = rawTool;
+        }
 
         store.setActiveTool(tool);
 
@@ -1771,15 +1896,10 @@ export class ToolbarComponent {
           return;
         }
 
-        const wrapper = btn.closest<HTMLElement>('.tool-btn-wrapper');
-        if (wrapper) {
-          const isCurrentlyPinned = wrapper.classList.contains('is-pinned');
-          this.unpinAll();
-          if (!isCurrentlyPinned) {
-            wrapper.classList.add('is-pinned');
-            this._pinnedTool = tool;
-            this.positionPopover(wrapper);
-          }
+        const liveWrapper = this._container.querySelector<HTMLElement>(`.tool-btn-wrapper[data-wrapper-tool="${rawTool}"]`);
+        if (liveWrapper && !wasPinned) {
+          liveWrapper.classList.add('is-pinned');
+          this.positionPopover(liveWrapper);
         }
       });
     });
@@ -2490,7 +2610,25 @@ export class ToolbarComponent {
       });
     });
 
+    this._container.querySelector('[data-insert-custom-image]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.unpinAll();
+      (window as any).app?.promptInsertImage?.();
+    });
+
     // Measure listeners
+    this._container.querySelectorAll('[data-measure-mode]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const mode = el.getAttribute('data-measure-mode') as 'measure-distance' | 'measure-area' | 'measure-angle' | null;
+        if (mode) {
+          store.updateToolSettings({ measureMode: mode });
+          store.setActiveTool(mode);
+          this.updateIndicators();
+        }
+      });
+    });
+
     this._container.querySelectorAll('[data-measure-unit]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2500,6 +2638,27 @@ export class ToolbarComponent {
           this.updateIndicators();
         }
       });
+    });
+
+    this._container.querySelectorAll('[data-measure-scale]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sc = parseFloat(el.getAttribute('data-measure-scale') || '1');
+        if (Number.isFinite(sc) && sc > 0) {
+          store.updateToolSettings({ measureScale: sc });
+          this.updateIndicators();
+        }
+      });
+    });
+
+    bindTyped('#hover-measure-scale-input', (el) => {
+      const sc = clampTypedNumber(el.value, 0.001, 10000, store.toolSettings.measureScale ?? 1);
+      if (Math.abs(sc - (store.toolSettings.measureScale ?? 1)) > 1e-6) {
+        store.updateToolSettings({ measureScale: sc });
+        this.updateIndicators();
+      } else {
+        el.value = String(Number(sc.toFixed(4)));
+      }
     });
 
     // Delete selected

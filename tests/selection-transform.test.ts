@@ -127,7 +127,11 @@ describe('Annotation transforms', () => {
 
   it('hits rotated annotations in their unrotated frame', () => {
     // 100x20 bar rotated 90° about its center: visually vertical.
-    const bar = { ...pen('r', 0, 0), box: { x: 0, y: 0, width: 100, height: 20 }, rotation: Math.PI / 2 };
+    const bar = {
+      ...pen('r', 0, 10, 100, 0),
+      box: { x: 0, y: 0, width: 100, height: 20 },
+      rotation: Math.PI / 2
+    };
     // Center always hits.
     expect(selectionManager.findAnnotationAtPoint({ x: 50, y: 10 }, [bar])?.id).toBe('r');
     // Top end of the vertical bar (would miss without rotation support).

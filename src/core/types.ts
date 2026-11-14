@@ -367,6 +367,8 @@ export interface DocumentSession {
   userBookmarks?: UserBookmarkItem[];
   annotations: Record<number, Annotation[]>; // pageIndex -> annotations
   layers: Record<number, Layer[]>;           // pageIndex -> layers
+  /** Interactive AcroForm field values keyed by PDF field name or widget id. */
+  formValues?: Record<string, string | boolean>;
   activePageIndex: number;
   /** Exact pixel scroll offsets for per-tab restore (layout space, CSS px). */
   savedScrollTop?: number;
@@ -435,7 +437,9 @@ export function classifyToolbarDock(
   return best;
 }
 
-export type SidebarTab = 'thumbnails' | 'outline' | 'search' | 'history';
+export type SidebarTab = 'thumbnails' | 'outline' | 'annotations' | 'search' | 'history';
+
+export type MeasureModeType = 'measure-distance' | 'measure-area' | 'measure-angle';
 
 export interface ToolSettings {
   penColor: string;
@@ -462,6 +466,7 @@ export interface ToolSettings {
   fontSize: number;
   fontFamily: string;
   textAlign: 'left' | 'center' | 'right';
+  measureMode?: MeasureModeType;
   measureUnit: 'mm' | 'cm' | 'm' | 'in' | 'ft' | 'pt' | 'px';
   measureScale: number; // calibrated scale
   pressureSensitivityEnabled: boolean; // toggle pressure sensitivity on/off
@@ -493,11 +498,8 @@ export interface AppSettings {
   language: LanguageMode;
   backgroundPattern: BackgroundPattern;
   autoSaveIntervalMs: number;
-  snapToGrid: boolean;
-  gridSize: number;
   hardwareAcceleration: boolean;
   maxRenderBufferPages: number;
-  showRuler: boolean;
   showPageShadows: boolean;
   defaultZoomMode: 'fitWidth' | 'fitPage' | '100%' | '125%' | '150%' | 'lastUsed';
   defaultViewMode: 'continuous' | 'single' | 'two-page';

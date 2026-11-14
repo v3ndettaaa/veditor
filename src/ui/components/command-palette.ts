@@ -6,7 +6,8 @@
 import { store } from '../../core/store';
 import { viewportManager } from '../../core/viewport';
 import { pageActions } from '../../core/page-actions';
-import { saveActiveDocument, saveActiveDocumentAs } from '../../io/save';
+import { saveActiveDocument, saveActiveDocumentAs, promptImportAnnotationsJson } from '../../io/save';
+import { openPrintDialog } from './print-dialog';
 import { duplicateSelectedAnnotations } from '../../annotations/duplicate';
 import { dataExporter } from '../../io/export-data';
 import { cropDialog } from './crop-dialog';
@@ -71,11 +72,15 @@ export class CommandPaletteComponent {
       { id: 'tool-text', title: tr('Text Box Tool', 'ابزار کادر متن'), category: catTools, shortcut: 'T', action: () => store.setActiveTool('text') },
       { id: 'tool-sticky-note', title: tr('Sticky Note Tool', 'ابزار یادداشت چسبان'), category: catTools, action: () => store.setActiveTool('sticky-note') },
       { id: 'tool-stamp', title: tr('Vector Stamp Tool', 'ابزار مهر و تصویر'), category: catTools, shortcut: 'M', action: () => store.setActiveTool('stamp') },
+      { id: 'tool-insert-image', title: tr('Insert Image from Device…', 'درج تصویر از دستگاه…'), category: catTools, action: () => window.app?.promptInsertImage?.() },
       { id: 'tool-signature', title: tr('Signature Pad', 'پد امضای دیجیتال'), category: catTools, shortcut: 'K', action: () => store.setSignatureModalOpen(true) },
       { id: 'tool-measure', title: tr('Measure Distance Tool', 'ابزار اندازه‌گیری فاصله (خط‌کش)'), category: catTools, action: () => store.setActiveTool('measure-distance') },
+      { id: 'tool-measure-area', title: tr('Measure Area Tool (Polygon)', 'ابزار اندازه‌گیری مساحت (چندضلعی)'), category: catTools, action: () => store.setActiveTool('measure-area') },
+      { id: 'tool-measure-angle', title: tr('Measure Angle Tool (3-Point)', 'ابزار اندازه‌گیری زاویه (۳ نقطه‌ای)'), category: catTools, action: () => store.setActiveTool('measure-angle') },
       { id: 'tool-lasso', title: tr('Lasso Select Tool', 'ابزار انتخاب کمند (آزاد)'), category: catTools, shortcut: 'Q', action: () => store.setActiveTool('lasso') },
       { id: 'tool-scratchpad', title: tr('Floating Scratchpad', 'چرک‌نویس شناور'), category: catTools, shortcut: 'N', action: () => { store.setActiveTool('scratchpad'); store.setScratchpadOpen(true); } },
 
+      { id: 'view-annotations-summary', title: tr('Sidebar: Annotations & Highlights Summary', 'نوار کناری: فهرست حاشیه‌نویسی‌ها و هایلایت‌ها'), category: catView, action: () => store.toggleSidebar('annotations') },
       { id: 'view-customize-toolbar', title: tr('Customize toolbar layout', 'شخصی‌سازی چیدمان نوار ابزار'), category: catView, action: () => { store.setSettingsModalOpen(true); store.settingsTabRequest = 'toolbar'; } },
       { id: 'view-fit-width', title: tr('Fit to Width', 'تنظیم به عرض صفحه'), category: catView, action: () => viewportManager.fitToWidth() },
       { id: 'view-fit-page', title: tr('Fit to Page', 'نمایش کامل صفحه'), category: catView, action: () => viewportManager.fitToPage() },
@@ -103,10 +108,23 @@ export class CommandPaletteComponent {
       },
       {
         id: 'file-save-as',
-        title: tr('Save As (new file/location)', 'ذخیره به نام دیگر (فایل جدید)'),
+        title: tr('Save As & Export… (PDF, PNG, JPEG, XFDF, JSON)', 'ذخیره و خروجی… (PDF, PNG, JPEG, XFDF, JSON)'),
         category: catFile,
         shortcut: 'Ctrl+Shift+S',
         action: () => { void saveActiveDocumentAs(); }
+      },
+      {
+        id: 'file-print',
+        title: tr('Print Document…', 'چاپ سند…'),
+        category: catFile,
+        shortcut: 'Ctrl+P',
+        action: () => { openPrintDialog(); }
+      },
+      {
+        id: 'import-json',
+        title: tr('Import Annotations from JSON…', 'وارد کردن حاشیه‌نویسی‌ها از فایل JSON…'),
+        category: catFile,
+        action: () => { promptImportAnnotationsJson(); }
       },
       {
         id: 'export-json',

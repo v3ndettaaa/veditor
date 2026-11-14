@@ -69,7 +69,27 @@ export const extensionApi = {
       if (typeof browser !== 'undefined' && browser.storage?.local) {
         return browser.storage.local.get(keys);
       }
-      return {};
+      const result: Record<string, any> = {};
+      try {
+        const keyList = typeof keys === 'string'
+          ? [keys]
+          : Array.isArray(keys)
+            ? keys
+            : Object.keys(keys || {});
+        for (const k of keyList) {
+          const raw = localStorage.getItem(k);
+          if (raw !== null) {
+            try {
+              result[k] = JSON.parse(raw);
+            } catch {
+              result[k] = raw === 'true' ? true : raw === 'false' ? false : raw;
+            }
+          } else if (!Array.isArray(keys) && typeof keys === 'object' && keys !== null && k in keys) {
+            result[k] = keys[k];
+          }
+        }
+      } catch {}
+      return result;
     },
     async set(items: Record<string, any>): Promise<void> {
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
@@ -80,6 +100,11 @@ export const extensionApi = {
       if (typeof browser !== 'undefined' && browser.storage?.local) {
         return browser.storage.local.set(items);
       }
+      try {
+        for (const [k, v] of Object.entries(items || {})) {
+          localStorage.setItem(k, JSON.stringify(v));
+        }
+      } catch {}
     }
   }
 };

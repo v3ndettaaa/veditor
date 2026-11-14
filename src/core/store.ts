@@ -87,6 +87,7 @@ class StateStore {
     fontSize: 16,
     fontFamily: 'Inter',
     textAlign: 'left',
+    measureMode: 'measure-distance',
     measureUnit: 'mm',
     measureScale: 1.0,
     pressureSensitivityEnabled: true,
@@ -113,11 +114,8 @@ class StateStore {
     language: 'en',
     backgroundPattern: 'none',
     autoSaveIntervalMs: 15000,
-    snapToGrid: false,
-    gridSize: 20,
     hardwareAcceleration: true,
     maxRenderBufferPages: 2,
-    showRuler: false,
     showPageShadows: true,
     defaultZoomMode: 'fitWidth',
     defaultViewMode: 'continuous',
@@ -574,6 +572,9 @@ class StateStore {
   }
 
   public setActiveTool(tool: ToolType) {
+    if (tool === 'measure-distance' || tool === 'measure-area' || tool === 'measure-angle') {
+      this._toolSettings = { ...this._toolSettings, measureMode: tool };
+    }
     if (this._activeTool !== tool) {
       this._activeTool = tool;
       if (tool !== 'select') {
@@ -638,6 +639,7 @@ class StateStore {
       fontSize: 16,
       fontFamily: 'Inter',
       textAlign: 'left',
+      measureMode: 'measure-distance',
       measureUnit: 'mm',
       measureScale: 1.0,
       pressureSensitivityEnabled: true,
@@ -666,11 +668,8 @@ class StateStore {
       language: 'en',
       backgroundPattern: 'none',
       autoSaveIntervalMs: 15000,
-      snapToGrid: false,
-      gridSize: 20,
       hardwareAcceleration: true,
       maxRenderBufferPages: 3,
-      showRuler: false,
       showPageShadows: true,
       defaultZoomMode: 'fitWidth',
       defaultViewMode: 'continuous',

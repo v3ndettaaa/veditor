@@ -18,7 +18,8 @@ export class DataExporter {
       pageCount: doc.pageCount,
       exportedAt: Date.now(),
       annotations: doc.annotations,
-      userBookmarks: doc.userBookmarks || []
+      userBookmarks: doc.userBookmarks || [],
+      formValues: doc.formValues || {}
     };
 
     return JSON.stringify(payload, null, 2);
@@ -39,6 +40,10 @@ export class DataExporter {
         doc.userBookmarks = [...parsed.userBookmarks];
         importedAny = true;
       }
+      if (parsed.formValues && typeof parsed.formValues === 'object') {
+        doc.formValues = { ...(doc.formValues || {}), ...parsed.formValues };
+        importedAny = true;
+      }
       if (importedAny) {
         doc.lastModifiedAt = Date.now();
         return true;
@@ -47,6 +52,18 @@ export class DataExporter {
       console.error('Failed to import annotations JSON:', err);
     }
     return false;
+  }
+
+  public downloadTextFile(content: string, filename: string, mimeType = 'text/plain;charset=utf-8'): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
   public exportToXFDF(): string {

@@ -7,6 +7,7 @@ import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
+import { openPrintDialog } from './print-dialog';
 import { isFullscreen, toggleFullscreen, initFullscreenSync } from '../fullscreen';
 import { showToast } from './toast';
 import { t } from '../i18n';
@@ -218,15 +219,14 @@ export class HeaderComponent {
           <span>${t('actions.saveAs')}</span>
         </button>
 
+        <button id="header-print-btn" class="header-btn" ${!activeDoc ? 'style="display:none;"' : ''} title="${fa ? 'چاپ سند (Ctrl+P)' : 'Print Document (Ctrl+P)'}">
+          ${getIconSvg('printer', 15)}
+        </button>
+
         <div class="toolbar-separator" style="height:20px; ${!activeDoc ? 'display:none;' : ''}"></div>
 
         <button id="header-palette-btn" class="header-btn" title="${t('header.commandPaletteTooltip')}">
           ${getIconSvg('command', 16)}
-        </button>
-
-        <button id="header-lang-btn" class="header-btn" title="${t('header.switchLanguage')}">
-          ${getIconSvg('globe', 16)}
-          <span class="header-language-label">${lang === 'en' ? 'FA' : 'EN'}</span>
         </button>
 
         <button id="header-fullscreen-btn" class="header-btn" title="${t('view.fullscreen')}" aria-pressed="${fullscreen ? 'true' : 'false'}">
@@ -281,12 +281,13 @@ export class HeaderComponent {
       await saveActiveDocumentAs();
     });
 
-    this._container.querySelector('#header-palette-btn')?.addEventListener('click', () => {
-      store.setCommandPaletteOpen(true);
+    this._container.querySelector('#header-print-btn')?.addEventListener('click', () => {
+      if (!store.activeDocument) return;
+      openPrintDialog();
     });
 
-    this._container.querySelector('#header-lang-btn')?.addEventListener('click', () => {
-      store.updateAppSettings({ language: lang === 'en' ? 'fa' : 'en' });
+    this._container.querySelector('#header-palette-btn')?.addEventListener('click', () => {
+      store.setCommandPaletteOpen(true);
     });
 
     this._container.querySelector('#header-fullscreen-btn')?.addEventListener('click', async (e) => {

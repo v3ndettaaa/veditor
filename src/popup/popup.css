@@ -144,6 +144,45 @@ body {
   margin-bottom: var(--space-4);
 }
 
+.popup-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  margin-bottom: var(--space-3);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.popup-setting-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.popup-setting-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.popup-setting-sub {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.popup-toggle-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .popup-footer {
   display: flex;
   align-items: center;

@@ -2418,3 +2418,814 @@ html.platform-desktop .crop-modal-backdrop {
   background: var(--bg-surface-elevated);
 }
 
+/* ================================================================
+ * Save As & Export Unified Modal
+ * ================================================================ */
+
+.modal-dialog.form-dialog.saveas-dialog {
+  max-width: 520px;
+}
+
+.saveas-body {
+  gap: 14px;
+  padding: 18px 20px;
+  overflow-y: auto;
+}
+
+.saveas-format-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.saveas-fmt-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 9px 6px;
+  min-height: 50px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.saveas-fmt-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  border-color: var(--border-medium);
+}
+
+.saveas-fmt-btn.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.saveas-fmt-name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.saveas-fmt-ext {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.saveas-fmt-btn.active .saveas-fmt-name,
+.saveas-fmt-btn.active .saveas-fmt-ext {
+  color: var(--accent);
+}
+
+.saveas-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.saveas-col-span {
+  grid-column: 1 / -1;
+}
+
+.saveas-range-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 7px;
+}
+
+.saveas-radio-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.saveas-radio-chip:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.saveas-radio-chip:has(input:checked) {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.saveas-radio-chip input[type="radio"] {
+  accent-color: var(--accent);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.saveas-custom-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  transition: opacity var(--transition-fast);
+}
+
+.saveas-custom-row.is-disabled {
+  opacity: 0.45;
+}
+
+.saveas-custom-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.saveas-custom-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.saveas-custom-field .field {
+  width: 100%;
+  min-width: 0;
+  text-align: center;
+}
+
+.saveas-range-dash {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.saveas-pdf-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.saveas-check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.saveas-check-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  margin: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.saveas-check-row svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.saveas-password-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.saveas-password-fields[hidden] {
+  display: none;
+}
+
+.saveas-pwd-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.saveas-pwd-input-wrap .field {
+  width: 100%;
+  padding-inline-end: 36px;
+}
+
+.saveas-pwd-eye {
+  position: absolute;
+  inset-inline-end: 4px;
+  width: 26px;
+  height: 26px;
+}
+
+.saveas-pwd-error {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.saveas-pwd-error[hidden] {
+  display: none;
+}
+
+.saveas-footer {
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.saveas-footer-cta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .saveas-format-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .saveas-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ================================================================
+ * Print Preview Studio Split-Pane Modal
+ * ================================================================ */
+
+.modal-dialog.print-studio-dialog {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  max-width: min(1060px, 94vw);
+  width: min(1060px, 94vw);
+  height: min(720px, 90vh);
+  max-height: 90vh;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+}
+
+.print-studio-preview {
+  background: #23262d;
+  overflow-y: auto;
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.print-studio-sheets {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.print-sheet-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 560px;
+}
+
+.print-paper-sheet {
+  width: 100%;
+  background: #ffffff;
+  border-radius: 3px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.print-paper-sheet.is-dark-paper {
+  background: #111318;
+}
+
+.print-paper-sheet.is-nup-1 {
+  grid-template-columns: 1fr;
+  padding: 0;
+}
+
+.print-paper-sheet.is-nup-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  aspect-ratio: 11 / 8.5;
+  align-items: stretch;
+}
+
+.print-paper-sheet.is-nup-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  aspect-ratio: 8.5 / 11;
+  align-items: stretch;
+}
+
+.print-sheet-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  overflow: hidden;
+  border-radius: 2px;
+}
+
+.print-paper-sheet.is-nup-1 .print-sheet-slot {
+  min-height: 360px;
+}
+
+.print-sheet-slot img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.print-paper-sheet.is-nup-1 .print-sheet-slot img {
+  width: 100%;
+  height: auto;
+  max-height: none;
+}
+
+.print-slot-loading {
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.14) 25%,
+    rgba(148, 163, 184, 0.28) 50%,
+    rgba(148, 163, 184, 0.14) 75%
+  );
+  background-size: 200% 100%;
+  animation: printShimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes printShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.print-sheet-caption {
+  font-size: 11px;
+  font-weight: 500;
+  color: #a1a7b3;
+  letter-spacing: 0.01em;
+}
+
+.print-preview-empty {
+  margin-top: 80px;
+  padding: 20px 24px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.print-studio-inspector {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-inline-start: 1px solid var(--border-subtle);
+  min-height: 0;
+}
+
+.print-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.print-inspector-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.print-inspector-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.print-sheet-summary {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.print-inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.print-row {
+  display: grid;
+  grid-template-columns: 98px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.print-row-label {
+  padding-top: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.print-row-control {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.print-row-control .field {
+  width: 100%;
+  min-width: 0;
+}
+
+.print-dest-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-medium);
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.print-dest-box svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.print-system-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.print-system-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.print-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 3px;
+  gap: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.print-seg-btn {
+  height: 27px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.print-seg-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.print-seg-btn.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.print-row-options .print-row-label {
+  padding-top: 2px;
+}
+
+.print-inspector-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  flex-shrink: 0;
+}
+
+@media (max-width: 780px) {
+  .modal-dialog.print-studio-dialog {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 44vh) 1fr;
+    height: 92vh;
+  }
+
+  .print-studio-inspector {
+    border-inline-start: none;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .print-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .print-row-label {
+    padding-top: 0;
+  }
+}
+
+.print-sandbox-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.print-sandbox-notice-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.print-sandbox-notice-msg svg {
+  color: #f59e0b;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+#veditor-print-root {
+  display: none;
+}
+
+@media print {
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body > *:not(#veditor-print-root) {
+    display: none !important;
+  }
+
+  #veditor-print-root {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #veditor-print-root .veditor-print-sheet {
+    page-break-after: always;
+    break-after: page;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  #veditor-print-root .veditor-print-sheet:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  #veditor-print-root .veditor-print-sheet img {
+    max-width: 100%;
+    max-height: 100vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+  }
+}
+
+/* ================================================================
+ * Annotations & Highlights Sidebar Panel
+ * ================================================================ */
+
+.annot-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.annot-filter-tab {
+  height: 27px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.annot-filter-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.annot-filter-tab.is-active {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.annot-actions-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.annot-util-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 29px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.annot-util-btn:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.annot-page-bar {
+  margin-top: 4px;
+  padding-inline: 2px;
+}
+
+.annot-page-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.annot-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.annot-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+}
+
+.annot-card-swatch {
+  width: 3px;
+  align-self: stretch;
+  min-height: 22px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.annot-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--bg-surface-elevated);
+  flex-shrink: 0;
+}
+
+.annot-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.annot-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annot-card-sub {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annot-card-delete {
+  opacity: 0.45;
+  transition: opacity var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.annot-card:hover .annot-card-delete,
+.annot-card:focus-within .annot-card-delete {
+  opacity: 1;
+}
+
+

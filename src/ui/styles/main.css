@@ -394,12 +394,6 @@ body.focus-mode .header-hover-zone {
   transition: all var(--transition-fast);
 }
 
-.header-language-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
 .header-btn:hover {
   background: var(--bg-surface-hover);
   color: var(--text-primary);
@@ -533,8 +527,8 @@ body.no-page-shadows .pdf-page-container {
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
   padding: 3px;
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -2852,8 +2846,9 @@ html.platform-desktop .tool-popover {
   transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 
-body:not(.pdf-links-interactive) .pdf-link-hotspot {
-  pointer-events: none;
+body:not(.pdf-links-interactive) .pdf-link-hotspot,
+.pdf-link-hotspot.is-covered-by-annotation {
+  pointer-events: none !important;
   cursor: default !important;
 }
 

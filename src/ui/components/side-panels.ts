@@ -4,12 +4,12 @@
  */
 
 import { store } from '../../core/store';
-import { history } from '../../core/history';
+import { history, DeleteAnnotationsCommand } from '../../core/history';
 import { viewportManager } from '../../core/viewport';
 import { pdfEngine } from '../../core/pdf-engine';
 import { pageActions } from '../../core/page-actions';
 import { onPageStructureChanged } from '../../core/page-ops';
-import { DocumentSession, PDFBookmarkItem } from '../../core/types';
+import { Annotation, DocumentSession, PDFBookmarkItem } from '../../core/types';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { t, tr } from '../i18n';
@@ -18,6 +18,17 @@ import { cropDialog } from './crop-dialog';
 import { showToast } from './toast';
 import { findMatchesInPageLayout, PdfSearchMatch } from '../../core/pdf-text-layout';
 import { triggerAutoSave } from '../../io/storage';
+import {
+  AnnotationFilterCategory,
+  describeAnnotationItem,
+  buildAnnotationsMarkdownSummary
+} from '../../core/annotations-summary';
+
+export {
+  type AnnotationFilterCategory,
+  describeAnnotationItem,
+  buildAnnotationsMarkdownSummary
+};
 
 export let sidePanelsInstance: SidePanelsComponent | null = null;
 
@@ -56,6 +67,7 @@ export class SidePanelsComponent {
   /** Monotonic token to cancel stale in-flight searches immediately. */
   private _searchToken = 0;
   private _searchDebounceTimer: number | null = null;
+  private _annotationFilter: AnnotationFilterCategory = 'all';
 
   constructor(container: HTMLElement) {
     sidePanelsInstance = this;
@@ -119,6 +131,11 @@ export class SidePanelsComponent {
       .join(',');
     const outlineSig = doc ? `${doc.bookmarks?.length ?? 0}:${userBmSig}` : '0:';
     const historySig = activeTab === 'history' ? String(history.historyList.length) : '0';
+    const annotSig = activeTab === 'annotations' && doc
+      ? `${this._annotationFilter}:` + Object.entries(doc.annotations || {})
+          .map(([k, list]) => `${k}:${(list || []).map(a => `${a.id}:${a.updatedAt}`).join(',')}`)
+          .join(';')
+      : '0';
 
     const renderKey = [
       activeTab,
@@ -127,6 +144,7 @@ export class SidePanelsComponent {
       this._structureRevision,
       outlineSig,
       historySig,
+      annotSig,
       store.appSettings.language
     ].join('|');
 
@@ -151,6 +169,7 @@ export class SidePanelsComponent {
       this.syncPageSelection();
       this.syncPageBadges();
       this.syncOutlineState();
+      this.syncAnnotationSelection();
       if (activeTab === 'search') {
         this.syncActiveSearchCard();
       } else if (activeTab === 'thumbnails' && (wasCollapsed || !this._thumbObserver)) {
@@ -172,6 +191,7 @@ export class SidePanelsComponent {
     const tabTitleMap: Record<string, string> = {
       thumbnails: t('sidebar.thumbnails'),
       outline: t('sidebar.outline'),
+      annotations: lang === 'fa' ? 'حاشیه‌نویسی‌ها و هایلایت‌ها' : 'Annotations & Highlights',
       search: t('sidebar.search'),
       history: t('sidebar.history')
     };
@@ -182,6 +202,9 @@ export class SidePanelsComponent {
     } else if (activeTab === 'outline') {
       const totalBm = (doc.bookmarks?.length || 0) + (doc.userBookmarks?.length || 0);
       if (totalBm > 0) activeTabBadge = `<span class="badge">${totalBm}</span>`;
+    } else if (activeTab === 'annotations') {
+      const totalAnn = Object.values(doc.annotations || {}).reduce((acc, list) => acc + (Array.isArray(list) ? list.length : 0), 0);
+      if (totalAnn > 0) activeTabBadge = `<span class="badge">${totalAnn}</span>`;
     } else if (activeTab === 'history') {
       const hLen = history.historyList.length;
       if (hLen > 0) activeTabBadge = `<span class="badge">${hLen}</span>`;
@@ -197,6 +220,9 @@ export class SidePanelsComponent {
           </button>
           <button class="sidebar-tab-btn ${activeTab === 'outline' ? 'active' : ''}" data-tab="outline" role="tab" aria-selected="${activeTab === 'outline'}" title="${escapeHtml(t('sidebar.outline'))}" aria-label="${escapeHtml(t('sidebar.outline'))}">
             <span class="sidebar-tab-icon">${getIconSvg('bookmark', 15)}</span>
+          </button>
+          <button class="sidebar-tab-btn ${activeTab === 'annotations' ? 'active' : ''}" data-tab="annotations" role="tab" aria-selected="${activeTab === 'annotations'}" title="${lang === 'fa' ? 'حاشیه‌نویسی‌ها و هایلایت‌ها' : 'Annotations & Highlights'}" aria-label="${lang === 'fa' ? 'حاشیه‌نویسی‌ها و هایلایت‌ها' : 'Annotations & Highlights'}">
+            <span class="sidebar-tab-icon">${getIconSvg('annotations', 15)}</span>
           </button>
           <button class="sidebar-tab-btn ${activeTab === 'search' ? 'active' : ''}" data-tab="search" role="tab" aria-selected="${activeTab === 'search'}" title="${escapeHtml(t('sidebar.search'))}" aria-label="${escapeHtml(t('sidebar.search'))}">
             <span class="sidebar-tab-icon">${getIconSvg('search', 15)}</span>
@@ -271,6 +297,16 @@ export class SidePanelsComponent {
       const isCurrent = pageIdx === store.activePageIndex;
       if (item.classList.contains('is-current') !== isCurrent) {
         item.classList.toggle('is-current', isCurrent);
+      }
+    });
+  }
+
+  private syncAnnotationSelection(): void {
+    this._container.querySelectorAll<HTMLElement>('.annot-card[data-annot-jump-id]').forEach(card => {
+      const id = card.getAttribute('data-annot-jump-id') || '';
+      const isCurrent = id.length > 0 && store.selectedAnnotationIds.has(id);
+      if (card.classList.contains('is-current') !== isCurrent) {
+        card.classList.toggle('is-current', isCurrent);
       }
     });
   }
@@ -789,6 +825,163 @@ export class SidePanelsComponent {
 
       clearBtn?.addEventListener('click', () => {
         this.cancelAndResetSearch();
+      });
+    } else if (tab === 'annotations') {
+      const filter = this._annotationFilter;
+      const filterChips: Array<{ id: AnnotationFilterCategory; label: string }> = [
+        { id: 'all', label: lang === 'fa' ? 'همه' : 'All' },
+        { id: 'ink', label: lang === 'fa' ? 'قلم' : 'Ink' },
+        { id: 'text', label: lang === 'fa' ? 'یادداشت' : 'Notes' },
+        { id: 'shapes', label: lang === 'fa' ? 'اشکال' : 'Shapes' }
+      ];
+
+      const pageGroups: Array<{ pageIndex: number; items: Array<{ ann: Annotation; info: ReturnType<typeof describeAnnotationItem> }> }> = [];
+      let totalMatching = 0;
+
+      const sortedPages = Object.keys(doc.annotations || {})
+        .map(Number)
+        .filter((idx) => Number.isFinite(idx) && Array.isArray(doc.annotations[idx]) && doc.annotations[idx].length > 0)
+        .sort((a, b) => a - b);
+
+      for (const pageIdx of sortedPages) {
+        const rawList = doc.annotations[pageIdx] || [];
+        const filtered = rawList
+          .map((ann) => ({ ann, info: describeAnnotationItem(ann, lang) }))
+          .filter((entry) => filter === 'all' || entry.info.category === filter);
+        if (filtered.length > 0) {
+          pageGroups.push({ pageIndex: pageIdx, items: filtered });
+          totalMatching += filtered.length;
+        }
+      }
+
+      el.innerHTML = `
+        <div class="panel-stack">
+          <div class="annot-filter-bar" role="tablist" aria-label="${lang === 'fa' ? 'فیلتر حاشیه‌نویسی‌ها' : 'Filter annotations'}">
+            ${filterChips.map((chip) => `
+              <button type="button"
+                      class="annot-filter-tab ${filter === chip.id ? 'is-active' : ''}"
+                      data-annot-filter="${chip.id}"
+                      role="tab"
+                      aria-selected="${filter === chip.id ? 'true' : 'false'}">
+                ${escapeHtml(chip.label)}
+              </button>
+            `).join('')}
+          </div>
+
+          <div class="annot-actions-bar">
+            <button type="button" class="annot-util-btn" id="sidebar-copy-annots-md">
+              ${getIconSvg('copy', 12)}
+              <span>${lang === 'fa' ? 'کپی خلاصه' : 'Copy Summary'}</span>
+            </button>
+            <button type="button" class="annot-util-btn" id="sidebar-export-annots-md">
+              ${getIconSvg('fileDown', 12)}
+              <span>${lang === 'fa' ? 'خروجی .md' : 'Export .md'}</span>
+            </button>
+          </div>
+
+          ${totalMatching === 0 ? `
+            <div class="sidebar-empty-state">
+              <div class="sidebar-empty-icon">${getIconSvg('annotations', 22)}</div>
+              <div class="sidebar-empty-title">${lang === 'fa' ? 'موردی در این دسته‌بندی یافت نشد' : 'No annotations in this view'}</div>
+              <div class="sidebar-empty-sub">${lang === 'fa' ? 'با ابزارهای هایلایت، یادداشت، متن یا اندازه‌گیری روی صفحات علامت‌گذاری کنید.' : 'Use Highlighter, Sticky Notes, Shapes, or Measure tools on any page to see them listed here.'}</div>
+            </div>
+          ` : pageGroups.map((group) => `
+            <div class="sidebar-section-bar annot-page-bar">
+              <span class="sidebar-section-label">${lang === 'fa' ? `صفحه ${group.pageIndex + 1}` : `Page ${group.pageIndex + 1}`}</span>
+              <span class="annot-page-count tabular-nums">${group.items.length}</span>
+            </div>
+            <div class="annot-card-list">
+              ${group.items.map(({ ann, info }) => {
+                const isSelected = store.selectedAnnotationIds.has(ann.id);
+                return `
+                  <div class="list-card is-interactive annot-card ${isSelected ? 'is-current' : ''}"
+                       data-annot-jump-page="${ann.pageIndex}"
+                       data-annot-jump-id="${escapeHtml(ann.id)}">
+                    <span class="annot-card-swatch" style="background:${escapeHtml(info.color)};"></span>
+                    <span class="annot-card-icon" style="color:${escapeHtml(info.color)};">${getIconSvg(info.icon as any, 13)}</span>
+                    <div class="annot-card-body">
+                      <span class="annot-card-title" dir="auto">${escapeHtml(info.title)}</span>
+                      <div class="annot-card-sub tabular-nums" dir="auto">${escapeHtml(info.subtitle)}</div>
+                    </div>
+                    <button type="button" class="bookmark-delete-btn annot-card-delete"
+                            data-delete-annot-page="${ann.pageIndex}"
+                            data-delete-annot-id="${escapeHtml(ann.id)}"
+                            title="${lang === 'fa' ? 'حذف این مورد' : 'Delete annotation'}"
+                            aria-label="${lang === 'fa' ? 'حذف این مورد' : 'Delete annotation'}">
+                      ${getIconSvg('trash', 12)}
+                    </button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      el.querySelectorAll<HTMLButtonElement>('[data-annot-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const nextFilter = btn.getAttribute('data-annot-filter') as AnnotationFilterCategory;
+          if (nextFilter && nextFilter !== this._annotationFilter) {
+            this._annotationFilter = nextFilter;
+            this._lastRenderKey = '';
+            this.render();
+          }
+        });
+      });
+
+      el.querySelector('#sidebar-copy-annots-md')?.addEventListener('click', async () => {
+        const md = buildAnnotationsMarkdownSummary(doc, lang);
+        try {
+          await navigator.clipboard.writeText(md);
+          showToast(lang === 'fa' ? 'خلاصه حاشیه‌نویسی‌ها در کلیپ‌بورد کپی شد' : 'Markdown summary copied to clipboard', 'success');
+        } catch {
+          showToast(lang === 'fa' ? 'امکان کپی در کلیپ‌بورد وجود ندارد' : 'Clipboard copy unavailable', 'error');
+        }
+      });
+
+      el.querySelector('#sidebar-export-annots-md')?.addEventListener('click', () => {
+        const md = buildAnnotationsMarkdownSummary(doc, lang);
+        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const baseName = (doc.name || 'document').replace(/\.pdf$/i, '');
+        a.download = `${baseName}-notes.md`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        showToast(lang === 'fa' ? 'فایل خلاصه Markdown دانلود شد' : 'Markdown summary exported', 'success');
+      });
+
+      el.querySelectorAll<HTMLElement>('[data-annot-jump-id]').forEach((card) => {
+        card.addEventListener('click', (e) => {
+          if ((e.target as HTMLElement).closest('[data-delete-annot-id]')) return;
+          const pageIdx = parseInt(card.getAttribute('data-annot-jump-page') || '-1', 10);
+          const annId = card.getAttribute('data-annot-jump-id') || '';
+          if (pageIdx >= 0 && pageIdx < doc.pageCount) {
+            viewportManager.navigateWithJumpHistory(pageIdx);
+            if (annId) {
+              store.selectAnnotation(annId);
+              window.app?.repaintAllRenderedAnnotations();
+            }
+          }
+        });
+      });
+
+      el.querySelectorAll<HTMLButtonElement>('[data-delete-annot-id]').forEach((delBtn) => {
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const pageIdx = parseInt(delBtn.getAttribute('data-delete-annot-page') || '-1', 10);
+          const annId = delBtn.getAttribute('data-delete-annot-id') || '';
+          const pageAnns = doc.annotations[pageIdx] || [];
+          const target = pageAnns.find((a) => a.id === annId);
+          if (target) {
+            history.execute(new DeleteAnnotationsCommand(pageIdx, [target]));
+            triggerAutoSave();
+            window.app?.repaintAllRenderedAnnotations();
+          }
+        });
       });
     } else if (tab === 'history') {
       const historyItems = history.historyList;

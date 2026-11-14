@@ -22,6 +22,7 @@ import {
   bytesMayContainInkAnnotations
 } from './native-ink';
 import { extractPageTextLayout, getTextRangeRects, PageTextLayout } from './pdf-text-layout';
+import pdfWorkerAssetUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 /** Backing-store multiplier over CSS pixels for the current target DPI. */
 function effectiveDpr(): number {
@@ -51,8 +52,62 @@ function resolveAssetUrl(path: string): string {
   return path ? `./${path.replace(/^\.?\//, '')}` : './';
 }
 
+function resolveWorkerSrc(): string {
+  try {
+    const extUrl = extensionApi.runtime.getURL('pdf.worker.min.mjs');
+    if (extUrl && /^(chrome-extension|moz-extension|safari-web-extension):/i.test(extUrl)) {
+      return extUrl;
+    }
+  } catch (_) {
+    // ignore
+  }
+  if (pdfWorkerAssetUrl) {
+    if (typeof window !== 'undefined' && window.location?.href) {
+      try {
+        return new URL(pdfWorkerAssetUrl, window.location.href).href;
+      } catch (_) {
+        // ignore
+      }
+    }
+    return pdfWorkerAssetUrl;
+  }
+  return resolveAssetUrl('pdf.worker.min.mjs');
+}
+
 // Configure offline worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = resolveAssetUrl('pdf.worker.min.mjs');
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolveWorkerSrc();
+
+let workerPreloadPromise: Promise<void> | null = null;
+async function ensurePdfWorkerReady(): Promise<void> {
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = resolveWorkerSrc();
+  }
+  if ((globalThis as any).pdfjsWorker?.WorkerMessageHandler) return;
+  if (!workerPreloadPromise) {
+    workerPreloadPromise = (async () => {
+      let workerReachable = typeof Worker !== 'undefined';
+      if (workerReachable && typeof window !== 'undefined' && typeof fetch === 'function') {
+        try {
+          const src = pdfjsLib.GlobalWorkerOptions.workerSrc;
+          const res = await fetch(src, { cache: 'force-cache' });
+          const ct = res.headers.get('content-type') || '';
+          if (!res.ok || /html/i.test(ct)) {
+            workerReachable = false;
+          }
+        } catch (_) {
+          workerReachable = false;
+        }
+      }
+      if (!workerReachable) {
+        const mod = await import('pdfjs-dist/build/pdf.worker.mjs');
+        (globalThis as any).pdfjsWorker = mod;
+      }
+    })().catch(() => {
+      workerPreloadPromise = null;
+    });
+  }
+  await workerPreloadPromise;
+}
 
 export interface RenderTaskToken {
   cancel(): void;
@@ -107,13 +162,18 @@ export class PDFEngine {
     }
   }
 
+  public get pdfDocument(): pdfjsLib.PDFDocumentProxy | null {
+    return this._pdfDoc;
+  }
+
   /**
    * Loads a PDF document from raw binary bytes, with multi-document tab caching.
    */
   public async loadFromBytes(
     data: Uint8Array,
     docId?: string,
-    forceReload: boolean = false
+    forceReload: boolean = false,
+    password?: string
   ): Promise<{
     pageCount: number;
     pages: PageInfo[];
@@ -161,18 +221,22 @@ export class PDFEngine {
     let dataCopy: Uint8Array = data.slice(0);
     try {
       const renderDocument = await PDFDocument.load(dataCopy, { ignoreEncryption: true, updateMetadata: false });
-      const inkStripped = stripNativeInkAnnotations(renderDocument);
-      const nativeStripped = stripImportedNativeAnnotations(renderDocument);
-      if (inkStripped || nativeStripped) {
-        dataCopy = new Uint8Array(await renderDocument.save({ useObjectStreams: false }));
+      if (!renderDocument.isEncrypted) {
+        const inkStripped = stripNativeInkAnnotations(renderDocument);
+        const nativeStripped = stripImportedNativeAnnotations(renderDocument);
+        if (inkStripped || nativeStripped) {
+          dataCopy = new Uint8Array(await renderDocument.save({ useObjectStreams: false }));
+        }
       }
     } catch (e) {
       console.warn('Could not strip native annotations for rendering:', e);
     }
 
+    await ensurePdfWorkerReady();
     const localBase = resolveAssetUrl('');
     const loadingTask = pdfjsLib.getDocument({
       data: dataCopy,
+      ...(password ? { password } : {}),
       // Bundled locally (vite copies cmaps/ + standard_fonts/) so offline
       // and extension CSP never hit the network on the critical path.
       cMapUrl: `${localBase}cmaps/`,
@@ -417,24 +481,31 @@ export class PDFEngine {
    * strokes that were already imported.
    */
   private _lastExtractedBookmarks: UserBookmarkItem[] = [];
+  private _lastExtractedFormValues: Record<string, string | boolean> = {};
 
   public getLastExtractedUserBookmarks(): UserBookmarkItem[] {
     return this._lastExtractedBookmarks;
   }
 
+  public getLastExtractedFormValues(): Record<string, string | boolean> {
+    return this._lastExtractedFormValues;
+  }
+
   private parseVEditorStateFromDoc(pdfDoc: PDFDocument): {
     userBookmarks: UserBookmarkItem[];
     compositeAnnotations: Array<{ pageIndex: number; annotation: Annotation }>;
+    formValues: Record<string, string | boolean>;
   } {
     const userBookmarks: UserBookmarkItem[] = [];
     const compositeAnnotations: Array<{ pageIndex: number; annotation: Annotation }> = [];
+    const formValues: Record<string, string | boolean> = {};
     try {
       const rawObj = pdfDoc.context.lookup(pdfDoc.catalog.get(PDFName.of('VEditorState')));
       const jsonStr =
         rawObj instanceof PDFHexString || rawObj instanceof PDFString
           ? rawObj.decodeText()
           : undefined;
-      if (!jsonStr) return { userBookmarks, compositeAnnotations };
+      if (!jsonStr) return { userBookmarks, compositeAnnotations, formValues };
       const parsed = JSON.parse(jsonStr);
       if (Array.isArray(parsed?.userBookmarks)) {
         for (const bm of parsed.userBookmarks) {
@@ -461,13 +532,20 @@ export class PDFEngine {
           }
         }
       }
+      if (parsed?.formValues && typeof parsed.formValues === 'object') {
+        for (const [key, val] of Object.entries(parsed.formValues)) {
+          if (typeof val === 'string' || typeof val === 'boolean') {
+            formValues[key] = val;
+          }
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse VEditorState from PDF catalog:', e);
     }
-    return { userBookmarks, compositeAnnotations };
+    return { userBookmarks, compositeAnnotations, formValues };
   }
 
-  public async extractNativeAnnotations(bytes: Uint8Array) {
+  public async extractNativeAnnotations(bytes: Uint8Array, password?: string) {
     let toolMap: Map<string, 'pen' | 'highlighter'> | undefined;
     let metaMap: Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }> | undefined;
     const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
@@ -477,24 +555,28 @@ export class PDFEngine {
         metaMap = extractNativeInkMetaMap(pdfDoc);
       } catch (_) {}
     }
-    const { userBookmarks, compositeAnnotations } = this.parseVEditorStateFromDoc(pdfDoc);
+    const { userBookmarks, compositeAnnotations, formValues } = this.parseVEditorStateFromDoc(pdfDoc);
     this._lastExtractedBookmarks = userBookmarks;
-    const inkStrokes = await this.extractNativeInkStrokes(bytes, toolMap, metaMap);
+    this._lastExtractedFormValues = formValues;
+    const inkStrokes = await this.extractNativeInkStrokes(bytes, toolMap, metaMap, password);
     return [...inkStrokes, ...importNativeAnnotations(pdfDoc), ...compositeAnnotations];
   }
 
   public async extractNativeInkStrokes(
     bytes: Uint8Array,
     toolMap?: Map<string, 'pen' | 'highlighter'>,
-    metaMap?: Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }>
+    metaMap?: Map<string, { tool?: 'pen' | 'highlighter'; tipShape?: 'chisel' | 'round'; opacity?: number }>,
+    password?: string
   ): Promise<Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }>> {
     if (!bytesMayContainInkAnnotations(bytes)) return [];
     const results: Array<{ pageIndex: number; annotation: PenAnnotation | HighlighterAnnotation }> = [];
     let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
     try {
+      await ensurePdfWorkerReady();
       const localBase = resolveAssetUrl('');
       loadingTask = pdfjsLib.getDocument({
         data: bytes.slice(0),
+        ...(password ? { password } : {}),
         cMapUrl: `${localBase}cmaps/`,
         cMapPacked: true,
         standardFontDataUrl: `${localBase}standard_fonts/`,

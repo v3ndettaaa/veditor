@@ -76,6 +76,14 @@ export default defineConfig(({ mode, command }) => {
           process.stdin.removeAllListeners('end');
           server.middlewares.use((req, res, next) => {
             const url = req.url?.split('?')[0] || '';
+            if (url === '/pdf.worker.min.mjs') {
+              const workerPath = resolve(rootDir, 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs');
+              if (fs.existsSync(workerPath) && fs.statSync(workerPath).isFile()) {
+                res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+                res.end(fs.readFileSync(workerPath));
+                return;
+              }
+            }
             if (url.startsWith('/cmaps/') || url.startsWith('/standard_fonts/')) {
               const rel = url.slice(1);
               const filePath = resolve(rootDir, 'node_modules/pdfjs-dist', rel);

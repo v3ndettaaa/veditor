@@ -1013,8 +1013,6 @@ export class PointerHandler {
         break;
 
       case 'measure-distance':
-      case 'measure-angle':
-      case 'measure-area':
         measureTool.start(
           pt,
           pageIndex,
@@ -1023,7 +1021,59 @@ export class PointerHandler {
           tSettings.measureScale,
           '#2563eb'
         );
+        if (this._pageScratchCtx && this._pageScratchCanvas) {
+          const c = this._pageScratchCtx;
+          const cv = this._pageScratchCanvas;
+          c.clearRect(0, 0, cv.width, cv.height);
+          this.withScratchOffset(c, cv, () => {
+            measureTool.renderScratchpad(c, store.zoom * this.renderDpr());
+          });
+        }
         break;
+
+      case 'measure-angle':
+      case 'measure-area': {
+        if (measureTool.isMultiPointActive() && measureTool.activePageIndex === pageIndex && measureTool.activeType === tool) {
+          const completed = measureTool.addPoint(pt);
+          if (completed) {
+            const measureAnn = measureTool.finish(defaultLayerId);
+            if (measureAnn) {
+              history.execute(new AddAnnotationCommand(pageIndex, measureAnn));
+            }
+            if (this._pageScratchCtx && this._pageScratchCanvas) {
+              this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+            }
+            onNeedRepaint();
+            return;
+          }
+          if (this._pageScratchCtx && this._pageScratchCanvas) {
+            const c = this._pageScratchCtx;
+            const cv = this._pageScratchCanvas;
+            c.clearRect(0, 0, cv.width, cv.height);
+            this.withScratchOffset(c, cv, () => {
+              measureTool.renderScratchpad(c, store.zoom * this.renderDpr());
+            });
+          }
+          return;
+        }
+        measureTool.start(
+          pt,
+          pageIndex,
+          tool,
+          tSettings.measureUnit,
+          tSettings.measureScale,
+          '#2563eb'
+        );
+        if (this._pageScratchCtx && this._pageScratchCanvas) {
+          const c = this._pageScratchCtx;
+          const cv = this._pageScratchCanvas;
+          c.clearRect(0, 0, cv.width, cv.height);
+          this.withScratchOffset(c, cv, () => {
+            measureTool.renderScratchpad(c, store.zoom * this.renderDpr());
+          });
+        }
+        break;
+      }
 
       case 'lasso': {
         // Freehand selection loop. Same session as Alt+drag in Select, so both
@@ -1213,6 +1263,29 @@ export class PointerHandler {
             shapesTool.renderScratchpad(ctx, rs);
             this.renderSnapTarget(ctx, rs);
           }
+        });
+      }
+      return;
+    }
+
+    if (
+      !this._isPointerDown &&
+      (store.activeTool === 'measure-angle' || store.activeTool === 'measure-area') &&
+      measureTool.isMultiPointActive() &&
+      measureTool.activePageIndex === pageIndex
+    ) {
+      const renderCanvas = this.resolveRenderScratchCanvas(scratchCanvas);
+      const ctx = renderCanvas.getContext('2d');
+      if (ctx) {
+        this._pageScratchCanvas = renderCanvas;
+        this._pageScratchCtx = ctx;
+        this._activePageIndex = pageIndex;
+        const hoverPt = this.getPointInPage(e, scratchCanvas);
+        measureTool.move(hoverPt);
+        ctx.clearRect(0, 0, renderCanvas.width, renderCanvas.height);
+        const rs = store.zoom * this.renderDpr();
+        this.withScratchOffset(ctx, renderCanvas, () => {
+          measureTool.renderScratchpad(ctx, rs);
         });
       }
       return;
@@ -1612,6 +1685,20 @@ export class PointerHandler {
       return;
     }
 
+    if ((tool === 'measure-angle' || tool === 'measure-area') && measureTool.isMultiPointActive()) {
+      this._isPointerDown = false;
+      this._strokeTool = null;
+      if (this._pageScratchCtx && this._pageScratchCanvas) {
+        const c = this._pageScratchCtx;
+        const cv = this._pageScratchCanvas;
+        c.clearRect(0, 0, cv.width, cv.height);
+        this.withScratchOffset(c, cv, () => {
+          measureTool.renderScratchpad(c, store.zoom * this.renderDpr());
+        });
+      }
+      return;
+    }
+
     // Clear scratchpad canvas
     if (this._pageScratchCtx && this._pageScratchCanvas) {
       this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
@@ -1842,14 +1929,13 @@ export class PointerHandler {
         break;
       }
 
-      case 'measure-distance':
-      case 'measure-angle':
-      case 'measure-area':
+      case 'measure-distance': {
         const measureAnn = measureTool.finish(defaultLayerId);
         if (measureAnn) {
           history.execute(new AddAnnotationCommand(pageIndex, measureAnn));
         }
         break;
+      }
 
       case 'sticky-note': {
         const drag = this._stickyCreateDrag;
@@ -1903,6 +1989,24 @@ export class PointerHandler {
   }
 
   public finishPolygon(pageIndex: number, defaultLayerId: string = 'layer-default', onNeedRepaint?: () => void): boolean {
+    if (measureTool.isMultiPointActive()) {
+      const measureAnn = measureTool.finish(defaultLayerId);
+      if (measureAnn) {
+        history.execute(new AddAnnotationCommand(pageIndex, measureAnn));
+        if (this._pageScratchCtx && this._pageScratchCanvas) {
+          this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+        }
+        this._pageScratchCanvas = null;
+        this._pageScratchCtx = null;
+        onNeedRepaint?.();
+        return true;
+      }
+      measureTool.cancel();
+      if (this._pageScratchCtx && this._pageScratchCanvas) {
+        this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+      }
+      return false;
+    }
     if (shapesTool.isPolygonActive()) {
       const polyAnn = shapesTool.finish(defaultLayerId);
       const stickyNoteId = this._activeStickyPolygonNoteId;
@@ -1982,29 +2086,31 @@ export class PointerHandler {
     let y2 = m.y + m.height;
     const h = drag.handle;
 
-    // Stamps are effectively images: corner resizing preserves aspect by
-    // default (Shift frees it). Other annotations keep free scaling by
-    // default and use Shift to lock.
+    // Corner resizing scales freely by default; holding Shift locks aspect ratio proportionally across all annotation types.
     const isCorner = h === 'nw' || h === 'ne' || h === 'se' || h === 'sw';
-    const allStamps = drag.originals.size > 0 &&
-      [...drag.originals.values()].every(a => a.type === 'stamp');
-    const lockAspect = isCorner && (allStamps ? !shiftKey : shiftKey);
+    const lockAspect = isCorner && shiftKey;
 
-    if (lockAspect) {
-      const origAspect = m.width > 0 && m.height > 0 ? m.width / m.height : 1;
-      const primaryDelta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+    if (lockAspect && m.width > 0.5 && m.height > 0.5) {
+      const nx = h.includes('w') ? -dx / m.width : dx / m.width;
+      const ny = h.includes('n') ? -dy / m.height : dy / m.height;
+      const u = Math.abs(nx) >= Math.abs(ny) ? nx : ny;
+      const minScale = Math.max(8 / m.width, 8 / m.height);
+      const uniformScale = Math.max(minScale, 1 + u);
+      const nextW = m.width * uniformScale;
+      const nextH = m.height * uniformScale;
+
       if (h === 'se') {
-        x2 = m.x + m.width + primaryDelta;
-        y2 = m.y + (x2 - m.x) / origAspect;
+        x2 = m.x + nextW;
+        y2 = m.y + nextH;
       } else if (h === 'nw') {
-        x1 = m.x + primaryDelta;
-        y1 = (m.y + m.height) - (m.x + m.width - x1) / origAspect;
+        x1 = (m.x + m.width) - nextW;
+        y1 = (m.y + m.height) - nextH;
       } else if (h === 'ne') {
-        x2 = m.x + m.width + primaryDelta;
-        y1 = (m.y + m.height) - (x2 - m.x) / origAspect;
+        x2 = m.x + nextW;
+        y1 = (m.y + m.height) - nextH;
       } else if (h === 'sw') {
-        x1 = m.x + primaryDelta;
-        y2 = m.y + (m.x + m.width - x1) / origAspect;
+        x1 = (m.x + m.width) - nextW;
+        y2 = m.y + nextH;
       }
     } else {
       if (h.includes('e')) x2 += dx;
@@ -2166,8 +2272,7 @@ export class PointerHandler {
         pageBounds.width,
         pageBounds.height,
         store.appSettings.backgroundPattern,
-        1.0,
-        store.appSettings.gridSize
+        1.0
       );
     }
     annotationEngine.renderAnnotationsToCanvas(ctx, pageIndex, 1.0);
@@ -2295,8 +2400,16 @@ export class PointerHandler {
   }
 
   public cancelPolygon(): void {
+    let cancelled = false;
     if (shapesTool.isPolygonActive()) {
       shapesTool.reset();
+      cancelled = true;
+    }
+    if (measureTool.isMultiPointActive()) {
+      measureTool.cancel();
+      cancelled = true;
+    }
+    if (cancelled) {
       if (this._pageScratchCtx && this._pageScratchCanvas) {
         this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
       }
@@ -2318,7 +2431,10 @@ export class PointerHandler {
   }
 
   public isPolygonActiveOnPage(pageIndex: number): boolean {
-    return shapesTool.isPolygonActive() && shapesTool.activePageIndex === pageIndex;
+    return (
+      (shapesTool.isPolygonActive() && shapesTool.activePageIndex === pageIndex) ||
+      (measureTool.isMultiPointActive() && measureTool.activePageIndex === pageIndex)
+    );
   }
 
   public handleHover(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): void {

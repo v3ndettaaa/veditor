@@ -9,6 +9,9 @@ import { pdfEngine } from '../core/pdf-engine';
 import { viewportManager } from '../core/viewport';
 import { pdfExporter } from './export-pdf';
 import type { PDFExportOptions } from './export-pdf';
+import { imageExporter } from './export-image';
+import { dataExporter } from './export-data';
+import { buildZipBlob } from './zip';
 import { saveDocumentSession } from './storage';
 import { showToast } from '../ui/components/toast';
 import { openSaveAsDialog, type SaveAsOptions } from '../ui/components/save-as-dialog';
@@ -51,7 +54,8 @@ async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8A
     pageIndices: opts?.pageIndices,
     darkMode: opts?.darkMode === true,
     embedCompositeAnnotations: opts?.embedCompositeAnnotations ?? true,
-    bakePageRotations: opts?.bakePageRotations ?? true
+    bakePageRotations: opts?.bakePageRotations ?? true,
+    password: opts?.password
   });
 }
 
@@ -218,9 +222,49 @@ async function writeExportedBytes(
 }
 
 /**
- * Save As: opens the options dialog (name, location hint, quality, pages),
- * then always prompts for file/location via the OS picker or download.
- * Cancelling anywhere touches nothing.
+ * Prompts the user to pick a `.json` annotation backup file and imports
+ * annotations & layers into the currently active document.
+ */
+export function promptImportAnnotationsJson(): void {
+  const doc = store.activeDocument;
+  if (!doc) {
+    showToast(tr('Open a PDF document before importing annotations', 'ابتدا یک سند PDF باز کنید'), 'error');
+    return;
+  }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const ok = dataExporter.importFromJSON(text);
+      if (ok) {
+        const now = Date.now();
+        doc.lastModifiedAt = now;
+        await saveDocumentSession(doc, { includeBytes: false });
+        store.notify();
+        (window as any).app?.repaintAllVisibleAnnotations?.();
+        showToast(tr('Annotations imported successfully', 'حاشیه‌نویسی‌ها با موفقیت وارد شدند'), 'success');
+      } else {
+        showToast(tr('Invalid annotations JSON file', 'فایل JSON حاشیه‌نویسی نامعتبر است'), 'error');
+      }
+    } catch (err: any) {
+      showToast(tr(`Import failed: ${err?.message || err}`, `خطا در وارد کردن: ${err?.message || err}`), 'error');
+    }
+  });
+
+  input.click();
+}
+
+/**
+ * Save As & Export: opens the unified options dialog (format, name, quality, pages),
+ * then exports as PDF, PNG, JPEG, XFDF, or JSON.
  */
 export async function saveActiveDocumentAs(): Promise<boolean> {
   const doc = store.activeDocument;
@@ -236,15 +280,92 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
     openSaveAsDialog({
       defaultFilename: suggested,
       pageCount,
+      activePageIndex: store.activePageIndex,
       selectedPageIndices: [...store.selectedPageIndices],
       supportsPicker,
       displayedDark: isPdfDisplayedDark(
         store.appSettings.invertDocumentOled,
         document.body.classList.contains('invert-pdf-document')
       ),
+      onImportJson: () => promptImportAnnotationsJson(),
       onClose: () => resolve(false),
       onSubmit: async (opts: SaveAsOptions) => {
         try {
+          if (opts.format === 'xfdf') {
+            const xml = dataExporter.exportToXFDF();
+            dataExporter.downloadTextFile(xml, opts.filename, 'application/vnd.adobe.xfdf');
+            showToast(tr(`Exported XFDF as ${opts.filename}`, `فایل XFDF با نام ${opts.filename} ذخیره شد`), 'success');
+            resolve(true);
+            return;
+          }
+
+          if (opts.format === 'json') {
+            const json = dataExporter.exportToJSON();
+            dataExporter.downloadTextFile(json, opts.filename, 'application/json');
+            showToast(tr(`Exported JSON backup as ${opts.filename}`, `فایل پشتیبان JSON با نام ${opts.filename} ذخیره شد`), 'success');
+            resolve(true);
+            return;
+          }
+
+          if (opts.format === 'png' || opts.format === 'jpeg') {
+            showToast(tr('Rendering high-DPI image…', 'در حال رندر تصویر با کیفیت بالا…'), 'progress');
+            let targetPages: number[] = [];
+            if (opts.pageIndices && opts.pageIndices.length > 0) {
+              targetPages = opts.pageIndices;
+            } else if (opts.pageRange) {
+              for (let p = opts.pageRange.start - 1; p <= opts.pageRange.end - 1; p++) {
+                if (p >= 0 && p < doc.pageCount) targetPages.push(p);
+              }
+            } else {
+              targetPages = Array.from({ length: doc.pageCount }, (_, i) => i);
+            }
+            if (targetPages.length === 0) targetPages = [store.activePageIndex];
+
+            const baseName = opts.filename.replace(/\.(png|jpe?g|zip)$/i, '') || 'document';
+            const ext = opts.format === 'png' ? 'png' : 'jpg';
+            const darkMode = opts.darkMode === true;
+
+            if (targetPages.length === 1) {
+              const blob = await imageExporter.exportPageToImage(targetPages[0], {
+                format: opts.format,
+                dpi: opts.dpi,
+                quality: 0.92,
+                includeAnnotations: true,
+                darkMode
+              });
+              imageExporter.downloadImage(blob, `${baseName}.${ext}`);
+            } else {
+              const zipEntries: Array<{ name: string; data: Uint8Array }> = [];
+              const padDigits = String(doc.pageCount).length;
+              for (const pageIdx of targetPages) {
+                const blob = await imageExporter.exportPageToImage(pageIdx, {
+                  format: opts.format,
+                  dpi: opts.dpi,
+                  quality: 0.92,
+                  includeAnnotations: true,
+                  darkMode
+                });
+                const buf = new Uint8Array(await blob.arrayBuffer());
+                const pageLabel = String(pageIdx + 1).padStart(padDigits, '0');
+                zipEntries.push({
+                  name: `${baseName}-page-${pageLabel}.${ext}`,
+                  data: buf
+                });
+              }
+              const zipBlob = buildZipBlob(zipEntries);
+              imageExporter.downloadImage(zipBlob, `${baseName}-${ext}-pages.zip`);
+            }
+
+            showToast(
+              targetPages.length > 1
+                ? tr(`Bundled ${targetPages.length} pages into ZIP (${opts.format.toUpperCase()})`, `${targetPages.length} صفحه با فرمت ${opts.format.toUpperCase()} در یک فایل ZIP ذخیره شد`)
+                : tr(`Exported ${targetPages.length} page as ${opts.format.toUpperCase()}`, `${targetPages.length} صفحه با فرمت ${opts.format.toUpperCase()} ذخیره شد`),
+              'success'
+            );
+            resolve(true);
+            return;
+          }
+
           showToast(tr('Preparing Save As…', 'در حال آماده‌سازی فایل…'), 'progress');
           const diskBytes = await buildSavedBytes({
             dpi: opts.dpi,
@@ -253,7 +374,8 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
             pageRange: opts.pageRange,
             pageIndices: opts.pageIndices,
             embedCompositeAnnotations: true,
-            bakePageRotations: true
+            bakePageRotations: true,
+            password: opts.password
           });
           const result = await writeExportedBytes(diskBytes, opts.filename);
           if (result.cancelled) {
@@ -272,14 +394,22 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
 
           if (opts.flatten) {
             // Flattened export baked all annotations and rotations into the PDF page streams;
-            // clear in-memory annotations and user rotations so they are not applied twice.
+            // keep an unencrypted working session copy so the active tab stays responsive.
             doc.annotations = {};
             for (const k of Object.keys(store.pageRotations)) {
               delete store.pageRotations[Number(k)];
             }
-            doc.fileData = diskBytes;
+            doc.fileData = opts.password
+              ? await buildSavedBytes({
+                  dpi: opts.dpi,
+                  flatten: true,
+                  darkMode: opts.darkMode === true,
+                  embedCompositeAnnotations: true,
+                  bakePageRotations: true
+                })
+              : diskBytes;
           } else {
-            const sessionBytes = hasUserPageRotations()
+            const sessionBytes = (hasUserPageRotations() || opts.password)
               ? await buildSavedBytes({
                   dpi: opts.dpi,
                   flatten: false,

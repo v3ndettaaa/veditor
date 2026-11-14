@@ -12,6 +12,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   const fileInput = document.getElementById('file-input') as HTMLInputElement;
   const recentList = document.getElementById('recent-list');
   const shortcutsLink = document.getElementById('shortcuts-link');
+  const autoOpenToggle = document.getElementById('auto-open-pdf-toggle') as HTMLInputElement | null;
+
+  if (autoOpenToggle) {
+    try {
+      const stored = await extensionApi.storage.get(['veditor_auto_open_pdfs']);
+      if (stored && typeof stored.veditor_auto_open_pdfs === 'boolean') {
+        autoOpenToggle.checked = stored.veditor_auto_open_pdfs;
+      } else {
+        autoOpenToggle.checked = localStorage.getItem('veditor_auto_open_pdfs') === 'true';
+      }
+    } catch {
+      autoOpenToggle.checked = localStorage.getItem('veditor_auto_open_pdfs') === 'true';
+    }
+    autoOpenToggle.addEventListener('change', async () => {
+      const enabled = autoOpenToggle.checked;
+      try {
+        await extensionApi.storage.set({ veditor_auto_open_pdfs: enabled });
+      } catch {
+        // Fallback to localStorage when running outside extension popup
+      }
+      try {
+        localStorage.setItem('veditor_auto_open_pdfs', enabled ? 'true' : 'false');
+      } catch {}
+    });
+  }
 
   openAppBtn?.addEventListener('click', () => {
     const url = extensionApi.runtime.getURL('index.html');

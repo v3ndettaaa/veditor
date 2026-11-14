@@ -23,9 +23,142 @@ export function rotatePoint(p: Point, center: Point, angle: number): Point {
   };
 }
 
-/** Box center helper. */
 export function boxCenter(box: BoundingBox): Point {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/** Computes the 2D convex hull of a set of points (Andrew's monotone chain). */
+export function computeConvexHull(points: Point[]): Point[] {
+  if (points.length <= 2) return points.map(p => ({ x: p.x, y: p.y }));
+  const pts = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  const cross = (o: Point, a: Point, b: Point) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+  const lower: Point[] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push({ x: p.x, y: p.y });
+  }
+  const upper: Point[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push({ x: p.x, y: p.y });
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function expandPolygonOutward(hull: Point[], pad: number): Point[] {
+  if (hull.length < 3 || pad <= 0) return hull;
+  const cx = hull.reduce((s, p) => s + p.x, 0) / hull.length;
+  const cy = hull.reduce((s, p) => s + p.y, 0) / hull.length;
+  return hull.map(p => {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: p.x + (dx / len) * pad, y: p.y + (dy / len) * pad };
+  });
+}
+
+function isPointOnInkAnnotation(point: Point, ann: Annotation, extraPad = 6): boolean {
+  const pts = (ann as { points?: Point[] }).points;
+  if (!Array.isArray(pts) || pts.length === 0) return false;
+  const center = boxCenter(ann.box);
+  const rot = ann.rotation || 0;
+  const local = rot ? rotatePoint(point, center, -rot) : point;
+  const tol = Math.max(extraPad, ((ann as any).strokeWidth || 2) / 2 + 5);
+  if (pts.length === 1) return distance(local, pts[0]) <= tol;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    if (distanceToSegment(local, pts[i], pts[i + 1]) <= tol) return true;
+  }
+  return false;
+}
+
+function isPointInEllipseAnnotation(point: Point, ann: Annotation, edgePad = 4): boolean {
+  const box = ann.box;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const local = ann.rotation ? rotatePoint(point, { x: cx, y: cy }, -ann.rotation) : point;
+  const rx = Math.max(2, box.width / 2 + edgePad);
+  const ry = Math.max(2, box.height / 2 + edgePad);
+  const dx = local.x - cx;
+  const dy = local.y - cy;
+  return (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0;
+}
+
+/**
+ * Checks whether an annotation's actual geometry covers/overlaps a target bounding box
+ * (used to block clicking PDF hyperlinks hidden beneath annotations).
+ */
+export function doesAnnotationCoverBox(ann: Annotation, target: BoundingBox): boolean {
+  const box = getAnnotationSelectionBox(ann);
+  if (!boxesIntersect(box, target)) return false;
+
+  const samplePoints: Point[] = [
+    { x: target.x + target.width * 0.5, y: target.y + target.height * 0.5 },
+    { x: target.x + target.width * 0.15, y: target.y + target.height * 0.15 },
+    { x: target.x + target.width * 0.5, y: target.y + target.height * 0.15 },
+    { x: target.x + target.width * 0.85, y: target.y + target.height * 0.15 },
+    { x: target.x + target.width * 0.15, y: target.y + target.height * 0.5 },
+    { x: target.x + target.width * 0.85, y: target.y + target.height * 0.5 },
+    { x: target.x + target.width * 0.15, y: target.y + target.height * 0.85 },
+    { x: target.x + target.width * 0.5, y: target.y + target.height * 0.85 },
+    { x: target.x + target.width * 0.85, y: target.y + target.height * 0.85 }
+  ];
+
+  if (ann.type === 'pen' || ann.type === 'highlighter') {
+    const pts = (ann as { points?: Point[] }).points;
+    if (!Array.isArray(pts) || pts.length === 0) return false;
+    const center = boxCenter(ann.box);
+    const rot = ann.rotation || 0;
+    const pagePts = rot ? pts.map(p => rotatePoint(p, center, rot)) : pts;
+    const pad = Math.max(4, ((ann as any).strokeWidth || 2) / 2);
+    for (const p of pagePts) {
+      if (isPointInBox(p, target)) return true;
+    }
+    for (let i = 0; i + 1 < pagePts.length; i++) {
+      const a = pagePts[i];
+      const b = pagePts[i + 1];
+      for (const sp of samplePoints) {
+        if (distanceToSegment(sp, a, b) <= pad + Math.min(target.width, target.height) * 0.25) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  if (ann.type === 'ellipse') {
+    return samplePoints.some(sp => isPointInEllipseAnnotation(sp, ann, 2));
+  }
+
+  if (ann.type === 'line' || ann.type === 'arrow' || ann.type === 'measure-distance' || ann.type === 'measure-angle') {
+    const verts = getAnnotationVertices(ann);
+    if (!verts || verts.length < 2) return false;
+    const pad = Math.max(4, ((ann as any).strokeWidth || 2) / 2);
+    for (let i = 0; i + 1 < verts.length; i++) {
+      for (const sp of samplePoints) {
+        if (distanceToSegment(sp, verts[i], verts[i + 1]) <= pad + Math.min(target.width, target.height) * 0.35) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  if (ann.type === 'polygon' || ann.type === 'freeform-shape' || ann.type === 'measure-area') {
+    const verts = getAnnotationVertices(ann);
+    if (!verts || verts.length < 3) return false;
+    return samplePoints.some(sp => isPointInPolygon(sp, verts));
+  }
+
+  return true;
 }
 
 /** Normalizes two drag corners into a positive-size box. Pure, unit-tested. */
@@ -649,7 +782,8 @@ export class SelectionManager {
       point,
       mergeBoundingBoxes(annotations.map(getAnnotationSelectionBox)),
       scale,
-      annotations.length === 1 ? annotations[0].rotation || 0 : 0
+      annotations.length === 1 ? annotations[0].rotation || 0 : 0,
+      annotations.length === 1 ? annotations[0] : undefined
     );
   }
 
@@ -658,7 +792,13 @@ export class SelectionManager {
    * When the selection is rotated, the point is mapped into the unrotated
    * frame first so handles stay grabbable at any angle.
    */
-  public hitTestHandles(point: Point, box: BoundingBox, scale: number = 1.0, rotation: number = 0): HandleType {
+  public hitTestHandles(
+    point: Point,
+    box: BoundingBox,
+    scale: number = 1.0,
+    rotation: number = 0,
+    singleAnn?: Annotation
+  ): HandleType {
     const local = rotation ? rotatePoint(point, boxCenter(box), -rotation) : point;
     const safeScale = Math.max(scale, 0.25);
     const metrics = computeShapeHandleMetrics(box);
@@ -712,6 +852,15 @@ export class SelectionManager {
       return bestHandle;
     }
 
+    if (singleAnn) {
+      if (singleAnn.type === 'pen' || singleAnn.type === 'highlighter') {
+        return isPointOnInkAnnotation(point, singleAnn, 8 / safeScale) ? 'body' : null;
+      }
+      if (singleAnn.type === 'ellipse') {
+        return isPointInEllipseAnnotation(point, singleAnn, 4 / safeScale) ? 'body' : null;
+      }
+    }
+
     if (isPointInBox(local, box)) {
       return 'body';
     }
@@ -731,6 +880,16 @@ export class SelectionManager {
       // Rotated annotations hit-test in their unrotated frame.
       const local = ann.rotation ? rotatePoint(point, boxCenter(selBox), -ann.rotation) : point;
       if (!isPointInBox(local, selBox)) continue;
+
+      if (ann.type === 'pen' || ann.type === 'highlighter') {
+        if (!isPointOnInkAnnotation(point, ann, 7)) continue;
+        return ann;
+      }
+
+      if (ann.type === 'ellipse') {
+        if (!isPointInEllipseAnnotation(point, ann, 4)) continue;
+        return ann;
+      }
 
       if (
         ann.type === 'line' ||
@@ -922,9 +1081,13 @@ export class SelectionManager {
         this.renderEllipseSelection(ctx, ann, scale);
         return;
       }
+      if (ann.type === 'pen' || ann.type === 'highlighter') {
+        this.renderInkSelection(ctx, ann, scale);
+        return;
+      }
     }
 
-    // Multi-selection or box-based annotations (text, stamp, sticky-note, pen strokes)
+    // Multi-selection or inherently rectangular annotations (text, stamp, sticky-note)
     const rotation = annotations.length === 1 ? annotations[0].rotation || 0 : 0;
     this.renderSelectionBox(
       ctx,
@@ -932,6 +1095,99 @@ export class SelectionManager {
       scale,
       rotation
     );
+  }
+
+  /**
+   * Renders a tight contour-hull selection envelope around a pen/highlighter stroke
+   * with subtle corner/rotation grips (no loose oversized box obscuring adjacent text).
+   */
+  private renderInkSelection(
+    ctx: CanvasRenderingContext2D,
+    ann: Annotation,
+    scale: number = 1.0
+  ): void {
+    const pts = (ann as { points?: Point[] }).points;
+    if (!Array.isArray(pts) || pts.length < 2) {
+      this.renderSelectionBox(ctx, getAnnotationSelectionBox(ann), scale, ann.rotation || 0);
+      return;
+    }
+
+    const box = getAnnotationSelectionBox(ann);
+    const rotation = ann.rotation || 0;
+    const hull = expandPolygonOutward(computeConvexHull(pts), Math.max(4, ((ann as any).strokeWidth || 2) / 2 + 2));
+
+    ctx.save();
+    ctx.scale(scale, scale);
+    if (rotation) {
+      const c = boxCenter(box);
+      ctx.translate(c.x, c.y);
+      ctx.rotate(rotation);
+      ctx.translate(-c.x, -c.y);
+    }
+
+    if (hull.length >= 3) {
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.35;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      ctx.moveTo(hull[0].x, hull[0].y);
+      for (let i = 1; i < hull.length; i++) ctx.lineTo(hull[i].x, hull[i].y);
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.35;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+
+    if (ann.locked) {
+      ctx.restore();
+      return;
+    }
+
+    const metrics = computeShapeHandleMetrics(box);
+    const hs = metrics.boxHandleSize;
+    const rotDist = metrics.rotDist;
+    const cx = box.x + box.width / 2;
+
+    // Subtle rotation handle above top center
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.moveTo(cx, box.y);
+    ctx.lineTo(cx, box.y - rotDist);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Subtle circular corner resize handles at the four corners
+    const corners: Point[] = [
+      { x: box.x, y: box.y },
+      { x: box.x + box.width, y: box.y },
+      { x: box.x + box.width, y: box.y + box.height },
+      { x: box.x, y: box.y + box.height }
+    ];
+    const r = Math.max(2.2, metrics.handleRadius * 0.85);
+    for (const cPt of corners) {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = metrics.strokeWidth;
+      ctx.beginPath();
+      ctx.arc(cPt.x, cPt.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   /**

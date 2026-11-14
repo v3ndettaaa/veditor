@@ -22,9 +22,13 @@ import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
-import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail, deleteRecentDocument } from './io/storage';
+import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail, deleteRecentDocument, getDocumentSessionByPath, flushDocPosition, triggerAutoSave } from './io/storage';
 import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
-import { selectionManager, transformAnnotation } from './annotations/selection';
+import { openPrintDialog } from './ui/components/print-dialog';
+import { promptPdfPassword } from './ui/components/password-dialog';
+import { pdfBytesMayBeEncrypted, isPdfPasswordError } from './core/print-utils';
+import { getPageFormFields, mountPageFormFields, clearFormFieldsCache } from './core/pdf-forms';
+import { selectionManager, transformAnnotation, doesAnnotationCoverBox } from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { resolveAdaptiveCanvasDpr } from './utils/dpi';
 import { getIconSvg } from './utils/icons';
@@ -50,7 +54,6 @@ import {
   takeStartupFilePath,
   nativeConfirm
 } from './io/native-fs';
-import { getDocumentSessionByPath, flushDocPosition } from './io/storage';
 
 
 declare global {
@@ -287,6 +290,7 @@ class VeditorApp {
     // 8. Clean up cached PDF documents and history when a tab is closed
     store.onTabClosed((tabId, closedDoc) => {
       pdfEngine.unloadDoc(tabId);
+      clearFormFieldsCache(tabId);
       history.removeDocument(tabId);
       forgetFileHandle(tabId);
       if (closedDoc) void flushDocPosition(closedDoc);
@@ -610,12 +614,24 @@ class VeditorApp {
 
       if (e.dataTransfer?.files && e.dataTransfer.files[0]) {
         const file = e.dataTransfer.files[0];
-        if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
           const bytes = new Uint8Array(await file.arrayBuffer());
           const docId = await this.loadPDF(file.name, bytes);
           if (docId && fileHandle) {
             rememberFileHandle(docId, fileHandle);
           }
+        } else if (
+          store.activeDocument &&
+          (file.type.startsWith('image/') || /\.(png|jpe?g|webp|svg|gif)$/i.test(file.name))
+        ) {
+          const targetEl = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-page-index]');
+          const droppedPageIdx = targetEl ? parseInt(targetEl.dataset.pageIndex || '-1', 10) : store.activePageIndex;
+          const validPageIdx = Number.isFinite(droppedPageIdx) && droppedPageIdx >= 0 ? droppedPageIdx : store.activePageIndex;
+          const pageRecord = this._renderedPages.get(validPageIdx);
+          const dropPt = pageRecord
+            ? pointerHandler.pagePointForEvent(e as unknown as PointerEvent, pageRecord.scratchCanvas)
+            : undefined;
+          await this.insertImageFile(file, validPageIdx, dropPt);
         }
       }
     });
@@ -687,13 +703,7 @@ class VeditorApp {
     nativeFilePath?: string
   ): Promise<string | null> {
     const isFa = store.appSettings.language === 'fa';
-    this.showPdfLoading(
-      name,
-      isFa ? 'در حال بررسی و خواندن ساختار پی‌دی‌اف…' : 'Reading & validating PDF structure…',
-      28,
-      '1 / 3'
-    );
-    showToast(`Loading ${name}…`, 'progress');
+    let loadingOverlayActive = false;
     try {
       const masterBytes = bytes;
       if (!this.hasValidPdfHeader(masterBytes)) {
@@ -704,17 +714,69 @@ class VeditorApp {
         );
       }
 
+      const mightBeEncrypted = pdfBytesMayBeEncrypted(masterBytes);
+      if (mightBeEncrypted) {
+        this.hidePdfLoading();
+      } else {
+        loadingOverlayActive = true;
+        this.showPdfLoading(
+          name,
+          isFa ? 'در حال بررسی و خواندن ساختار پی‌دی‌اف…' : 'Reading & validating PDF structure…',
+          28,
+          '1 / 3'
+        );
+        showToast(`Loading ${name}…`, 'progress');
+      }
+
       const docId = existingDocId || createDocumentId();
-      const { pageCount, pages, bookmarks } = await pdfEngine.loadFromBytes(masterBytes, docId);
+      let loadedMeta: Awaited<ReturnType<typeof pdfEngine.loadFromBytes>> | null = null;
+      let passwordAttempt: string | undefined = undefined;
+
+      try {
+        loadedMeta = await pdfEngine.loadFromBytes(masterBytes, docId, false, undefined);
+      } catch (initialErr: any) {
+        if (!isPdfPasswordError(initialErr)) throw initialErr;
+
+        if (loadingOverlayActive) {
+          this.hidePdfLoading();
+          loadingOverlayActive = false;
+        }
+
+        const entered = await promptPdfPassword(name, {
+          onVerify: async (candidate) => {
+            try {
+              loadedMeta = await pdfEngine.loadFromBytes(masterBytes, docId, false, candidate);
+              passwordAttempt = candidate;
+              return true;
+            } catch (verifyErr: any) {
+              if (isPdfPasswordError(verifyErr)) {
+                return false;
+              }
+              throw verifyErr;
+            }
+          }
+        });
+
+        if (entered === null || !loadedMeta) {
+          showToast(isFa ? 'باز کردن پی‌دی‌اف رمزدار لغو شد' : 'Password-protected PDF cancelled', 'info');
+          return null;
+        }
+      }
+
+      const { pageCount, pages, bookmarks } = loadedMeta;
       if (!pageCount || pageCount <= 0) {
         throw new Error(isFa ? 'این فایل پی‌دی‌اف فاقد صفحه قابل نمایش است.' : 'PDF document contains 0 readable pages.');
       }
 
-      // Only persist to IndexedDB / Recent Library AFTER pdfEngine confirms valid PDF!
+      // Only persist to IndexedDB / Recent Library AFTER pdfEngine confirms valid & unlocked PDF!
       if (!existingDocId) {
         void openDocumentSession(name, masterBytes, undefined, docId).catch(() => {});
       }
 
+      if (!loadingOverlayActive) {
+        loadingOverlayActive = true;
+        showToast(`Loading ${name}…`, 'progress');
+      }
       this.showPdfLoading(
         name,
         isFa ? 'در حال بارگذاری یادداشت‌ها و فهرست…' : 'Loading annotations & outline…',
@@ -731,7 +793,7 @@ class VeditorApp {
       // Only parse native annotations on brand-new document opens, never when
       // restoring an existing session whose annotations are already persisted.
       if (!baseAnnotations) {
-        for (const { pageIndex, annotation } of await pdfEngine.extractNativeAnnotations(masterBytes)) {
+        for (const { pageIndex, annotation } of await pdfEngine.extractNativeAnnotations(masterBytes, passwordAttempt)) {
           const list = (importedAnnotations[pageIndex] ??= []);
           if (!list.some(a => a.id === annotation.id)) {
             list.push(annotation);
@@ -741,11 +803,17 @@ class VeditorApp {
       const extractedUserBookmarks = !baseAnnotations
         ? pdfEngine.getLastExtractedUserBookmarks()
         : [];
+      const extractedFormValues = !baseAnnotations
+        ? pdfEngine.getLastExtractedFormValues()
+        : {};
       const existingOrInitialBookmarks = existingSession?.userBookmarks?.length
         ? existingSession.userBookmarks
         : initialState?.userBookmarks?.length
           ? initialState.userBookmarks
           : extractedUserBookmarks;
+      const existingOrInitialFormValues = existingSession?.formValues && Object.keys(existingSession.formValues).length > 0
+        ? existingSession.formValues
+        : extractedFormValues;
 
       const session: DocumentSession = {
         id: docId,
@@ -755,6 +823,7 @@ class VeditorApp {
         pages,
         bookmarks,
         userBookmarks: existingOrInitialBookmarks,
+        formValues: existingOrInitialFormValues,
         annotations: importedAnnotations,
         layers: {},
         activePageIndex: initialState?.activePageIndex ?? 0,
@@ -1556,8 +1625,7 @@ class VeditorApp {
       fullW,
       fullH,
       notebookController.isNotebook() ? 'none' : store.appSettings.backgroundPattern,
-      scale,
-      store.appSettings.gridSize
+      scale
     );
 
     annotationEngine.renderAnnotationsToCanvas(ctx, pageIndex, scale);
@@ -1572,6 +1640,7 @@ class VeditorApp {
     }
 
     ctx.restore();
+    this.updateCoveredLinksOnPage(pageIndex);
   }
 
   /** Applies Settings → default zoom for brand-new documents. */
@@ -2058,8 +2127,7 @@ class VeditorApp {
         p.annotCanvas.width,
         p.annotCanvas.height,
         notebookController.isNotebook() ? 'none' : store.appSettings.backgroundPattern,
-        scale,
-        store.appSettings.gridSize
+        scale
       );
 
       // 2. Committed Annotations & Selection Box
@@ -2075,6 +2143,7 @@ class VeditorApp {
         }
       }
     }
+    this.updateCoveredLinksOnPage(pageIndex);
   }
 
   private gestureCallbacks() {
@@ -2211,7 +2280,10 @@ class VeditorApp {
         // Polygon vertices are placed on click, so its elastic edge must also
         // receive unpressed moves. `handlePointerMove` returns immediately for
         // every other inactive tool.
-        if (store.activeTool === 'polygon' && pointerHandler.isPolygonActiveOnPage(pageIndex)) {
+        if (
+          (store.activeTool === 'polygon' || store.activeTool === 'measure-area' || store.activeTool === 'measure-angle') &&
+          pointerHandler.isPolygonActiveOnPage(pageIndex)
+        ) {
           this.preparePageForPointerDown(pageIndex);
         }
         pointerHandler.handlePointerMove(e, pageIndex, canvas, onRepaint);
@@ -2441,15 +2513,21 @@ class VeditorApp {
     if (p.linksLoadedKey === key) return;
     p.linksLoadedKey = key;
 
-    const links = await pdfEngine.getPageLinks(pageIndex, rot);
+    const [links, formFields] = await Promise.all([
+      pdfEngine.getPageLinks(pageIndex, rot),
+      getPageFormFields(pageIndex, rot)
+    ]);
     if (!layer.isConnected || store.activeDocument?.id !== docId) return;
     layer.innerHTML = '';
-    if (links.length === 0) return;
 
     for (const link of links) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'pdf-link-hotspot';
+      btn.dataset.nx = String(link.nx);
+      btn.dataset.ny = String(link.ny);
+      btn.dataset.nw = String(link.nw);
+      btn.dataset.nh = String(link.nh);
       btn.style.left = `${(link.nx * 100).toFixed(3)}%`;
       btn.style.top = `${(link.ny * 100).toFixed(3)}%`;
       btn.style.width = `${(link.nw * 100).toFixed(3)}%`;
@@ -2484,10 +2562,67 @@ class VeditorApp {
       }
       layer.appendChild(btn);
     }
+
+    if (formFields.length > 0) {
+      mountPageFormFields(layer, pageIndex, formFields, () => {
+        triggerAutoSave();
+      });
+    }
+
+    this.updateCoveredLinksOnPage(pageIndex, p);
+  }
+
+  /**
+   * Disables click/hover interaction on any PDF link hotspot that lies beneath
+   * an annotation's visible geometry on `pageIndex`.
+   */
+  private updateCoveredLinksOnPage(
+    pageIndex: number,
+    p?: { linkLayer?: HTMLElement }
+  ): void {
+    const pageEls = p ?? this._renderedPages.get(pageIndex);
+    const layer = pageEls?.linkLayer;
+    const doc = store.activeDocument;
+    if (!layer || !doc) return;
+
+    const hotspots = layer.querySelectorAll<HTMLButtonElement>('.pdf-link-hotspot');
+    if (hotspots.length === 0) return;
+
+    const anns = doc.annotations?.[pageIndex] || [];
+    const pageLayers = doc.layers?.[pageIndex] || [];
+    const hiddenLayerIds = new Set(pageLayers.filter(l => !l.visible).map(l => l.id));
+    const activeAnns = anns.filter(a => !hiddenLayerIds.has(a.layerId));
+
+    const page = doc.pages?.[pageIndex];
+    const rotSize = page
+      ? rotatedPageSize(page, store.pageRotations[pageIndex] || 0)
+      : { width: 612, height: 792 };
+
+    hotspots.forEach((btn) => {
+      const nx = parseFloat(btn.dataset.nx || '0');
+      const ny = parseFloat(btn.dataset.ny || '0');
+      const nw = parseFloat(btn.dataset.nw || '0');
+      const nh = parseFloat(btn.dataset.nh || '0');
+      const linkBox = {
+        x: nx * rotSize.width,
+        y: ny * rotSize.height,
+        width: nw * rotSize.width,
+        height: nh * rotSize.height
+      };
+      const covered = activeAnns.some(ann => doesAnnotationCoverBox(ann, linkBox));
+      btn.classList.toggle('is-covered-by-annotation', covered);
+      if (covered) {
+        btn.tabIndex = -1;
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.tabIndex = 0;
+        btn.removeAttribute('aria-disabled');
+      }
+    });
   }
 
   public updateCanvasCursors(): void {
-    const linksInteractive = store.activeTool !== 'eraser';
+    const linksInteractive = store.activeTool === 'select' || store.activeTool === 'hand';
     document.body.classList.toggle('pdf-links-interactive', linksInteractive);
 
     const cursor = drawingCursorValue(
@@ -2551,37 +2686,130 @@ class VeditorApp {
     });
   }
 
-  /** Places a pasted image centered on the active page, sized to fit. */
-  private insertPastedImage(dataUrl: string, pixelWidth: number, pixelHeight: number): void {
+  /** Opens a file picker to insert an image from the user's device onto the active page. */
+  public promptInsertImage(): void {
+    if (!store.activeDocument) {
+      showToast(tr('Open a PDF document first', 'ابتدا یک سند پی‌دی‌اف باز کنید'), 'info');
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp,image/svg+xml,image/gif';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) return;
+      await this.insertImageFile(file);
+    });
+
+    input.click();
+  }
+
+  /** Reads an image File and places it as a resizable image stamp on the target page. */
+  public async insertImageFile(
+    file: File,
+    pageIndex: number = store.activePageIndex,
+    dropPoint?: { x: number; y: number }
+  ): Promise<void> {
+    if (!store.activeDocument) return;
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => reject(new Error('Failed to read image file'));
+        reader.readAsDataURL(file);
+      });
+      if (!dataUrl) return;
+      const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+        const probe = new Image();
+        probe.onload = () => {
+          stampTool.primeImage(dataUrl, probe);
+          resolve({ w: probe.naturalWidth || 240, h: probe.naturalHeight || 160 });
+        };
+        probe.onerror = () => reject(new Error('Invalid image format'));
+        probe.src = dataUrl;
+      });
+      this.insertPastedImage(dataUrl, dims.w, dims.h, pageIndex, dropPoint, file.name);
+    } catch {
+      showToast(tr('Could not load selected image', 'امکان بارگذاری تصویر انتخاب‌شده وجود نداشت'), 'error');
+    }
+  }
+
+  /** Places a pasted or picked image at the user's visible viewport center on the page, scaled to the visible area. */
+  private insertPastedImage(
+    dataUrl: string,
+    pixelWidth: number,
+    pixelHeight: number,
+    targetPageIndex: number = store.activePageIndex,
+    centerPoint?: { x: number; y: number },
+    label?: string
+  ): void {
     const doc = store.activeDocument;
     if (!doc) return;
-    const pageIndex = store.activePageIndex;
+    const pageIndex = Math.max(0, Math.min(doc.pageCount - 1, targetPageIndex));
     const page = doc.pages?.[pageIndex];
     const rotSize = page ? rotatedPageSize(page, store.pageRotations[pageIndex] || 0) : { width: 612, height: 792 };
     const pageWidth = rotSize.width;
     const pageHeight = rotSize.height;
+    const zoom = Math.max(store.zoom || 1, 0.1);
 
-    // CSS pixels → PDF points (96dpi → 72dpi), then cap to 60% of the page so
-    // large screenshots land as a manageable, still-resizable size.
-    let width = pixelWidth * 0.75;
-    let height = pixelHeight * 0.75;
-    const fit = Math.min(1, (pageWidth * 0.6) / width, (pageHeight * 0.6) / height);
+    // Determine visible region of the target page inside the scroll viewport
+    let visCenter: { x: number; y: number } = { x: pageWidth / 2, y: pageHeight / 2 };
+    let visAvailW = pageWidth;
+    let visAvailH = pageHeight;
+
+    const rendered = this._renderedPages.get(pageIndex);
+    if (rendered?.container?.isConnected) {
+      const scRect = this._scrollContainer.getBoundingClientRect();
+      const pgRect = rendered.container.getBoundingClientRect();
+      if (scRect.width > 0 && scRect.height > 0 && pgRect.width > 0 && pgRect.height > 0) {
+        const visLeft = Math.max(0, scRect.left - pgRect.left);
+        const visTop = Math.max(0, scRect.top - pgRect.top);
+        const visRight = Math.min(pgRect.width, scRect.right - pgRect.left);
+        const visBottom = Math.min(pgRect.height, scRect.bottom - pgRect.top);
+        if (visRight - visLeft > 20 && visBottom - visTop > 20) {
+          visCenter = {
+            x: Math.max(20, Math.min(pageWidth - 20, ((visLeft + visRight) / 2) / zoom)),
+            y: Math.max(20, Math.min(pageHeight - 20, ((visTop + visBottom) / 2) / zoom))
+          };
+          visAvailW = (visRight - visLeft) / zoom;
+          visAvailH = (visBottom - visTop) / zoom;
+        }
+      }
+    }
+
+    // Scale image proportionally to fit comfortably (~45%) inside the currently visible viewport region
+    const safePixW = Math.max(1, pixelWidth);
+    const safePixH = Math.max(1, pixelHeight);
+    let width = safePixW * 0.75;
+    let height = safePixH * 0.75;
+    const targetMaxW = Math.max(48, Math.min(pageWidth * 0.85, visAvailW * 0.48));
+    const targetMaxH = Math.max(48, Math.min(pageHeight * 0.85, visAvailH * 0.48));
+    const fit = Math.min(1, targetMaxW / width, targetMaxH / height);
     width *= fit;
     height *= fit;
 
+    const pt = centerPoint || visCenter;
     const annotation = stampTool.createCustomImageStamp(
-      { x: pageWidth / 2, y: pageHeight / 2 },
+      pt,
       pageIndex,
       'layer-default',
       dataUrl,
       width,
       height
     );
+    if (label) {
+      annotation.presetKey = label.replace(/\.[^.]+$/, '');
+    }
     history.execute(new AddAnnotationCommand(pageIndex, annotation));
+    triggerAutoSave();
     store.setActiveTool('select');
     store.selectAnnotation(annotation.id);
     this.repaintAllRenderedAnnotations();
-    showToast(tr('Image pasted onto page', 'تصویر روی صفحه قرار گرفت'), 'success');
+    showToast(tr('Image inserted onto page', 'تصویر روی صفحه قرار گرفت'), 'success');
   }
 
   private setupGlobalShortcuts() {
@@ -2684,6 +2912,12 @@ class VeditorApp {
             void saveActiveDocumentAs();
           } else {
             void saveActiveDocument();
+          }
+          return;
+        } else if (key === 'p') {
+          e.preventDefault();
+          if (store.activeDocument) {
+            openPrintDialog();
           }
           return;
         } else if (key === 'd') {

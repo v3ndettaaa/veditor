@@ -9,6 +9,8 @@ import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
 import { syncNativeInkAnnotations, stripNativeInkAnnotations } from '../core/native-ink';
 import { syncNativeAnnotations, stripImportedNativeAnnotations } from '../core/native-annotations';
+import { applyFormValuesToPdfLibDoc } from '../core/pdf-forms';
+import { encryptAndSavePdfDocument } from '../core/pdf-encrypt';
 import unicodeFontUrl from '@fontsource/vazirmatn/files/vazirmatn-arabic-400-normal.woff?url';
 
 let cachedUnicodeFontBytes: Uint8Array | null = null;
@@ -77,6 +79,8 @@ export interface PDFExportOptions {
    * bytes where `store.pageRotations` remains active on top of native rotation.
    */
   bakePageRotations?: boolean;
+  /** Optional user password to encrypt the exported PDF with RC4-128 security. */
+  password?: string;
 }
 
 export class PDFExporter {
@@ -91,6 +95,7 @@ export class PDFExporter {
 
     // Load original PDF using pdf-lib to preserve structure and metadata
     const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
+    applyFormValuesToPdfLibDoc(pdfDoc, doc.formValues, options.flatten);
     const fallbackBakedIds = new Set<string>();
 
     // Bake user-applied page rotations into the PDF /Rotate dictionary when exporting to disk
@@ -332,7 +337,11 @@ export class PDFExporter {
         }
       }
 
-      if (mappedBookmarks.length === 0 && Object.keys(mappedComposite).length === 0) {
+      const formValues = doc.formValues && Object.keys(doc.formValues).length > 0
+        ? doc.formValues
+        : undefined;
+
+      if (mappedBookmarks.length === 0 && Object.keys(mappedComposite).length === 0 && !formValues) {
         targetDoc.catalog.delete(PDFName.of('VEditorState'));
         return;
       }
@@ -340,7 +349,8 @@ export class PDFExporter {
       const statePayload = JSON.stringify({
         version: 4,
         userBookmarks: mappedBookmarks,
-        compositeAnnotations: mappedComposite
+        compositeAnnotations: mappedComposite,
+        ...(formValues ? { formValues } : {})
       });
       targetDoc.catalog.set(PDFName.of('VEditorState'), PDFHexString.fromText(statePayload));
     };
@@ -353,10 +363,16 @@ export class PDFExporter {
       const copiedPages = await selectedDocument.copyPages(pdfDoc, selectedIndices);
       copiedPages.forEach(page => selectedDocument.addPage(page));
       writeVEditorCatalogState(selectedDocument, selectedIndices);
+      if (options.password) {
+        return encryptAndSavePdfDocument(selectedDocument, options.password);
+      }
       return selectedDocument.save();
     }
 
     writeVEditorCatalogState(pdfDoc);
+    if (options.password) {
+      return encryptAndSavePdfDocument(pdfDoc, options.password);
+    }
     return await pdfDoc.save();
   }
 
