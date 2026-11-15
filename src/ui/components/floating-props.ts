@@ -16,6 +16,7 @@ import { STICKY_NOTE_COLORS, stickyNoteTool } from '../../annotations/tools/stic
 import { pointerHandler } from '../../input/pointer-handler';
 import { showToast } from './toast';
 import { tr } from '../i18n';
+import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
 
@@ -25,6 +26,7 @@ export class FloatingPropsBarComponent {
   private _isHoveredOverItem: boolean = false;
   private _isHoveredOverBar: boolean = false;
   private _isVisible: boolean = false;
+  private _isDraggingSlider: boolean = false;
 
   constructor(parent: HTMLElement) {
     floatingPropsBar = this;
@@ -110,8 +112,11 @@ export class FloatingPropsBarComponent {
     if (store.textSelection) {
       return;
     }
+    if (this._isDraggingSlider || isSliderDragging()) {
+      return;
+    }
     this._hoverTimeout = window.setTimeout(() => {
-      if (store.textSelection) return;
+      if (store.textSelection || this._isDraggingSlider || isSliderDragging()) return;
       const activeEl = document.activeElement;
       if (activeEl && this._container.contains(activeEl)) return;
       if (!this._isHoveredOverItem && !this._isHoveredOverBar) {
@@ -240,7 +245,12 @@ export class FloatingPropsBarComponent {
 
     // Preserve active slider/number input interaction so dragging or typing never loses focus
     const activeEl = document.activeElement;
-    if (activeEl && this._container.contains(activeEl) && activeEl.classList.contains('fp-live-input')) {
+    if (
+      this._isDraggingSlider ||
+      isSliderDragging() ||
+      this._container.querySelector('input[data-dragging="1"]') ||
+      (activeEl && this._container.contains(activeEl) && activeEl.classList.contains('fp-live-input'))
+    ) {
       return;
     }
 
@@ -400,6 +410,21 @@ export class FloatingPropsBarComponent {
 
   private attachHandlers(selected: Annotation[]): void {
     const pageIndex = selected[0].pageIndex;
+    enhanceRangeSliders(this._container, {
+      onDragStart: () => {
+        this._isDraggingSlider = true;
+        if (this._hoverTimeout !== null) {
+          window.clearTimeout(this._hoverTimeout);
+          this._hoverTimeout = null;
+        }
+      },
+      onDragEnd: () => {
+        this._isDraggingSlider = false;
+        if (!this._isHoveredOverItem && !this._isHoveredOverBar) {
+          this.scheduleHide();
+        }
+      }
+    });
 
     // Native Color Picker
     const colorPicker = this._container.querySelector<HTMLInputElement>('#fp-color-picker');

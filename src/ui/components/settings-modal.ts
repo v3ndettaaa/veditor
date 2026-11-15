@@ -49,6 +49,7 @@ export class SettingsModalComponent {
   private _activeTab: SettingsTab = 'appearance';
   private _lastRenderKey: string | null = null;
   private _renderedLanguage: string | null = null;
+  private _activeRebindCleanup: (() => void) | null = null;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -81,6 +82,8 @@ export class SettingsModalComponent {
    */
   private switchTab(tab: SettingsTab): void {
     if (tab === this._activeTab) return;
+    this._activeRebindCleanup?.();
+    this._activeRebindCleanup = null;
     try {
       (document.activeElement as HTMLElement | null)?.blur?.();
     } catch (_) {}
@@ -103,6 +106,8 @@ export class SettingsModalComponent {
 
   public render(): void {
     if (!store.settingsModalOpen) {
+      this._activeRebindCleanup?.();
+      this._activeRebindCleanup = null;
       const overlay = this._container.querySelector<HTMLElement>('#settings-overlay');
       if (overlay && !overlay.classList.contains('is-closing')) {
         overlay.classList.add('is-closing');
@@ -150,7 +155,11 @@ export class SettingsModalComponent {
     // nav shell untouched (no animation restart, no focus loss) and only swap
     // the content pane. Full rebuilds happen on first open or language change
     // (header/nav labels are localized).
-    const overlayExists = !!this._container.querySelector('#settings-overlay');
+    const existingClosingOverlay = this._container.querySelector<HTMLElement>('#settings-overlay');
+    if (existingClosingOverlay) {
+      existingClosingOverlay.classList.remove('is-closing');
+    }
+    const overlayExists = !!existingClosingOverlay;
     if (overlayExists && this._renderedLanguage === app.language) {
       this._lastRenderKey = renderKey;
       const content = this._container.querySelector('.settings-content');
@@ -403,6 +412,15 @@ export class SettingsModalComponent {
               </button>
             `).join('')}
           </div>
+          ${app.toolbarDock === 'float' ? `
+            <div class="settings-callout">
+              <span class="settings-callout-icon">${getIconSvg('move', 15)}</span>
+              <span>${tr(
+                'Toolbar is currently free-floating on the canvas. Drag its grip handle to any edge to dock it, or pick an edge above.',
+                'نوار ابزار هم‌اکنون به‌صورت شناور آزاد است؛ با کشیدن دستگیره به لبه‌ها می‌چسبد یا از دکمه‌های بالا لبه دلخواه را انتخاب کنید.'
+              )}</span>
+            </div>
+          ` : ''}
         </div>
       `;
     }
@@ -499,26 +517,122 @@ export class SettingsModalComponent {
 
     if (this._activeTab === 'shortcuts') {
       const bindings = shortcutManager.all();
-      const rows = (Object.keys(DEFAULT_SHORTCUTS) as ShortcutAction[]).map(action => {
-        const label = getToolShortLabel(action);
-        const key = bindings[action] === 'space' ? 'Space' : bindings[action].toUpperCase();
+      const formatKeycap = (raw: string) => {
+        if (raw === 'space') return tr('Space', 'Space');
+        return raw.length === 1 ? raw.toUpperCase() : raw;
+      };
+
+      const actionMeta: Record<ShortcutAction, { descEn: string; descFa: string }> = {
+        select: { descEn: 'Select, move & resize', descFa: 'انتخاب و تغییر اندازه' },
+        hand: { descEn: 'Pan across pages', descFa: 'جابه‌جایی آزاد صفحه' },
+        lasso: { descEn: 'Freehand lasso select', descFa: 'انتخاب کمندی آزاد' },
+        pen: { descEn: 'Pressure ink stylus', descFa: 'قلم رسم حساس به فشار' },
+        highlighter: { descEn: 'Translucent marker', descFa: 'ماژیک هایلایت شفاف' },
+        eraser: { descEn: 'Stroke & point eraser', descFa: 'پاک‌کن خطی یا نقطه‌ای' },
+        rectangle: { descEn: 'Box & rounded frame', descFa: 'مستطیل و کادر' },
+        ellipse: { descEn: 'Circle or oval shape', descFa: 'دایره و بیضی' },
+        line: { descEn: 'Straight segment', descFa: 'خط مستقیم' },
+        arrow: { descEn: 'Directional pointer', descFa: 'پیکان جهت‌دار' },
+        polygon: { descEn: 'Multi-point shape', descFa: 'چندضلعی دلخواه' },
+        text: { descEn: 'Editable text box', descFa: 'افزودن کادر متن' },
+        stamp: { descEn: 'Stamps & custom image', descFa: 'مهر آماده و تصویر' }
+      };
+
+      const groups: { titleEn: string; titleFa: string; icon: string; items: ShortcutAction[] }[] = [
+        {
+          titleEn: 'Navigation & Selection',
+          titleFa: 'پیمایش و انتخاب',
+          icon: 'select',
+          items: ['select', 'hand', 'lasso']
+        },
+        {
+          titleEn: 'Ink & Erasing',
+          titleFa: 'نگارش و پاک‌کردن',
+          icon: 'pen',
+          items: ['pen', 'highlighter', 'eraser']
+        },
+        {
+          titleEn: 'Shapes, Text & Markup',
+          titleFa: 'اشکال، متن و نشانه‌گذاری',
+          icon: 'rectangle',
+          items: ['rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'text', 'stamp']
+        }
+      ];
+
+      const renderRow = (action: ShortcutAction) => {
+        const raw = bindings[action];
+        const keyLabel = formatKeycap(raw);
+        const isSpace = raw === 'space';
+        const meta = actionMeta[action];
+        const iconName = TOOLBAR_ICONS[action] ?? 'pen';
         return `
-          <button type="button" class="secondary-btn shortcut-row" data-rebind="${action}"
-                  style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-            <span>${label}</span>
-            <kbd class="kbd" style="min-width:44px; text-align:center;">${key}</kbd>
+          <button type="button" class="sc-row" data-rebind="${action}" aria-label="${getToolShortLabel(action)} (${keyLabel})">
+            <span class="sc-row-icon">${getIconSvg(iconName, 16)}</span>
+            <span class="sc-row-info">
+              <span class="sc-row-title">${getToolShortLabel(action)}</span>
+              <span class="sc-row-desc">${tr(meta.descEn, meta.descFa)}</span>
+            </span>
+            <span class="sc-row-key">
+              <kbd class="sc-keycap ${isSpace ? 'is-wide' : ''}">${keyLabel}</kbd>
+            </span>
           </button>`;
-      }).join('');
+      };
+
+      const systemHints = [
+        { labelEn: 'Undo / Redo', labelFa: 'بازگشت / تکرار عمل', keys: ['Ctrl + Z', 'Ctrl + Shift + Z'] },
+        { labelEn: 'Print Document', labelFa: 'چاپ سند', keys: ['Ctrl + P'] },
+        { labelEn: 'Lock Aspect Ratio (Resize)', labelFa: 'حفظ تناسب هنگام تغییر اندازه', keys: ['Shift + Drag'] },
+        { labelEn: 'Temporary Hand Pan', labelFa: 'جابه‌جایی موقت صفحه', keys: ['Space'] }
+      ];
 
       return `
-        <div class="settings-stack">
-          <div class="settings-section-header">${tr('Tool Shortcuts', 'میانبرهای ابزارها')}</div>
-          <div class="form-hint">${tr('Click a shortcut, then press the new key to bind it. Press Esc to cancel. Shortcuts are single keys without Ctrl/Alt modifiers and are saved on this device.', 'روی هر ردیف کلیک کنید و کلید جدید را فشار دهید تا ثبت شود (برای انصراف کلید Esc را بزنید). میانبرها روی همین دستگاه ذخیره می‌شوند.')}</div>
-          <div class="prop-group" id="shortcut-rows" style="display:flex; flex-direction:column; gap:6px;">
-            ${rows}
+        <div class="settings-stack sc-root">
+          <div class="sc-toolbar-head">
+            <div class="sc-head-text">
+              <div class="settings-section-header sc-head-title">${tr('Tool Shortcuts', 'میانبرهای ابزارها')}</div>
+              <p class="sc-head-subtitle">${tr(
+                'Click any tool card and press a single key to rebind it. Press Esc to cancel.',
+                'روی هر کارت کلیک کنید و کلید جدید را بزنید تا ثبت شود. برای لغو، Esc را فشار دهید.'
+              )}</p>
+            </div>
+            <button type="button" id="shortcuts-reset-btn" class="secondary-btn sc-reset-btn">
+              ${getIconSvg('rotate', 13)}
+              <span>${tr('Reset to Defaults', 'بازنشانی پیش‌فرض')}</span>
+            </button>
           </div>
-          <div class="form-hint" id="shortcut-conflict" style="color:#f43f5e; min-height:16px;"></div>
-          <button id="shortcuts-reset-btn" class="secondary-btn">${tr('Reset to Defaults', 'بازگردانی میانبرها به حالت پیش‌فرض')}</button>
+
+          <div class="sc-conflict-banner" id="shortcut-conflict" role="status" aria-live="polite"></div>
+
+          <div class="sc-groups" id="shortcut-rows">
+            ${groups.map(group => `
+              <section class="sc-group">
+                <div class="sc-group-header">
+                  <span class="sc-group-icon">${getIconSvg(group.icon, 13)}</span>
+                  <span class="sc-group-title">${tr(group.titleEn, group.titleFa)}</span>
+                </div>
+                <div class="sc-grid">
+                  ${group.items.map(renderRow).join('')}
+                </div>
+              </section>
+            `).join('')}
+
+            <section class="sc-group sc-group-ref">
+              <div class="sc-group-header">
+                <span class="sc-group-icon">${getIconSvg('command', 13)}</span>
+                <span class="sc-group-title">${tr('Built-in Editor Controls', 'میانبرهای ثابت ویرایشگر')}</span>
+              </div>
+              <div class="sc-ref-list">
+                ${systemHints.map(h => `
+                  <div class="sc-ref-item">
+                    <span class="sc-ref-label">${tr(h.labelEn, h.labelFa)}</span>
+                    <span class="sc-ref-keys">
+                      ${h.keys.map(k => `<kbd class="sc-keycap is-static">${k}</kbd>`).join('')}
+                    </span>
+                  </div>
+                `).join('')}
+              </div>
+            </section>
+          </div>
         </div>
       `;
     }
@@ -1148,54 +1262,93 @@ export class SettingsModalComponent {
       }
     });
 
-    // Keyboard shortcut rebinding: click a row, press the new key.
-    const refreshShortcutsPane = () => {
+    // Keyboard shortcut rebinding: click a card, press the new key.
+    const refreshShortcutsPane = (conflictMsg: string = '') => {
+      this._activeRebindCleanup?.();
+      this._activeRebindCleanup = null;
       const content = this._container.querySelector('.settings-content');
       if (content) {
         content.innerHTML = this.renderTabContent(store.appSettings, store.toolSettings);
         this.bindContentEvents();
+        const hint = this._container.querySelector<HTMLElement>('#shortcut-conflict');
+        if (hint && conflictMsg) {
+          hint.innerHTML = `${getIconSvg('info', 14)}<span>${conflictMsg}</span>`;
+          hint.classList.add('is-visible');
+        }
       }
     };
+
     this._container.querySelectorAll<HTMLElement>('[data-rebind]').forEach(row => {
       row.addEventListener('click', () => {
         const action = row.getAttribute('data-rebind') as ShortcutAction | null;
         if (!action) return;
-        const kbd = row.querySelector('kbd');
-        if (kbd) kbd.textContent = '…';
-        const conflictHint = this._container.querySelector('#shortcut-conflict');
-        if (conflictHint) conflictHint.textContent = '';
+
+        // Cancel any previous listening row cleanly
+        this._activeRebindCleanup?.();
+        this._activeRebindCleanup = null;
+        this._container.querySelectorAll('.sc-row.is-listening').forEach(el => {
+          el.classList.remove('is-listening');
+        });
+
+        row.classList.add('is-listening');
+        const kbd = row.querySelector<HTMLElement>('.sc-keycap');
+        const prevText = kbd?.textContent ?? '';
+        if (kbd) kbd.textContent = tr('Press key…', 'کلیدی بزنید…');
+
+        const conflictHint = this._container.querySelector<HTMLElement>('#shortcut-conflict');
+        if (conflictHint) {
+          conflictHint.innerHTML = '';
+          conflictHint.classList.remove('is-visible');
+        }
+
+        const detach = () => {
+          window.removeEventListener('keydown', onKey, true);
+          row.classList.remove('is-listening');
+          if (kbd && kbd.textContent === tr('Press key…', 'کلیدی بزنید…')) {
+            kbd.textContent = prevText;
+          }
+        };
+
         const onKey = (e: KeyboardEvent) => {
           e.preventDefault();
           e.stopPropagation();
-          window.removeEventListener('keydown', onKey, true);
+          if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) {
+            return;
+          }
+          detach();
+          this._activeRebindCleanup = null;
+
           if (e.key === 'Escape') {
             refreshShortcutsPane();
             return;
           }
-          // Modifier presses alone don't bind; wait cancelled instead.
-          if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) {
-            refreshShortcutsPane();
+
+          if (e.ctrlKey || e.metaKey || e.altKey) {
+            refreshShortcutsPane(tr(
+              'Tool shortcuts must be a single key without Ctrl, Alt, or Cmd.',
+              'میانبر ابزارها باید یک کلید تکی بدون Ctrl، Alt یا Cmd باشد.'
+            ));
             return;
           }
+
           const conflict = shortcutManager.set(action, e.key === ' ' ? 'space' : e.key);
           if (conflict) {
-            refreshShortcutsPane();
-            const hint = this._container.querySelector('#shortcut-conflict');
-            if (hint) {
-              const keyLabel = e.key === ' ' ? 'Space' : e.key.toUpperCase();
-              const conflictLabel = getToolShortLabel(conflict);
-              hint.textContent = tr(
-                `“${keyLabel}” is already used by ${conflictLabel}.`,
-                `کلید «${keyLabel}» قبلاً برای «${conflictLabel}» استفاده شده است.`
-              );
-            }
+            const keyLabel = e.key === ' ' ? 'Space' : e.key.toUpperCase();
+            const conflictLabel = getToolShortLabel(conflict);
+            refreshShortcutsPane(tr(
+              `“${keyLabel}” is already assigned to ${conflictLabel}.`,
+              `کلید «${keyLabel}» قبلاً برای ابزار «${conflictLabel}» ثبت شده است.`
+            ));
             return;
           }
           refreshShortcutsPane();
         };
+
+        this._activeRebindCleanup = detach;
         window.addEventListener('keydown', onKey, true);
       });
     });
+
     this._container.querySelector('#shortcuts-reset-btn')?.addEventListener('click', () => {
       shortcutManager.reset();
       refreshShortcutsPane();

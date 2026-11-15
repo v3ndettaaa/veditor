@@ -406,7 +406,12 @@ export interface PageClipboard {
 export type DrawingCursorType = 'pen' | 'dot' | 'circle' | 'crosshair';
 export type EraserCursorType = 'circle' | 'dot' | 'crosshair' | 'eraser';
 
-export type ToolbarDock = 'top' | 'bottom' | 'left' | 'right';
+export type ToolbarDock = 'top' | 'bottom' | 'left' | 'right' | 'float';
+
+export interface ToolbarFloatPos {
+  x: number;
+  y: number;
+}
 
 /**
  * Returns the window edge nearest a toolbar drag release, so a dropped bar
@@ -417,7 +422,7 @@ export function classifyToolbarDock(
   clientY: number,
   viewportWidth: number,
   viewportHeight: number
-): ToolbarDock {
+): 'top' | 'bottom' | 'left' | 'right' {
   const w = Math.max(1, viewportWidth);
   const h = Math.max(1, viewportHeight);
   const distances = {
@@ -426,9 +431,9 @@ export function classifyToolbarDock(
     top: clientY,
     bottom: h - clientY
   };
-  let best: ToolbarDock = 'top';
+  let best: 'top' | 'bottom' | 'left' | 'right' = 'top';
   let bestDistance = distances.top;
-  (Object.keys(distances) as ToolbarDock[]).forEach(edge => {
+  (Object.keys(distances) as Array<'top' | 'bottom' | 'left' | 'right'>).forEach(edge => {
     if (distances[edge] < bestDistance) {
       best = edge;
       bestDistance = distances[edge];
@@ -514,8 +519,10 @@ export interface AppSettings {
    * system DPI (72 * devicePixelRatio) is used.
    */
   targetDPI: number;
-  /** Which window edge the floating toolbar is docked to. */
+  /** Which window edge the floating toolbar is docked to, or 'float' when positioned freely. */
   toolbarDock: ToolbarDock;
+  /** Saved viewport coordinates when toolbarDock === 'float'. */
+  toolbarFloatPos?: ToolbarFloatPos;
   /**
    * User-added colors, offered as extra swatches after the built-in set on
    * every pen/highlighter/shape/text color picker so a personal palette

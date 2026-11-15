@@ -1447,6 +1447,33 @@ class VeditorApp {
   }
 
   /**
+   * Synchronously re-blits every mounted PDF page canvas for the current Dark/Light state
+   * and refreshes High-DPI viewport chunks so Dark Mode uses pre-baked pixels with zero CSS filter lag.
+   */
+  public refreshPdfDarkMode(): void {
+    const darkMode =
+      document.body.classList.contains('invert-pdf-document') ||
+      Boolean(store.appSettings.invertDocumentOled);
+    for (const [pageIndex, p] of this._renderedPages) {
+      const rot = store.pageRotations[pageIndex] || 0;
+      const didBlit = pdfEngine.refreshRenderedCanvasTheme(
+        pageIndex,
+        p.pdfCanvas,
+        darkMode,
+        store.zoom,
+        rot
+      );
+      if (!didBlit && p.pdfCanvas.width > 1 && p.pdfCanvas.height > 1) {
+        void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+      }
+      if (p.chunkCanvas) {
+        delete p.chunkCanvas.dataset.chunkKey;
+      }
+    }
+    this.updateVisiblePageChunks(true, true);
+  }
+
+  /**
    * High-DPI Vector Annotation & Scratchpad Chunk: positions and sizes the
    * viewport-clipped annotation and scratchpad canvases at 100% native display
    * DPI so handwriting, shapes, and text remain razor-sharp at up to 800% zoom.
@@ -2851,6 +2878,18 @@ class VeditorApp {
         pointerHandler.cancelPolygon();
         store.clearSelection();
         this.repaintAllRenderedAnnotations();
+        return;
+      }
+
+      // Ignore canvas/tool shortcuts whenever a modal dialog or overlay is open
+      // (e.g. Settings -> Keyboard Shortcuts rebinding, Signature Pad, Print, Save As).
+      const hasOpenModal =
+        store.settingsModalOpen ||
+        store.shortcutsModalOpen ||
+        store.signatureModalOpen ||
+        store.commandPaletteOpen ||
+        !!document.querySelector('.modal-overlay');
+      if (hasOpenModal) {
         return;
       }
 

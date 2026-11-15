@@ -17,6 +17,7 @@ import {
 } from '../../io/notebook';
 import { drawPaperPreview } from '../paper-preview';
 import { t } from '../i18n';
+import { enhanceRangeSliders } from '../slider-scrub';
 
 /** `id` doubles as the translation key (`notebook.patterns.<id>`). */
 const PATTERNS: { id: PaperPattern; icon: string }[] = [
@@ -185,6 +186,7 @@ export class NotebookDialogComponent {
     `;
 
     this.bind();
+    enhanceRangeSliders(this._container);
     this.syncControls();
     this.paint();
   }
@@ -237,8 +239,17 @@ export class NotebookDialogComponent {
     if (marginField) marginField.hidden = p.pattern !== 'lined';
 
     const spacingInput = q<HTMLInputElement>('#nb-spacing');
-    if (spacingInput && document.activeElement !== spacingInput) {
-      spacingInput.value = String(p.spacing);
+    if (spacingInput) {
+      if (document.activeElement !== spacingInput && spacingInput.dataset.dragging !== '1') {
+        spacingInput.value = String(p.spacing);
+      }
+      const spPct = Math.max(0, Math.min(100, ((p.spacing - SPACING_MIN) / (SPACING_MAX - SPACING_MIN)) * 100));
+      spacingInput.style.setProperty('--slider-pct', `${spPct}%`);
+    }
+    const pagesInput = q<HTMLInputElement>('#nb-pages');
+    if (pagesInput) {
+      const pgPct = Math.max(0, Math.min(100, ((this._pageCount - 1) / 19) * 100));
+      pagesInput.style.setProperty('--slider-pct', `${pgPct}%`);
     }
     const spacingOut = q('#nb-spacing-out');
     if (spacingOut) spacingOut.textContent = `${p.spacing}pt`;
@@ -340,6 +351,8 @@ export class NotebookDialogComponent {
     const pages = q<HTMLInputElement>('#nb-pages');
     pages?.addEventListener('input', () => {
       this._pageCount = Number(pages.value);
+      const pgPct = Math.max(0, Math.min(100, ((this._pageCount - 1) / 19) * 100));
+      pages.style.setProperty('--slider-pct', `${pgPct}%`);
       const out = q('#nb-pages-out');
       if (out) out.textContent = pages.value;
     });

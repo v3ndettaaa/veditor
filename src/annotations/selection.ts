@@ -3,9 +3,37 @@
  * Provides 8-handle transform box, rotation handle, marquee selection, and alignment utilities.
  */
 
-import { Point, BoundingBox, Annotation, ShapeAnnotation } from '../core/types';
+import { Point, BoundingBox, Annotation, ShapeAnnotation, MeasurementAnnotation } from '../core/types';
 import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect, computePointsBoundingBox } from '../utils/geometry';
 import { stickyNoteTool } from './tools/sticky-note';
+import { computeMeasurementValue } from './tools/measure';
+
+/**
+ * Recomputes `measuredValue` and formatted `label` for distance, angle, and area
+ * measurements whenever vertices or overall scale transform change.
+ */
+export function syncMeasurementMetrics<T extends Annotation>(ann: T): T {
+  if (
+    ann.type !== 'measure-distance' &&
+    ann.type !== 'measure-angle' &&
+    ann.type !== 'measure-area'
+  ) {
+    return ann;
+  }
+  const m = ann as MeasurementAnnotation;
+  const pts = Array.isArray(m.points) ? m.points : [];
+  const { measuredValue, label } = computeMeasurementValue(
+    m.type,
+    pts,
+    m.unit || 'mm',
+    m.scaleRatio || 0.264583
+  );
+  return {
+    ...m,
+    measuredValue,
+    label
+  } as T;
+}
 
 /**
  * Rotates point `p` around `center` by `angle` radians (counter-clockwise in
@@ -369,14 +397,19 @@ export function moveAnnotationVertex(
   }
 
   const nextPoints = vertices.map((p, i) => (i === vertexIndex ? { x: target.x, y: target.y } : { x: p.x, y: p.y }));
-  const strokeW = (ann as { strokeWidth?: number }).strokeWidth ?? 2;
-  return {
+  const isMeasure =
+    ann.type === 'measure-distance' ||
+    ann.type === 'measure-angle' ||
+    ann.type === 'measure-area';
+  const strokeW = isMeasure ? 28 : ((ann as { strokeWidth?: number }).strokeWidth ?? 2);
+  const updated = {
     ...ann,
     points: nextPoints,
     box: computePointsBoundingBox(nextPoints, strokeW),
     rotation: 0,
     updatedAt: Date.now()
   } as Annotation;
+  return syncMeasurementMetrics(updated);
 }
 
 export interface BoxTransform {
@@ -428,6 +461,9 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   if ('strokeWidth' in a && typeof a.strokeWidth === 'number') {
     next.strokeWidth = Math.max(0.5, a.strokeWidth * meanScale);
   }
+  if ('cornerRadius' in a && typeof a.cornerRadius === 'number') {
+    next.cornerRadius = Math.max(0, a.cornerRadius * meanScale);
+  }
   if (ann.type === 'text' && typeof a.fontSize === 'number') {
     next.fontSize = Math.max(4, a.fontSize * meanScale);
   }
@@ -465,23 +501,278 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
         next.items = a.items.map((item: Annotation) => offsetAnnotation(item, shiftX, shiftY));
       }
     } else {
-      next.box.width = Math.max(120, next.box.width);
-      next.box.height = Math.max(100, next.box.height);
+      const minNoteW = 56;
+      const minNoteH = 46;
+      let effTransform = t;
+      let effMeanScale = meanScale;
+
+      if (next.box.width < minNoteW || next.box.height < minNoteH) {
+        const clampRatio = Math.max(
+          minNoteW / Math.max(1, next.box.width),
+          minNoteH / Math.max(1, next.box.height)
+        );
+        const effScaleX = t.scaleX * clampRatio;
+        const effScaleY = t.scaleY * clampRatio;
+        effTransform = {
+          ...t,
+          scaleX: effScaleX,
+          scaleY: effScaleY
+        };
+        effMeanScale = (Math.abs(effScaleX) + Math.abs(effScaleY)) / 2 || 1;
+        const mapClamped = <P extends Point>(p: P): P => ({
+          ...p,
+          x: effTransform.originX + (p.x - effTransform.originX) * effTransform.scaleX + effTransform.dx,
+          y: effTransform.originY + (p.y - effTransform.originY) * effTransform.scaleY + effTransform.dy
+        });
+        const cc1 = mapClamped({ x: b.x, y: b.y });
+        const cc2 = mapClamped({ x: b.x + b.width, y: b.y + b.height });
+        next.box = {
+          x: Math.min(cc1.x, cc2.x),
+          y: Math.min(cc1.y, cc2.y),
+          width: Math.abs(cc2.x - cc1.x),
+          height: Math.abs(cc2.y - cc1.y),
+          ...(b.rotation !== undefined ? { rotation: b.rotation } : {})
+        };
+      }
+
+      if (typeof a.fontSize === 'number') {
+        next.fontSize = Math.max(5, Math.round(a.fontSize * effMeanScale * 100) / 100);
+      }
       if (typeof a.anchorX === 'number') next.anchorX = next.box.x;
       if (typeof a.anchorY === 'number') next.anchorY = next.box.y;
+      const mapStrokePt = <P extends Point>(p: P): P => ({
+        ...p,
+        x: effTransform.originX + (p.x - effTransform.originX) * effTransform.scaleX + effTransform.dx,
+        y: effTransform.originY + (p.y - effTransform.originY) * effTransform.scaleY + effTransform.dy
+      });
       if (Array.isArray(a.strokes)) {
         next.strokes = a.strokes.map((s: any) => ({
           ...s,
-          strokeWidth: Math.max(0.5, (s.strokeWidth || 2) * meanScale),
-          points: Array.isArray(s.points) ? s.points.map(mapPt) : []
+          strokeWidth: Math.max(0.5, (s.strokeWidth || 2) * effMeanScale),
+          points: Array.isArray(s.points) ? s.points.map(mapStrokePt) : []
         }));
       }
       if (Array.isArray(a.items)) {
-        next.items = a.items.map((item: Annotation) => transformAnnotation(item, t));
+        next.items = a.items.map((item: Annotation) => transformAnnotation(item, effTransform));
       }
     }
   }
-  return next as T;
+  return syncMeasurementMetrics(next as T);
+}
+
+/**
+ * Computes a merged-box-relative BoxTransform for a drag operation.
+ * When `shiftKey` is held during ANY corner (`nw/ne/se/sw`) OR edge (`n/e/s/w`) resize,
+ * uniformly scales the entire selection while strictly preserving its aspect ratio.
+ */
+export function computeSelectionBoxTransform(
+  m: BoundingBox,
+  mode: 'move' | 'resize' | 'rotate',
+  handle: string,
+  startPt: Point,
+  cur: Point,
+  shiftKey: boolean = false
+): BoxTransform {
+  if (mode === 'move') {
+    return {
+      dx: cur.x - startPt.x,
+      dy: cur.y - startPt.y,
+      scaleX: 1,
+      scaleY: 1,
+      originX: m.x,
+      originY: m.y
+    };
+  }
+
+  const dx = cur.x - startPt.x;
+  const dy = cur.y - startPt.y;
+  let x1 = m.x;
+  let y1 = m.y;
+  let x2 = m.x + m.width;
+  let y2 = m.y + m.height;
+
+  const isBoxResizeHandle =
+    handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw' ||
+    handle === 'n' || handle === 'e' || handle === 's' || handle === 'w';
+
+  if (shiftKey && isBoxResizeHandle && m.width > 0.5 && m.height > 0.5) {
+    let u = 0;
+    if (handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw') {
+      const nx = handle.includes('w') ? -dx / m.width : dx / m.width;
+      const ny = handle.includes('n') ? -dy / m.height : dy / m.height;
+      u = Math.abs(nx) >= Math.abs(ny) ? nx : ny;
+    } else if (handle === 'n' || handle === 's') {
+      u = handle === 'n' ? -dy / m.height : dy / m.height;
+    } else if (handle === 'e' || handle === 'w') {
+      u = handle === 'w' ? -dx / m.width : dx / m.width;
+    }
+
+    const minScale = Math.max(8 / m.width, 8 / m.height);
+    const uniformScale = Math.max(minScale, 1 + u);
+    const nextW = m.width * uniformScale;
+    const nextH = m.height * uniformScale;
+
+    if (handle === 'se') {
+      x2 = m.x + nextW;
+      y2 = m.y + nextH;
+    } else if (handle === 'nw') {
+      x1 = (m.x + m.width) - nextW;
+      y1 = (m.y + m.height) - nextH;
+    } else if (handle === 'ne') {
+      x2 = m.x + nextW;
+      y1 = (m.y + m.height) - nextH;
+    } else if (handle === 'sw') {
+      x1 = (m.x + m.width) - nextW;
+      y2 = m.y + nextH;
+    } else if (handle === 'n') {
+      const cx = m.x + m.width / 2;
+      x1 = cx - nextW / 2;
+      x2 = cx + nextW / 2;
+      y1 = (m.y + m.height) - nextH;
+    } else if (handle === 's') {
+      const cx = m.x + m.width / 2;
+      x1 = cx - nextW / 2;
+      x2 = cx + nextW / 2;
+      y2 = m.y + nextH;
+    } else if (handle === 'e') {
+      const cy = m.y + m.height / 2;
+      y1 = cy - nextH / 2;
+      y2 = cy + nextH / 2;
+      x2 = m.x + nextW;
+    } else if (handle === 'w') {
+      const cy = m.y + m.height / 2;
+      y1 = cy - nextH / 2;
+      y2 = cy + nextH / 2;
+      x1 = (m.x + m.width) - nextW;
+    }
+
+    return {
+      dx: x1 - m.x,
+      dy: y1 - m.y,
+      scaleX: uniformScale,
+      scaleY: uniformScale,
+      originX: m.x,
+      originY: m.y
+    };
+  }
+
+  if (handle.includes('e')) x2 += dx;
+  if (handle.includes('s')) y2 += dy;
+  if (handle.includes('w')) x1 += dx;
+  if (handle.includes('n')) y1 += dy;
+
+  if (x2 - x1 < 8) {
+    if (handle.includes('w')) x1 = x2 - 8; else x2 = x1 + 8;
+  }
+  if (y2 - y1 < 8) {
+    if (handle.includes('n')) y1 = y2 - 8; else y2 = y1 + 8;
+  }
+
+  return {
+    dx: x1 - m.x,
+    dy: y1 - m.y,
+    scaleX: m.width > 0.5 ? (x2 - x1) / m.width : 1,
+    scaleY: m.height > 0.5 ? (y2 - y1) / m.height : 1,
+    originX: m.x,
+    originY: m.y
+  };
+}
+
+/**
+ * Computes a uniform proportional BoxTransform when holding Shift while dragging
+ * any shape vertex (`vertex:*`) or line/arrow endpoint (`start`/`end`), anchoring
+ * the opposite diagonal corner (or midpoint for centered vertices).
+ */
+export function computeVertexResizeTransform(
+  orig: Annotation,
+  vertexIndex: number,
+  targetPagePt: Point
+): BoxTransform | null {
+  const rot = orig.rotation || 0;
+  const center = boxCenter(orig.box);
+  const localTarget = rot ? rotatePoint(targetPagePt, center, -rot) : targetPagePt;
+
+  let localVerts: Point[] | null = null;
+  if (orig.type === 'rectangle') {
+    const pts = (orig as ShapeAnnotation).points;
+    if (Array.isArray(pts) && pts.length >= 3) {
+      localVerts = pts.map(p => ({ x: p.x, y: p.y }));
+    } else {
+      const b = orig.box;
+      localVerts = [
+        { x: b.x, y: b.y },
+        { x: b.x + b.width, y: b.y },
+        { x: b.x + b.width, y: b.y + b.height },
+        { x: b.x, y: b.y + b.height }
+      ];
+    }
+  } else {
+    const pts = (orig as { points?: Point[] }).points;
+    if (Array.isArray(pts) && pts.length >= 2) {
+      localVerts = pts.map(p => ({ x: p.x, y: p.y }));
+    }
+  }
+
+  if (!localVerts || vertexIndex < 0 || vertexIndex >= localVerts.length) return null;
+  const dragOrig = localVerts[vertexIndex];
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const v of localVerts) {
+    if (v.x < minX) minX = v.x;
+    if (v.y < minY) minY = v.y;
+    if (v.x > maxX) maxX = v.x;
+    if (v.y > maxY) maxY = v.y;
+  }
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+  const bw = maxX - minX;
+  const bh = maxY - minY;
+
+  let anchorX = dragOrig.x <= midX ? maxX : minX;
+  let anchorY = dragOrig.y <= midY ? maxY : minY;
+
+  if (Math.hypot(dragOrig.x - anchorX, dragOrig.y - anchorY) < 1e-3) {
+    // Vertex coincides with anchor (e.g. horizontal/vertical segment or centered vertex)
+    if (localVerts.length === 2) {
+      const other = localVerts[vertexIndex === 0 ? 1 : 0];
+      anchorX = other.x;
+      anchorY = other.y;
+    } else {
+      anchorX = midX;
+      anchorY = midY;
+    }
+  }
+
+  const vx = dragOrig.x - anchorX;
+  const vy = dragOrig.y - anchorY;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq < 1e-6) return null;
+
+  const proj = ((localTarget.x - anchorX) * vx + (localTarget.y - anchorY) * vy) / lenSq;
+  const minScale = Math.max(bw > 1 ? 8 / bw : 0.05, bh > 1 ? 8 / bh : 0.05, 0.05);
+  const scale = Math.max(minScale, proj);
+
+  let dx = 0;
+  let dy = 0;
+  if (rot) {
+    const cx = center.x - anchorX;
+    const cy = center.y - anchorY;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    const rx = cx * cos - cy * sin;
+    const ry = cx * sin + cy * cos;
+    dx = (1 - scale) * (cx - rx);
+    dy = (1 - scale) * (cy - ry);
+  }
+
+  return {
+    dx,
+    dy,
+    scaleX: scale,
+    scaleY: scale,
+    originX: anchorX,
+    originY: anchorY
+  };
 }
 
 export type HandleType =

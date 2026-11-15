@@ -679,6 +679,7 @@ class StateStore {
       autoHideHeaderInFullscreen: true,
       targetDPI: 150,
       toolbarDock: 'top',
+      toolbarFloatPos: undefined,
       customPalette: [],
       removedDefaultColors: []
     };

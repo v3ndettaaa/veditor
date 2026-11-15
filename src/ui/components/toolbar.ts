@@ -9,7 +9,9 @@ import { store } from '../../core/store';
 import { history, DeleteAnnotationsCommand, ModifyAnnotationCommand } from '../../core/history';
 import { getIconSvg } from '../../utils/icons';
 import { t, tr } from '../i18n';
-import { ToolType, EraserMode, toolbarFamily, ToolbarDock, classifyToolbarDock, ToolOptionKey, SEGMENT_TOOLS } from '../../core/types';
+import { ToolType, EraserMode, toolbarFamily, ToolbarDock, ToolOptionKey, SEGMENT_TOOLS } from '../../core/types';
+import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
+import { detectToolbarSnapEdge, clampToolbarFloatPos } from '../toolbar-dock';
 
 /** Short labels for tools, reused by Settings → Toolbar. */
 export const TOOL_SHORT_LABELS: Record<string, string> = {
@@ -143,6 +145,7 @@ export class ToolbarComponent {
   private _lastHasDoc: boolean = false;
   private _lastLayoutKey: string = '';
   private _lastDock: ToolbarDock | null = null;
+  private _lastFloatKey: string = '';
   private _lastLang: string = '';
   private _pinnedTool: string | null = null;
 
@@ -153,12 +156,16 @@ export class ToolbarComponent {
 
     // Clicking anywhere outside the toolbar closes pinned cards
     document.addEventListener('pointerdown', (e) => {
+      if (isSliderDragging()) return;
       if (!this._container.contains(e.target as Node)) {
         this.unpinAll();
       }
     });
 
     window.addEventListener('resize', () => {
+      if (store.appSettings.toolbarDock === 'float') {
+        this.applyFloatingPosition();
+      }
       if (this._pinnedTool) {
         const wrapper = this._container.querySelector<HTMLElement>(`.tool-btn-wrapper[data-wrapper-tool="${this._pinnedTool}"]`);
         if (wrapper) this.positionPopover(wrapper);
@@ -174,20 +181,24 @@ export class ToolbarComponent {
     const selectedCount = store.selectedAnnotationIds.size;
     const layoutKey = JSON.stringify(store.toolbarLayout);
     const dock = store.appSettings.toolbarDock;
+    const floatKey = dock === 'float' ? JSON.stringify(store.appSettings.toolbarFloatPos ?? null) : '';
     const lang = store.appSettings.language;
 
     if (
-      hasDoc !== this._lastHasDoc ||
-      activeTool !== this._lastActiveTool ||
-      canUndo !== this._lastCanUndo ||
-      canRedo !== this._lastCanRedo ||
-      selectedCount !== this._lastSelectedCount ||
-      layoutKey !== this._lastLayoutKey ||
-      dock !== this._lastDock ||
-      lang !== this._lastLang
+      !isSliderDragging() &&
+      (hasDoc !== this._lastHasDoc ||
+        activeTool !== this._lastActiveTool ||
+        canUndo !== this._lastCanUndo ||
+        canRedo !== this._lastCanRedo ||
+        selectedCount !== this._lastSelectedCount ||
+        layoutKey !== this._lastLayoutKey ||
+        dock !== this._lastDock ||
+        floatKey !== this._lastFloatKey ||
+        lang !== this._lastLang)
     ) {
       this._lastHasDoc = hasDoc;
       this._lastLayoutKey = layoutKey;
+      this._lastFloatKey = floatKey;
       this._lastLang = lang;
       this.render();
     } else {
@@ -202,6 +213,38 @@ export class ToolbarComponent {
         el.classList.remove('is-pinned');
       });
     }
+  }
+
+  private applyFloatingPosition(): void {
+    const dock = store.appSettings.toolbarDock;
+    if (dock !== 'float') {
+      this._container.style.left = '';
+      this._container.style.top = '';
+      this._container.style.right = '';
+      this._container.style.bottom = '';
+      this._container.style.transform = '';
+      return;
+    }
+    const pos = store.appSettings.toolbarFloatPos;
+    const headerHeight = document.querySelector<HTMLElement>('.app-header')?.getBoundingClientRect().bottom || 52;
+    const fallbackX = Math.max(16, Math.round((window.innerWidth - (this._container.offsetWidth || 620)) / 2));
+    const fallbackY = Math.max(headerHeight + 10, 76);
+    const bw = this._container.offsetWidth || 620;
+    const bh = this._container.offsetHeight || 52;
+    const clamped = clampToolbarFloatPos(
+      pos?.x ?? fallbackX,
+      pos?.y ?? fallbackY,
+      bw,
+      bh,
+      window.innerWidth,
+      window.innerHeight,
+      headerHeight
+    );
+    this._container.style.left = `${clamped.x}px`;
+    this._container.style.top = `${clamped.y}px`;
+    this._container.style.right = 'auto';
+    this._container.style.bottom = 'auto';
+    this._container.style.transform = 'none';
   }
 
   /**
@@ -221,6 +264,7 @@ export class ToolbarComponent {
     const cardHeight = card.offsetHeight || 380;
 
     if (dock === 'left' || dock === 'right') {
+      card.removeAttribute('data-popover-side');
       const btnCenterY = (btnRect.top - rowRect.top) + btnRect.height / 2;
       let topPx = btnCenterY - 44;
       const minTop = 8 - rowRect.top;
@@ -232,6 +276,15 @@ export class ToolbarComponent {
       const arrowY = Math.max(18, Math.min(cardHeight - 18, btnCenterY - topPx));
       card.style.setProperty('--gn-arrow-pos', `${Math.round(arrowY)}px`);
       return;
+    }
+
+    if (dock === 'float') {
+      const fitsBelow = rowRect.bottom + 12 + cardHeight <= window.innerHeight - 10;
+      const fitsAbove = rowRect.top - 12 - cardHeight >= 60;
+      const side = !fitsBelow && fitsAbove ? 'above' : 'below';
+      card.dataset.popoverSide = side;
+    } else {
+      card.removeAttribute('data-popover-side');
     }
 
     const btnCenterX = (btnRect.left - rowRect.left) + btnRect.width / 2;
@@ -268,6 +321,9 @@ export class ToolbarComponent {
     this._lastSelectedCount = selectedIds.length;
     this._lastLayoutKey = JSON.stringify(store.toolbarLayout);
     this._lastDock = store.appSettings.toolbarDock;
+    this._lastFloatKey = store.appSettings.toolbarDock === 'float'
+      ? JSON.stringify(store.appSettings.toolbarFloatPos ?? null)
+      : '';
     this._lastLang = store.appSettings.language;
 
     const penColors = ['#000000', '#ffffff', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
@@ -286,7 +342,7 @@ export class ToolbarComponent {
 
     this._container.innerHTML = `
       <div class="toolbar-main-row">
-        <button type="button" class="toolbar-drag-handle" title="${tr('Drag to dock top, bottom, left, or right', 'بکشید تا نوار ابزار در بالا، پایین، چپ یا راست قرار گیرد')}" aria-label="${tr('Drag toolbar to dock', 'جابه‌جایی نوار ابزار')}">
+        <button type="button" class="toolbar-drag-handle" title="${tr('Drag to move anywhere or snap to Top, Bottom, Left, or Right edge', 'بکشید تا نوار ابزار را هر جایی قرار دهید یا به لبه‌های صفحه قفل کنید')}" aria-label="${tr('Drag toolbar', 'جابه‌جایی نوار ابزار')}">
           ${getIconSvg('moreVertical', 14)}
         </button>
 
@@ -1156,7 +1212,7 @@ export class ToolbarComponent {
 
     const penSlider = this._container.querySelector<HTMLInputElement>('#hover-pen-width-slider');
     if (penSlider) {
-      if (document.activeElement !== penSlider) penSlider.value = String(s.penWidth);
+      if (document.activeElement !== penSlider && penSlider.dataset.dragging !== '1') penSlider.value = String(s.penWidth);
       penSlider.style.setProperty('--slider-pct', `${sliderPercent(s.penWidth, 1, 50)}%`);
     }
 
@@ -1208,7 +1264,7 @@ export class ToolbarComponent {
 
     const hlWidthSlider = this._container.querySelector<HTMLInputElement>('#hover-hl-width-slider');
     if (hlWidthSlider) {
-      if (document.activeElement !== hlWidthSlider) hlWidthSlider.value = String(s.highlighterWidth);
+      if (document.activeElement !== hlWidthSlider && hlWidthSlider.dataset.dragging !== '1') hlWidthSlider.value = String(s.highlighterWidth);
       hlWidthSlider.style.setProperty('--slider-pct', `${sliderPercent(s.highlighterWidth, 2, 100)}%`);
     }
 
@@ -1238,7 +1294,7 @@ export class ToolbarComponent {
 
     const hlOpSlider = this._container.querySelector<HTMLInputElement>('#hover-hl-opacity-slider');
     if (hlOpSlider) {
-      if (document.activeElement !== hlOpSlider) hlOpSlider.value = String(hlOpPct);
+      if (document.activeElement !== hlOpSlider && hlOpSlider.dataset.dragging !== '1') hlOpSlider.value = String(hlOpPct);
       hlOpSlider.style.setProperty('--slider-pct', `${sliderPercent(hlOpPct, 10, 90)}%`);
     }
 
@@ -1271,7 +1327,7 @@ export class ToolbarComponent {
 
     const eraserSlider = this._container.querySelector<HTMLInputElement>('#hover-eraser-width-slider');
     if (eraserSlider) {
-      if (document.activeElement !== eraserSlider) eraserSlider.value = String(s.eraserWidth);
+      if (document.activeElement !== eraserSlider && eraserSlider.dataset.dragging !== '1') eraserSlider.value = String(s.eraserWidth);
       eraserSlider.style.setProperty('--slider-pct', `${sliderPercent(s.eraserWidth, 4, 120)}%`);
     }
 
@@ -1335,7 +1391,7 @@ export class ToolbarComponent {
     });
 
     this._container.querySelectorAll<HTMLInputElement>('.shape-width-slider').forEach(slider => {
-      if (document.activeElement !== slider) slider.value = String(s.shapeWidth);
+      if (document.activeElement !== slider && slider.dataset.dragging !== '1') slider.value = String(s.shapeWidth);
       slider.style.setProperty('--slider-pct', `${sliderPercent(s.shapeWidth, 0.5, 40)}%`);
     });
 
@@ -1390,7 +1446,7 @@ export class ToolbarComponent {
 
     const fillOpPct = Math.round((s.shapeFillOpacity ?? 1) * 100);
     this._container.querySelectorAll<HTMLInputElement>('.shape-fill-opacity-slider').forEach(slider => {
-      if (document.activeElement !== slider) slider.value = String(fillOpPct);
+      if (document.activeElement !== slider && slider.dataset.dragging !== '1') slider.value = String(fillOpPct);
       slider.style.setProperty('--slider-pct', `${sliderPercent(fillOpPct, 0, 100)}%`);
     });
 
@@ -1399,7 +1455,7 @@ export class ToolbarComponent {
     });
 
     this._container.querySelectorAll<HTMLInputElement>('.shape-corner-radius-slider').forEach(slider => {
-      if (document.activeElement !== slider) slider.value = String(cornerRad);
+      if (document.activeElement !== slider && slider.dataset.dragging !== '1') slider.value = String(cornerRad);
       slider.style.setProperty('--slider-pct', `${sliderPercent(cornerRad, 0, 48)}%`);
     });
 
@@ -1439,7 +1495,7 @@ export class ToolbarComponent {
 
     const fontSlider = this._container.querySelector<HTMLInputElement>('#hover-font-size-slider');
     if (fontSlider) {
-      if (document.activeElement !== fontSlider) fontSlider.value = String(s.fontSize);
+      if (document.activeElement !== fontSlider && fontSlider.dataset.dragging !== '1') fontSlider.value = String(s.fontSize);
       fontSlider.style.setProperty('--slider-pct', `${sliderPercent(s.fontSize, 6, 144)}%`);
     }
 
@@ -1508,7 +1564,7 @@ export class ToolbarComponent {
 
     const noteFsSlider = this._container.querySelector<HTMLInputElement>('#hover-note-fontsize-slider');
     if (noteFsSlider) {
-      if (document.activeElement !== noteFsSlider) noteFsSlider.value = String(noteFs);
+      if (document.activeElement !== noteFsSlider && noteFsSlider.dataset.dragging !== '1') noteFsSlider.value = String(noteFs);
       noteFsSlider.style.setProperty('--slider-pct', `${sliderPercent(noteFs, 10, 72)}%`);
     }
 
@@ -2725,42 +2781,156 @@ export class ToolbarComponent {
       });
     });
 
+    enhanceRangeSliders(this._container);
+    this.applyFloatingPosition();
     this.bindDockDrag();
   }
 
-  /** Drag-to-dock handle: dropping near a window edge persists that dock. */
+  /**
+   * Free-drag & magnetic 4-edge snap handle:
+   * - Dragging follows pointer frame-for-frame anywhere across the viewport.
+   * - Entering top, bottom, left, or right edge snap threshold previews the dock target.
+   * - Dropping inside an edge snaps into that dock; dropping in open canvas keeps free-floating.
+   */
   private bindDockDrag(): void {
     const handle = this._container.querySelector<HTMLElement>('.toolbar-drag-handle');
     if (!handle) return;
+
+    const headerEl = document.querySelector<HTMLElement>('.app-header');
+
     handle.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
       e.preventDefault();
       e.stopPropagation();
+
+      this.unpinAll();
       const startDock = store.appSettings.toolbarDock;
+      const startFloatPos = store.appSettings.toolbarFloatPos;
+      const headerHeight = headerEl?.getBoundingClientRect().bottom || 52;
+      const startRect = this._container.getBoundingClientRect();
+
+      // Switch immediately to fixed free-float visuals under the cursor so movement is 1:1
+      let grabOffsetX = e.clientX - startRect.left;
+      let grabOffsetY = e.clientY - startRect.top;
+      if (startDock === 'left' || startDock === 'right') {
+        // Horizontal bar is wider & compact vertically; lock drag anchor onto the handle center (works in LTR & RTL)
+        this._container.dataset.dock = 'float';
+        const newRect = this._container.getBoundingClientRect();
+        const handleRect = handle.getBoundingClientRect();
+        grabOffsetX = (handleRect.left - newRect.left) + handleRect.width / 2;
+        grabOffsetY = (handleRect.top - newRect.top) + handleRect.height / 2;
+      } else {
+        this._container.dataset.dock = 'float';
+      }
+
+      this._container.classList.add('is-dragging');
+      document.body.classList.add('is-toolbar-dragging');
+
+      const guide = document.createElement('div');
+      guide.id = 'toolbar-snap-guide';
+      guide.className = 'toolbar-snap-guide';
+      guide.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(guide);
+
+      const moveBarTo = (clientX: number, clientY: number) => {
+        const bw = this._container.offsetWidth || 620;
+        const bh = this._container.offsetHeight || 52;
+        const clamped = clampToolbarFloatPos(
+          clientX - grabOffsetX,
+          clientY - grabOffsetY,
+          bw,
+          bh,
+          window.innerWidth,
+          window.innerHeight,
+          headerHeight,
+          6
+        );
+        this._container.style.left = `${clamped.x}px`;
+        this._container.style.top = `${clamped.y}px`;
+        this._container.style.right = 'auto';
+        this._container.style.bottom = 'auto';
+        this._container.style.transform = 'none';
+
+        const snapEdge = detectToolbarSnapEdge(
+          clientX,
+          clientY,
+          window.innerWidth,
+          window.innerHeight,
+          headerHeight
+        );
+        if (snapEdge) {
+          guide.dataset.edge = snapEdge;
+          guide.classList.add('is-active');
+        } else {
+          delete guide.dataset.edge;
+          guide.classList.remove('is-active');
+        }
+        return { clamped, snapEdge };
+      };
+
+      moveBarTo(e.clientX, e.clientY);
+
       try {
         handle.setPointerCapture(e.pointerId);
       } catch (_) {}
-      const preview = (ev: PointerEvent) => {
-        this._container.dataset.dock = classifyToolbarDock(ev.clientX, ev.clientY, window.innerWidth, window.innerHeight);
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== e.pointerId && ev.pointerType !== 'mouse') return;
+        moveBarTo(ev.clientX, ev.clientY);
       };
+
+      let finished = false;
       const finish = (ev: PointerEvent | null, commit: boolean) => {
-        handle.removeEventListener('pointermove', preview);
-        handle.removeEventListener('pointerup', commitUp);
-        handle.removeEventListener('pointercancel', cancelDrag);
-        if (commit && ev) {
-          const dock = classifyToolbarDock(ev.clientX, ev.clientY, window.innerWidth, window.innerHeight);
-          if (dock !== startDock) {
-            store.updateAppSettings({ toolbarDock: dock });
-            return;
+        if (finished) return;
+        finished = true;
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onCancel);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+        try {
+          if (handle.hasPointerCapture?.(e.pointerId)) {
+            handle.releasePointerCapture(e.pointerId);
           }
+        } catch (_) {}
+
+        this._container.classList.remove('is-dragging');
+        document.body.classList.remove('is-toolbar-dragging');
+        guide.remove();
+
+        if (commit && ev) {
+          const { clamped, snapEdge } = moveBarTo(ev.clientX, ev.clientY);
+          if (snapEdge) {
+            store.updateAppSettings({ toolbarDock: snapEdge, toolbarFloatPos: undefined });
+          } else {
+            store.updateAppSettings({ toolbarDock: 'float', toolbarFloatPos: clamped });
+          }
+          return;
         }
+
+        // Cancelled: revert cleanly
         this._container.dataset.dock = startDock;
+        if (startDock === 'float' && startFloatPos) {
+          this.applyFloatingPosition();
+        } else {
+          this._container.style.left = '';
+          this._container.style.top = '';
+          this._container.style.right = '';
+          this._container.style.bottom = '';
+          this._container.style.transform = '';
+        }
       };
-      const commitUp = (ev: PointerEvent) => finish(ev, true);
-      const cancelDrag = () => finish(null, false);
-      handle.addEventListener('pointermove', preview);
-      handle.addEventListener('pointerup', commitUp);
-      handle.addEventListener('pointercancel', cancelDrag);
+
+      const onUp = (ev: PointerEvent) => finish(ev, true);
+      const onCancel = () => finish(null, false);
+
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onCancel);
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
     });
   }
 }

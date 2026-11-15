@@ -131,6 +131,112 @@ export function formatStickyNoteDisplayLines(rawText: string, listStyle?: 'none'
   });
 }
 
+export interface StickyNoteLayoutMetrics {
+  uiScale: number;
+  cornerRadius: number;
+  headerHeight: number;
+  headerDividerInset: number;
+  btnCenterX: number;
+  btnCenterY: number;
+  btnSize: number;
+  btnRadius: number;
+  btnStrokeWidth: number;
+  btnArrowSpan: number;
+  btnArrowBarb: number;
+  padX: number;
+  padTop: number;
+  footerReserve: number;
+}
+
+/**
+ * Computes proportional internal card metrics for any Sticky Note box size.
+ * At >= 210x210 page units `uiScale` is 1.0 (preserving exact standard layout);
+ * when shrunk smaller, header height, button icon, corner radius, and padding
+ * scale smoothly with the card instead of clipping or overflowing.
+ */
+export function getStickyNoteLayoutMetrics(box: BoundingBox): StickyNoteLayoutMetrics {
+  const uiScale = Math.max(
+    0.28,
+    Math.min(1.0, Math.min((box.width || STICKY_NOTE_DEFAULT_SIZE) / STICKY_NOTE_DEFAULT_SIZE, (box.height || STICKY_NOTE_DEFAULT_SIZE) / STICKY_NOTE_DEFAULT_SIZE))
+  );
+  const headerHeight = Math.max(11, Math.round(36 * uiScale * 10) / 10);
+  const btnSize = Math.max(8, Math.round(22 * uiScale * 10) / 10);
+  const btnOffsetRight = Math.max(7, Math.min(box.width * 0.3, 21 * uiScale));
+  return {
+    uiScale,
+    cornerRadius: Math.max(3, STICKY_NOTE_CORNER_RADIUS * uiScale),
+    headerHeight,
+    headerDividerInset: Math.max(4, 12 * uiScale),
+    btnCenterX: box.x + box.width - btnOffsetRight,
+    btnCenterY: box.y + headerHeight / 2,
+    btnSize,
+    btnRadius: Math.max(2, 6 * uiScale),
+    btnStrokeWidth: Math.max(0.75, 1.4 * uiScale),
+    btnArrowSpan: Math.max(2.0, 5 * uiScale),
+    btnArrowBarb: Math.max(1.5, 3.5 * uiScale),
+    padX: Math.max(4, 14 * uiScale),
+    padTop: headerHeight + Math.max(2.5, 8 * uiScale),
+    footerReserve: Math.max(3.5, 12 * uiScale)
+  };
+}
+
+/**
+ * Computes a zoom-aware Sticky Note bounding box placed cleanly inside the user's
+ * visible page region (so zoomed-in views never spawn oversized or off-screen notes).
+ */
+export function computeViewportStickyNoteBox(
+  pageWidth: number,
+  pageHeight: number,
+  zoom: number,
+  visibleRect?: { left: number; top: number; right: number; bottom: number } | null,
+  anchorPoint?: Point | null
+): { box: BoundingBox; uiScale: number } {
+  const safeZoom = Math.max(0.15, Number.isFinite(zoom) ? zoom : 1);
+  const safePageW = pageWidth > 0 ? pageWidth : 612;
+  const safePageH = pageHeight > 0 ? pageHeight : 792;
+
+  const visL = visibleRect ? Math.max(0, Math.min(safePageW, visibleRect.left)) : 0;
+  const visT = visibleRect ? Math.max(0, Math.min(safePageH, visibleRect.top)) : 0;
+  const visR = visibleRect ? Math.max(visL + 10, Math.min(safePageW, visibleRect.right)) : safePageW;
+  const visB = visibleRect ? Math.max(visT + 10, Math.min(safePageH, visibleRect.bottom)) : safePageH;
+
+  const visW = Math.max(20, visR - visL);
+  const visH = Math.max(20, visB - visT);
+
+  // Target ~210-235px card in screen CSS pixels, capped cleanly inside the visible region
+  const desiredScreenW = Math.min(235, Math.max(140, visW * safeZoom * 0.42));
+  const desiredScreenH = Math.min(220, Math.max(125, visH * safeZoom * 0.40));
+
+  let cardW = desiredScreenW / safeZoom;
+  let cardH = desiredScreenH / safeZoom;
+
+  const maxW = Math.max(56, Math.min(safePageW * 0.88, visW * 0.88));
+  const maxH = Math.max(46, Math.min(safePageH * 0.88, visH * 0.88));
+  const fit = Math.min(1, maxW / cardW, maxH / cardH);
+  cardW = Math.max(56, Math.min(safePageW - 8, cardW * fit));
+  cardH = Math.max(46, Math.min(safePageH - 8, cardH * fit));
+
+  const targetCx = anchorPoint ? anchorPoint.x : (visL + visR) / 2;
+  const targetCy = anchorPoint ? anchorPoint.y : (visT + visB) / 2;
+
+  const margin = Math.min(8, visW * 0.05, visH * 0.05);
+  const minX = Math.max(4, visL + margin);
+  const maxX = Math.max(minX, Math.min(safePageW - 4 - cardW, visR - margin - cardW));
+  const minY = Math.max(4, visT + margin);
+  const maxY = Math.max(minY, Math.min(safePageH - 4 - cardH, visB - margin - cardH));
+
+  const x = Math.max(minX, Math.min(maxX, targetCx - cardW / 2));
+  const y = Math.max(minY, Math.min(maxY, targetCy - cardH / 2));
+
+  const box: BoundingBox = {
+    x: Math.round(x * 100) / 100,
+    y: Math.round(y * 100) / 100,
+    width: Math.round(cardW * 100) / 100,
+    height: Math.round(cardH * 100) / 100
+  };
+  return { box, uiScale: getStickyNoteLayoutMetrics(box).uiScale };
+}
+
 export interface CreateStickyNoteOptions {
   color?: string;
   textColor?: string;
@@ -144,6 +250,7 @@ export interface CreateStickyNoteOptions {
   iconHeight?: number;
   strokes?: StickyNoteStroke[];
   items?: Annotation[];
+  allowCompact?: boolean;
 }
 
 export class StickyNoteTool {
@@ -196,11 +303,13 @@ export class StickyNoteTool {
       opts = cfg;
     }
 
+    const minW = opts.allowCompact ? 56 : STICKY_NOTE_MIN_WIDTH;
+    const minH = opts.allowCompact ? 46 : STICKY_NOTE_MIN_HEIGHT;
     const normalizedBox: BoundingBox = {
       x: rawBox.x,
       y: rawBox.y,
-      width: Math.max(STICKY_NOTE_MIN_WIDTH, rawBox.width || STICKY_NOTE_DEFAULT_SIZE),
-      height: Math.max(STICKY_NOTE_MIN_HEIGHT, rawBox.height || STICKY_NOTE_DEFAULT_SIZE),
+      width: Math.max(minW, rawBox.width || STICKY_NOTE_DEFAULT_SIZE),
+      height: Math.max(minH, rawBox.height || STICKY_NOTE_DEFAULT_SIZE),
       ...(rawBox.rotation !== undefined ? { rotation: rawBox.rotation } : {})
     };
     return {
@@ -399,12 +508,13 @@ export class StickyNoteTool {
     if (ann.collapsed) return false;
     const center = { x: ann.box.x + ann.box.width / 2, y: ann.box.y + ann.box.height / 2 };
     const local = rotatePointAround(point, center, -(ann.rotation || 0));
-    const b = ann.box;
+    const m = getStickyNoteLayoutMetrics(ann.box);
+    const halfHit = Math.max(5.5, m.btnSize * 0.72);
     return (
-      local.x >= b.x + b.width - 36 &&
-      local.x <= b.x + b.width - 4 &&
-      local.y >= b.y + 4 &&
-      local.y <= b.y + 34
+      local.x >= m.btnCenterX - halfHit &&
+      local.x <= m.btnCenterX + halfHit &&
+      local.y >= m.btnCenterY - halfHit &&
+      local.y <= m.btnCenterY + halfHit
     );
   }
 
@@ -416,11 +526,14 @@ export class StickyNoteTool {
     const center = { x: ann.box.x + ann.box.width / 2, y: ann.box.y + ann.box.height / 2 };
     const local = rotatePointAround(point, center, -(ann.rotation || 0));
     const b = ann.box;
+    const m = getStickyNoteLayoutMetrics(b);
+    const sideInset = Math.max(2, 6 * m.uiScale);
+    const bottomInset = Math.max(2, 8 * m.uiScale);
     return (
-      local.x >= b.x + 6 &&
-      local.x <= b.x + b.width - 6 &&
-      local.y >= b.y + 36 &&
-      local.y <= b.y + b.height - 8
+      local.x >= b.x + sideInset &&
+      local.x <= b.x + b.width - sideInset &&
+      local.y >= b.y + m.headerHeight &&
+      local.y <= b.y + b.height - bottomInset
     );
   }
 
@@ -455,6 +568,7 @@ export class StickyNoteTool {
     const drawFn = typeof scaleOrFn === 'function' ? scaleOrFn : maybeDrawFn;
     if (!drawFn) return;
     const b = ann.box;
+    const m = getStickyNoteLayoutMetrics(b);
     ctx.save();
     ctx.scale(scale, scale);
     if (ann.rotation) {
@@ -470,7 +584,7 @@ export class StickyNoteTool {
       b.y + 1.5,
       b.width - 3,
       b.height - 3,
-      Math.max(2, STICKY_NOTE_CORNER_RADIUS - 1.5)
+      Math.max(2, m.cornerRadius - 1.5)
     );
     ctx.clip();
     ctx.scale(1 / scale, 1 / scale);
@@ -563,6 +677,7 @@ export class StickyNoteTool {
   ): void {
     if (ann.collapsed || points.length === 0) return;
     const b = ann.box;
+    const m = getStickyNoteLayoutMetrics(b);
     ctx.save();
     ctx.scale(scale, scale);
     if (ann.rotation) {
@@ -578,7 +693,7 @@ export class StickyNoteTool {
       b.y + 1.5,
       b.width - 3,
       b.height - 3,
-      Math.max(2, STICKY_NOTE_CORNER_RADIUS - 1.5)
+      Math.max(2, m.cornerRadius - 1.5)
     );
     ctx.clip();
     ctx.globalAlpha = isHighlighter ? 1.0 : opacity;
@@ -724,13 +839,14 @@ export class StickyNoteTool {
     }
 
     const b = ann.box;
-    const r = STICKY_NOTE_CORNER_RADIUS;
+    const m = getStickyNoteLayoutMetrics(b);
+    const r = m.cornerRadius;
 
     // 1. Card elevation shadow & warm paper fill
     ctx.save();
     ctx.shadowColor = 'rgba(15, 23, 42, 0.20)';
-    ctx.shadowBlur = 12;
-    ctx.shadowOffsetY = 4;
+    ctx.shadowBlur = 12 * m.uiScale;
+    ctx.shadowOffsetY = 4 * m.uiScale;
     drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
     ctx.fillStyle = ann.color || '#fef08a';
     ctx.fill();
@@ -739,16 +855,16 @@ export class StickyNoteTool {
     // 2. Subtle card border
     drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
     ctx.strokeStyle = 'rgba(59, 47, 30, 0.26)';
-    ctx.lineWidth = 1.1;
+    ctx.lineWidth = Math.max(0.75, 1.1 * m.uiScale);
     ctx.stroke();
 
-    // 3. Header bar separator line
+    // 3. Header bar separator line (scales proportionally with card dimensions)
     ctx.save();
     ctx.strokeStyle = 'rgba(59, 47, 30, 0.14)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = Math.max(0.65, m.uiScale);
     ctx.beginPath();
-    ctx.moveTo(b.x + 12, b.y + 36);
-    ctx.lineTo(b.x + b.width - 12, b.y + 36);
+    ctx.moveTo(b.x + m.headerDividerInset, b.y + m.headerHeight);
+    ctx.lineTo(b.x + b.width - m.headerDividerInset, b.y + m.headerHeight);
     ctx.stroke();
     ctx.restore();
 
@@ -760,15 +876,15 @@ export class StickyNoteTool {
     const hasStrokes = Array.isArray(ann.strokes) && ann.strokes.length > 0;
     const hasItems = Array.isArray(ann.items) && ann.items.length > 0;
     const rawText = (ann.text || '').trim();
-    const padX = 14;
-    const padTop = 44;
-    const footerReserve = 12;
-    const availW = Math.max(20, b.width - padX * 2);
-    const availH = Math.max(20, b.height - padTop - footerReserve);
+    const padX = m.padX;
+    const padTop = m.padTop;
+    const footerReserve = m.footerReserve;
+    const availW = Math.max(12, b.width - padX * 2);
+    const availH = Math.max(10, b.height - padTop - footerReserve);
 
     if (!isEditingText) {
       if (rawText.length > 0) {
-        const fontSize = Math.max(8, ann.fontSize || 15);
+        const fontSize = Math.max(5, ann.fontSize || 15);
         const weight = ann.fontWeight === 'bold' || Number(ann.fontWeight) >= 600 ? 'bold' : 'normal';
         const style = ann.fontStyle === 'italic' ? 'italic' : 'normal';
         const family = ann.fontFamily || 'Inter';
@@ -868,30 +984,34 @@ export class StickyNoteTool {
 
     ctx.restore();
 
-    // 6. Top-right collapse button icon rendered on top so it stays crisp and accessible
+    // 6. Top-right collapse button icon scaled proportionally to card header
     ctx.save();
-    const btnCx = b.x + b.width - 21;
-    const btnCy = b.y + 18;
+    const btnCx = m.btnCenterX;
+    const btnCy = m.btnCenterY;
+    const halfBtn = m.btnSize / 2;
+    const span = m.btnArrowSpan;
+    const arm = Math.max(0.6, span - m.btnArrowBarb);
+    const gap = Math.max(0.5, 1 * m.uiScale);
     ctx.fillStyle = 'rgba(59, 47, 30, 0.08)';
-    drawRoundedRectPath(ctx, btnCx - 11, btnCy - 11, 22, 22, 6);
+    drawRoundedRectPath(ctx, btnCx - halfBtn, btnCy - halfBtn, m.btnSize, m.btnSize, m.btnRadius);
     ctx.fill();
 
     ctx.strokeStyle = ann.textColor || '#3b2f1e';
     ctx.globalAlpha = (ann.opacity ?? 1) * 0.72;
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = m.btnStrokeWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    ctx.moveTo(btnCx + 5, btnCy - 5);
-    ctx.lineTo(btnCx + 1, btnCy - 1);
-    ctx.moveTo(btnCx + 1, btnCy - 4.5);
-    ctx.lineTo(btnCx + 1, btnCy - 1);
-    ctx.lineTo(btnCx + 4.5, btnCy - 1);
-    ctx.moveTo(btnCx - 5, btnCy + 5);
-    ctx.lineTo(btnCx - 1, btnCy + 1);
-    ctx.moveTo(btnCx - 1, btnCy + 4.5);
-    ctx.lineTo(btnCx - 1, btnCy + 1);
-    ctx.lineTo(btnCx - 4.5, btnCy + 1);
+    ctx.moveTo(btnCx + span, btnCy - span);
+    ctx.lineTo(btnCx + gap, btnCy - gap);
+    ctx.moveTo(btnCx + gap, btnCy - (span - arm * 0.25));
+    ctx.lineTo(btnCx + gap, btnCy - gap);
+    ctx.lineTo(btnCx + (span - arm * 0.25), btnCy - gap);
+    ctx.moveTo(btnCx - span, btnCy + span);
+    ctx.lineTo(btnCx - gap, btnCy + gap);
+    ctx.moveTo(btnCx - gap, btnCy + (span - arm * 0.25));
+    ctx.lineTo(btnCx - gap, btnCy + gap);
+    ctx.lineTo(btnCx - (span - arm * 0.25), btnCy + gap);
     ctx.stroke();
     ctx.restore();
 

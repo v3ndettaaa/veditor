@@ -160,7 +160,7 @@ export class SaveAsDialogComponent {
               </div>
             </div>
 
-            <!-- PDF-only Options: Flatten & Optional Password Encryption -->
+            <!-- Format Extras: PDF Flatten + Optional Password Protection (PDF or encrypted ZIP for PNG/JPEG/XFDF) -->
             <div class="saveas-pdf-extras" id="saveas-pdf-extras">
               <div class="form-field" id="saveas-flatten-group">
                 <label class="saveas-check-row">
@@ -173,7 +173,7 @@ export class SaveAsDialogComponent {
               <div class="form-field" id="saveas-password-group">
                 <label class="saveas-check-row">
                   <input id="saveas-encrypt-toggle" type="checkbox" />
-                  <span>${getIconSvg('lock', 13)} ${tr('Protect PDF with a password', 'رمزگذاری فایل PDF خروجی')}</span>
+                  <span>${getIconSvg('lock', 13)} <span id="saveas-encrypt-label">${tr('Protect PDF with a password', 'رمزگذاری فایل PDF خروجی')}</span></span>
                 </label>
                 <div id="saveas-password-fields" class="saveas-password-fields" hidden>
                   <div class="saveas-pwd-input-wrap">
@@ -238,35 +238,58 @@ export class SaveAsDialogComponent {
     const isPdf = fmt === 'pdf';
     const isImage = fmt === 'png' || fmt === 'jpeg';
     const isData = fmt === 'xfdf' || fmt === 'json';
+    const supportsPassword = fmt === 'pdf' || fmt === 'png' || fmt === 'jpeg' || fmt === 'xfdf';
+    const passwordChecked = q<HTMLInputElement>('#saveas-encrypt-toggle')?.checked === true;
 
     const dpiGroup = q('#saveas-dpi-group');
     const themeGroup = q('#saveas-theme-group');
     const pdfExtras = q('#saveas-pdf-extras');
+    const flattenGroup = q('#saveas-flatten-group');
+    const passwordGroup = q('#saveas-password-group');
+    const encryptLabel = q('#saveas-encrypt-label');
     const pagesGroup = q('#saveas-pages-group');
     const hint = q('#saveas-format-hint');
     const submitLabel = q('#saveas-submit-label');
 
     if (dpiGroup) dpiGroup.style.display = (isPdf || isImage) ? '' : 'none';
     if (themeGroup) themeGroup.style.display = (isPdf || isImage) ? '' : 'none';
-    if (pdfExtras) pdfExtras.style.display = isPdf ? '' : 'none';
+    if (pdfExtras) pdfExtras.style.display = supportsPassword ? '' : 'none';
+    if (flattenGroup) flattenGroup.style.display = isPdf ? '' : 'none';
+    if (passwordGroup) passwordGroup.style.display = supportsPassword ? '' : 'none';
     if (pagesGroup) pagesGroup.style.display = (isPdf || isImage) ? '' : 'none';
+
+    if (encryptLabel) {
+      encryptLabel.textContent = isPdf
+        ? tr('Protect PDF with a password', 'رمزگذاری فایل PDF خروجی')
+        : tr('Protect export in a password-locked .zip', 'رمزگذاری خروجی در فایل ZIP قفل‌شده');
+    }
 
     if (hint) {
       if (fmt === 'xfdf') {
-        hint.textContent = tr(
-          'Exports all annotations in standard Adobe XFDF XML format.',
-          'تمامی حاشیه‌نویسی‌ها را با فرمت استاندارد Adobe XFDF استخراج می‌کند.'
-        );
+        hint.textContent = passwordChecked
+          ? tr(
+              'Packages all XFDF annotations inside a password-protected .zip archive.',
+              'تمامی حاشیه‌نویسی‌های XFDF را در یک فایل ZIP رمزگذاری‌شده ذخیره می‌کند.'
+            )
+          : tr(
+              'Exports all annotations in standard Adobe XFDF XML format.',
+              'تمامی حاشیه‌نویسی‌ها را با فرمت استاندارد Adobe XFDF استخراج می‌کند.'
+            );
       } else if (fmt === 'json') {
         hint.textContent = tr(
           'Exports all annotations & layers as a lossless veditor JSON backup.',
           'تمامی حاشیه‌نویسی‌ها و لایه‌ها را به صورت فایل پشتیبان JSON ذخیره می‌کند.'
         );
       } else if (isImage) {
-        hint.textContent = tr(
-          '1 page downloads as an image; 2+ pages bundle cleanly into one .zip archive.',
-          'تک‌صفحه به صورت تصویر مستقیم و چند صفحه به صورت یک فایل یکپارچه ZIP خروجی گرفته می‌شود.'
-        );
+        hint.textContent = passwordChecked
+          ? tr(
+              'Packages exported image(s) inside a password-protected .zip archive.',
+              'تصویر(های) خروجی را در یک فایل ZIP رمزگذاری‌شده ذخیره می‌کند.'
+            )
+          : tr(
+              '1 page downloads as an image; 2+ pages bundle cleanly into one .zip archive.',
+              'تک‌صفحه به صورت تصویر مستقیم و چند صفحه به صورت یک فایل یکپارچه ZIP خروجی گرفته می‌شود.'
+            );
       } else {
         hint.textContent = this._opts.supportsPicker
           ? t('saveAs.locationPicker')
@@ -354,6 +377,7 @@ export class SaveAsDialogComponent {
       const enabled = encryptToggle.checked;
       if (pwdFields) pwdFields.hidden = !enabled;
       clearPwdError();
+      this.syncFormatVisibility();
       if (enabled) requestAnimationFrame(() => pwdInput?.focus());
     });
 
@@ -378,7 +402,7 @@ export class SaveAsDialogComponent {
       }
 
       let password: string | undefined;
-      if (this._format === 'pdf' && encryptToggle?.checked) {
+      if (this._format !== 'json' && encryptToggle?.checked) {
         const p1 = pwdInput?.value || '';
         const p2 = pwdConfirm?.value || '';
         if (!p1) {

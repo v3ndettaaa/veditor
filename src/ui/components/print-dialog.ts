@@ -94,25 +94,6 @@ function canvasToPngAsset(canvas: HTMLCanvasElement): Promise<RenderedSheetAsset
   });
 }
 
-async function canvasToPreviewUrl(canvas: HTMLCanvasElement): Promise<string> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          resolve(URL.createObjectURL(blob));
-        } else {
-          try {
-            resolve(canvas.toDataURL('image/png'));
-          } catch (err) {
-            reject(err);
-          }
-        }
-      },
-      'image/png'
-    );
-  });
-}
-
 async function renderSinglePrintPageCanvas(
   pageIdx: number,
   scale: number,
@@ -222,25 +203,56 @@ async function composeSheetCanvas(
   return sheetCanvas;
 }
 
-/** Builds a downloadable PDF file directly from formatted sheet assets. */
-export async function downloadPrintablePdfFromSheets(
-  sheets: RenderedSheetAsset[],
-  docName: string
-): Promise<void> {
-  if (sheets.length === 0) return;
+/** Builds a downloadable PDF byte buffer from formatted sheet assets. */
+export async function buildPrintablePdfBytesFromSheets(
+  sheets: RenderedSheetAsset[]
+): Promise<Uint8Array | null> {
+  if (sheets.length === 0) return null;
   const outDoc = await PDFDocument.create();
   for (const s of sheets) {
     const embedded = await outDoc.embedPng(s.pngBytes);
-    // Scale to reasonable PDF points (~72 DPI) preserving aspect ratio
     const scalePt = 72 / 150;
     const wPt = Math.max(100, s.width * scalePt);
     const hPt = Math.max(100, s.height * scalePt);
     const page = outDoc.addPage([wPt, hPt]);
     page.drawImage(embedded, { x: 0, y: 0, width: wPt, height: hPt });
   }
-  const pdfBytes = await outDoc.save();
+  return outDoc.save();
+}
+
+function triggerBlobDownload(bytes: Uint8Array, filename: string): void {
+  const blob = new Blob([bytes as any], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/** Builds and triggers a downloadable PDF directly without async picker gesture expiration. */
+export async function downloadPrintablePdfFromSheets(
+  sheets: RenderedSheetAsset[],
+  docName: string,
+  prebuiltBytes?: Uint8Array | null
+): Promise<void> {
+  const pdfBytes = prebuiltBytes && prebuiltBytes.length > 0
+    ? prebuiltBytes
+    : await buildPrintablePdfBytesFromSheets(sheets);
+  if (!pdfBytes || pdfBytes.length === 0) {
+    throw new Error('No printable pages available');
+  }
   const baseName = (docName || 'Document').replace(/\.pdf$/i, '');
-  await pdfExporter.saveToFile(pdfBytes, `${baseName}-printable.pdf`);
+  const filename = `${baseName}-printable.pdf`;
+  const inSubframe = typeof window !== 'undefined' && window.self !== window.top;
+  if (inSubframe || !('showSaveFilePicker' in window) || prebuiltBytes === undefined) {
+    triggerBlobDownload(pdfBytes, filename);
+    return;
+  }
+  await pdfExporter.saveToFile(pdfBytes, filename);
 }
 
 function removePrintDom(): void {
@@ -357,7 +369,6 @@ export async function executeDocumentPrint(opts: PrintOptions): Promise<ExecuteP
     console.warn('window.print() threw:', err);
   }
 
-  // Allow one short tick in case the browser dispatches beforeprint asynchronously
   if (!beforePrintFired && !printThrew) {
     await new Promise<void>(r => setTimeout(r, 120));
   }
@@ -366,7 +377,6 @@ export async function executeDocumentPrint(opts: PrintOptions): Promise<ExecuteP
     window.removeEventListener('beforeprint', onBeforePrint);
     window.removeEventListener('afterprint', onAfterPrint);
     removePrintDom();
-    // Retain sheetAssets cleanly so the user can immediately download the Print-Ready PDF fallback
     return {
       opened: false,
       blockedBySandbox: true,
@@ -375,7 +385,6 @@ export async function executeDocumentPrint(opts: PrintOptions): Promise<ExecuteP
     };
   }
 
-  // Fallback timer in case a browser ignores `afterprint` after closing
   if (!afterPrintFired) {
     window.setTimeout(() => {
       releaseSheets();
@@ -389,209 +398,54 @@ export async function executeDocumentPrint(opts: PrintOptions): Promise<ExecuteP
   };
 }
 
-/**
- * Opens the Split-Pane Print Preview Studio modal.
- */
-export function openPrintDialog(): void {
-  const doc = store.activeDocument;
-  if (!doc) {
-    showToast(tr('Open a PDF document before printing', 'ابتدا یک سند PDF باز کنید'), 'error');
-    return;
-  }
+let printInFlight = false;
 
-  const pageCount = doc.pageCount;
-  const activePageNum = store.activePageIndex + 1;
-  const selectedIndices = [...store.selectedPageIndices].sort((a, b) => a - b);
-
+/** Shows a clean recovery modal when the browser/iframe blocks window.print(), pre-baking PDF bytes so download is instant. */
+function showPrintFallbackModal(docName: string, sheets: RenderedSheetAsset[], releaseSheets: () => void): void {
   const host = document.createElement('div');
   document.body.appendChild(host);
-
-  let busy = false;
   let closed = false;
-  let rangeMode: 'all' | 'current' | 'selected' | 'custom' = 'all';
-  let customRangeRaw = `1-${pageCount}`;
-  let pagesPerSheet: PrintPagesPerSheet = 1;
-  // Always default to crisp Light Paper color mode so dark UI theme never ruins physical printouts
-  let colorMode: PrintColorMode = 'color';
-  let dpi: 150 | 300 = 150;
-  let includeAnnotations = true;
-  let renderGeneration = 0;
-  let pendingFallbackRelease: (() => void) | null = null;
-  let pendingFallbackSheets: RenderedSheetAsset[] | null = null;
+  let prebuiltBytes: Uint8Array | null = null;
 
-  const clearPendingFallback = () => {
-    pendingFallbackRelease?.();
-    pendingFallbackRelease = null;
-    pendingFallbackSheets = null;
-    const notice = host.querySelector<HTMLElement>('#print-sandbox-notice');
-    if (notice) notice.hidden = true;
-  };
-
-  // Cache rendered low-DPI preview thumbnails keyed by pageIdx|anns|colorMode
-  const thumbCache = new Map<string, string>();
-  const revokeThumbCache = () => {
-    for (const url of thumbCache.values()) {
-      if (url.startsWith('blob:')) URL.revokeObjectURL(url);
-    }
-    thumbCache.clear();
-  };
-
-  const close = () => {
+  const cleanup = () => {
     if (closed) return;
     closed = true;
-    renderGeneration++;
     window.removeEventListener('keydown', onKey, true);
-    clearPendingFallback();
-    revokeThumbCache();
+    releaseSheets();
     host.remove();
   };
 
-  const resolvePageIndices = (): number[] => {
-    if (rangeMode === 'all') {
-      return Array.from({ length: pageCount }, (_, i) => i);
-    }
-    if (rangeMode === 'current') {
-      return [store.activePageIndex];
-    }
-    if (rangeMode === 'selected') {
-      return selectedIndices.length > 0 ? selectedIndices : [store.activePageIndex];
-    }
-    return parsePrintPageRange(customRangeRaw, pageCount);
-  };
-
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && !busy) {
+    if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      close();
-    } else if (
-      e.key === 'Enter' &&
-      (e.target as HTMLElement)?.tagName === 'INPUT' &&
-      (e.target as HTMLInputElement).type === 'text'
-    ) {
-      e.preventDefault();
-      e.stopPropagation();
-      host.querySelector<HTMLButtonElement>('#print-submit')?.click();
+      cleanup();
     }
   };
   window.addEventListener('keydown', onKey, true);
 
   host.innerHTML = `
-    <div class="modal-overlay" id="print-overlay">
-      <div class="modal-dialog print-studio-dialog" role="dialog" aria-modal="true" aria-label="${tr('Print Preview Studio', 'پیش‌نمایش و تنظیمات چاپ')}">
-        <!-- Left Stage: Live Paper Sheet Preview -->
-        <div class="print-studio-preview" id="print-preview-stage">
-          <div class="print-studio-sheets" id="print-sheets-list"></div>
+    <div class="modal-overlay" id="print-fallback-overlay">
+      <div class="modal-dialog form-dialog print-theme-dialog" role="dialog" aria-modal="true" aria-label="${tr('Print Recovery', 'نسخه آماده چاپ')}">
+        <div class="panel-header">
+          <span>${getIconSvg('printer', 15)} ${tr('Download Print-Ready PDF', 'دانلود نسخه آماده چاپ (PDF)')}</span>
+          <button type="button" id="print-fallback-close" class="icon-btn" aria-label="${tr('Close', 'بستن')}">${getIconSvg('close', 14)}</button>
         </div>
-
-        <!-- Right Inspector: Printer & Sheet Controls -->
-        <div class="print-studio-inspector">
-          <div class="print-inspector-header">
-            <div class="print-inspector-title-group">
-              <span class="print-inspector-title">${tr('Print', 'چاپ سند')}</span>
-              <span class="print-sheet-summary tabular-nums" id="print-sheet-summary"></span>
-            </div>
-            <button type="button" id="print-close" class="icon-btn" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">${getIconSvg('close', 14)}</button>
-          </div>
-
-          <div class="print-inspector-body">
-            <!-- System Printer Destination Info -->
-            <div class="print-row">
-              <label class="print-row-label" for="print-destination-display">${tr('Destination', 'چاپگر مقصد')}</label>
-              <div class="print-row-control">
-                <div id="print-destination-display" class="print-dest-box">
-                  ${getIconSvg('printer', 14)}
-                  <span>${tr('System Printers & PDF', 'چاپگرهای سیستم و Save as PDF')}</span>
-                </div>
-                <button type="button" id="print-system-link" class="print-system-link">
-                  <span>${tr('Open system printer dialog…', 'انتخاب چاپگر و چاپ در پنجره سیستم…')}</span>
-                  ${getIconSvg('externalLink', 12)}
-                </button>
-              </div>
-            </div>
-
-            <!-- Pages Selection -->
-            <div class="print-row">
-              <label class="print-row-label" for="print-pages-select">${tr('Pages', 'صفحات')}</label>
-              <div class="print-row-control">
-                <select id="print-pages-select" class="field">
-                  <option value="all" selected>${tr(`All (${pageCount})`, `همه صفحات (${pageCount})`)}</option>
-                  <option value="current">${tr(`Current page (${activePageNum})`, `صفحه فعلی (${activePageNum})`)}</option>
-                  ${selectedIndices.length > 0 ? `<option value="selected">${tr(`Selected in sidebar (${selectedIndices.length})`, `صفحات انتخابی (${selectedIndices.length})`)}</option>` : ''}
-                  <option value="custom">${tr('Custom range…', 'بازه دلخواه…')}</option>
-                </select>
-                <input id="print-custom-input" class="field tabular-nums" type="text" placeholder="${tr('e.g. 1-3, 5', 'مثلاً 1-3, 5')}" value="1-${pageCount}" hidden />
-                <div id="print-range-error" class="saveas-pwd-error" hidden></div>
-              </div>
-            </div>
-
-            <!-- Pages Per Sheet (1 / 2 / 4) -->
-            <div class="print-row">
-              <span class="print-row-label">${tr('Pages per sheet', 'صفحه در هر برگ')}</span>
-              <div class="print-row-control">
-                <div class="print-segmented" role="group" aria-label="${tr('Pages per sheet', 'تعداد صفحه در هر برگ')}">
-                  <button type="button" class="print-seg-btn active" data-print-nup="1">1</button>
-                  <button type="button" class="print-seg-btn" data-print-nup="2">2</button>
-                  <button type="button" class="print-seg-btn" data-print-nup="4">4</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Color Mode -->
-            <div class="print-row">
-              <label class="print-row-label" for="print-color-select">${tr('Color mode', 'حالت رنگ')}</label>
-              <div class="print-row-control">
-                <select id="print-color-select" class="field">
-                  <option value="color" selected>${tr('Color (Light Paper)', 'رنگی (کاغذ روشن)')}</option>
-                  <option value="grayscale">${tr('Black & White (Grayscale)', 'سیاه‌وسفید (Grayscale)')}</option>
-                  <option value="dark">${tr('Dark Theme (Night Mode)', 'تم تاریک (حالت شب)')}</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Quality -->
-            <div class="print-row">
-              <label class="print-row-label" for="print-dpi">${tr('Quality', 'کیفیت چاپ')}</label>
-              <div class="print-row-control">
-                <select id="print-dpi" class="field">
-                  <option value="150" selected>${tr('150 DPI — Standard', '۱۵۰ DPI — استاندارد')}</option>
-                  <option value="300">${tr('300 DPI — High Resolution', '۳۰۰ DPI — وضوح بالا')}</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Include Annotations & Forms -->
-            <div class="print-row print-row-options">
-              <span class="print-row-label">${tr('Options', 'تنظیمات')}</span>
-              <div class="print-row-control">
-                <label class="saveas-check-row">
-                  <input id="print-include-anns" type="checkbox" checked />
-                  <span>${tr('Annotations & form fields', 'حاشیه‌نویسی‌ها و فرم‌ها')}</span>
-                </label>
-              </div>
-            </div>
-
-            <!-- Honest notice if the host browser/iframe sandbox blocks window.print() -->
-            <div id="print-sandbox-notice" class="print-sandbox-notice" role="alert" hidden>
-              <div class="print-sandbox-notice-msg">
-                ${getIconSvg('alertTriangle', 15)}
-                <span>${tr(
-                  'Your browser or embedded preview frame blocked the system print dialog. Download a print-ready PDF copy below to print directly.',
-                  'مرورگر یا قاب پیش‌نمایش جاسازی‌شده اجازه باز شدن پنجره چاپ سیستم را نداد. برای چاپ می‌توانید نسخه آماده چاپ PDF را دانلود کنید.'
-                )}</span>
-              </div>
-              <button type="button" id="print-fallback-pdf-btn" class="header-btn primary">
-                ${getIconSvg('download', 14)}
-                <span>${tr('Download Print-Ready PDF', 'دانلود نسخه آماده چاپ (PDF)')}</span>
-              </button>
+        <div class="form-dialog-body">
+          <div class="print-sandbox-notice" role="alert">
+            <div class="print-sandbox-notice-msg">
+              ${getIconSvg('alertTriangle', 15)}
+              <span>${tr(
+                'Your browser or embedded preview frame blocked the system print dialog. Download the print-ready PDF file directly to print it.',
+                'مرورگر یا قاب پیش‌نمایش اجازه باز شدن پنجره چاپ سیستم را نداد. نسخه آماده چاپ (PDF) را دانلود و چاپ کنید.'
+              )}</span>
             </div>
           </div>
-
-          <div class="print-inspector-footer">
-            <button type="button" id="print-cancel" class="header-btn">${tr('Cancel', 'انصراف')}</button>
-            <button type="button" id="print-submit" class="header-btn primary">
-              ${getIconSvg('printer', 14)}
-              <span id="print-submit-label">${tr('Print…', 'چاپ…')}</span>
+          <div class="form-actions">
+            <button type="button" id="print-fallback-cancel" class="header-btn">${tr('Cancel', 'بستن')}</button>
+            <button type="button" id="print-fallback-pdf-btn" class="header-btn primary">
+              ${getIconSvg('download', 14)}
+              <span id="print-fallback-btn-label">${tr('Preparing PDF…', 'در حال آماده‌سازی PDF…')}</span>
             </button>
           </div>
         </div>
@@ -599,236 +453,165 @@ export function openPrintDialog(): void {
     </div>
   `;
 
-  const q = <T extends HTMLElement>(sel: string) => host.querySelector<T>(sel);
-  const sheetsEl = q<HTMLElement>('#print-sheets-list')!;
-  const summaryEl = q<HTMLElement>('#print-sheet-summary')!;
-  const rangeErrEl = q<HTMLElement>('#print-range-error')!;
-  const sandboxNoticeEl = q<HTMLElement>('#print-sandbox-notice');
-  const submitBtn = q<HTMLButtonElement>('#print-submit');
-  const submitLabel = q<HTMLElement>('#print-submit-label');
-  const systemLinkBtn = q<HTMLButtonElement>('#print-system-link');
+  const btn = host.querySelector<HTMLButtonElement>('#print-fallback-pdf-btn');
+  const btnLabel = host.querySelector<HTMLElement>('#print-fallback-btn-label');
+  if (btn) btn.disabled = true;
 
-  const updatePreview = async () => {
-    clearPendingFallback();
-    const gen = ++renderGeneration;
-    const indices = resolvePageIndices();
-    const sheets = groupPagesIntoSheets(indices, pagesPerSheet);
-
-    if (rangeMode === 'custom' && indices.length === 0) {
-      rangeErrEl.hidden = false;
-      rangeErrEl.textContent = tr('Enter valid pages (e.g. 1-3, 5)', 'بازه معتبر وارد کنید (مثلاً 1-3, 5)');
-    } else {
-      rangeErrEl.hidden = true;
-      rangeErrEl.textContent = '';
-    }
-
-    summaryEl.textContent = sheets.length === 0
-      ? tr('0 sheets', '۰ برگ')
-      : sheets.length === 1
-        ? tr('1 sheet of paper', '۱ برگ کاغذ')
-        : tr(`${sheets.length} sheets of paper`, `${sheets.length} برگ کاغذ`);
-
-    if (sheets.length === 0) {
-      sheetsEl.innerHTML = `<div class="print-preview-empty">${tr('No pages selected in range.', 'صفحه‌ای در این بازه وجود ندارد.')}</div>`;
-      return;
-    }
-
-    // Build crisp paper sheet DOM placeholders immediately (zero jank)
-    sheetsEl.innerHTML = sheets
-      .map((sheetPages, sIdx) => {
-        const slots = sheetPages
-          .map(
-            (pIdx) => `
-            <div class="print-sheet-slot" data-preview-page="${pIdx}">
-              <div class="print-slot-loading"></div>
-            </div>
-          `
-          )
-          .join('');
-        return `
-          <div class="print-sheet-wrapper">
-            <div class="print-paper-sheet is-nup-${pagesPerSheet} ${colorMode === 'dark' ? 'is-dark-paper' : ''}">
-              ${slots}
-            </div>
-            <div class="print-sheet-caption tabular-nums">${tr(`Sheet ${sIdx + 1} · Pages ${sheetPages.map(p => p + 1).join(', ')}`, `برگ ${sIdx + 1} · صفحات ${sheetPages.map(p => p + 1).join('، ')}`)}</div>
-          </div>
-        `;
-      })
-      .join('');
-
-    // Render preview page thumbnails incrementally across frames so UI never freezes
-    const previewScale = pagesPerSheet === 4 ? 0.55 : pagesPerSheet === 2 ? 0.72 : 0.95;
-    for (const pIdx of indices) {
-      if (closed || gen !== renderGeneration) return;
-      const cacheKey = `${pIdx}|${includeAnnotations}|${colorMode}|${pagesPerSheet}`;
-      let url = thumbCache.get(cacheKey);
-      if (!url) {
-        await nextAnimationFrame();
-        if (closed || gen !== renderGeneration) return;
-        const pageCanvas = await renderSinglePrintPageCanvas(pIdx, previewScale, includeAnnotations, colorMode);
-        if (closed || gen !== renderGeneration) {
-          pageCanvas.width = 0;
-          pageCanvas.height = 0;
-          return;
-        }
-        url = await canvasToPreviewUrl(pageCanvas);
-        pageCanvas.width = 0;
-        pageCanvas.height = 0;
-        if (closed || gen !== renderGeneration) {
-          if (url.startsWith('blob:')) URL.revokeObjectURL(url);
-          return;
-        }
-        thumbCache.set(cacheKey, url);
-      }
-
-      const slot = sheetsEl.querySelector<HTMLElement>(`.print-sheet-slot[data-preview-page="${pIdx}"]`);
-      if (slot) {
-        const img = document.createElement('img');
-        img.src = url;
-        img.alt = `Page ${pIdx + 1} print preview`;
-        img.decoding = 'async';
-        slot.innerHTML = '';
-        slot.appendChild(img);
-      }
-    }
-  };
-
-  q('#print-close')?.addEventListener('click', close);
-  q('#print-cancel')?.addEventListener('click', close);
-  q('#print-overlay')?.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).id === 'print-overlay' && !busy) close();
-  });
-
-  const pagesSelect = q<HTMLSelectElement>('#print-pages-select');
-  const customInput = q<HTMLInputElement>('#print-custom-input');
-  let customDebounce: number | null = null;
-
-  pagesSelect?.addEventListener('change', () => {
-    rangeMode = (pagesSelect.value as typeof rangeMode) || 'all';
-    if (customInput) {
-      customInput.hidden = rangeMode !== 'custom';
-      if (rangeMode === 'custom') {
-        requestAnimationFrame(() => {
-          customInput.focus();
-          customInput.select();
-        });
-      }
-    }
-    void updatePreview();
-  });
-
-  customInput?.addEventListener('input', () => {
-    customRangeRaw = customInput.value;
-    if (customDebounce !== null) window.clearTimeout(customDebounce);
-    customDebounce = window.setTimeout(() => {
-      customDebounce = null;
-      void updatePreview();
-    }, 180);
-  });
-
-  host.querySelectorAll<HTMLButtonElement>('[data-print-nup]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const n = Number(btn.getAttribute('data-print-nup') || 1) as PrintPagesPerSheet;
-      pagesPerSheet = n === 2 || n === 4 ? n : 1;
-      host.querySelectorAll('[data-print-nup]').forEach(el => {
-        el.classList.toggle('active', el === btn);
-      });
-      void updatePreview();
+  void buildPrintablePdfBytesFromSheets(sheets)
+    .then((bytes) => {
+      if (closed) return;
+      prebuiltBytes = bytes;
+      if (btn) btn.disabled = !bytes;
+      if (btnLabel) btnLabel.textContent = tr('Download Print-Ready PDF', 'دانلود نسخه آماده چاپ (PDF)');
+    })
+    .catch(() => {
+      if (closed) return;
+      if (btn) btn.disabled = false;
+      if (btnLabel) btnLabel.textContent = tr('Download Print-Ready PDF', 'دانلود نسخه آماده چاپ (PDF)');
     });
+
+  host.querySelector('#print-fallback-close')?.addEventListener('click', cleanup);
+  host.querySelector('#print-fallback-cancel')?.addEventListener('click', cleanup);
+  host.querySelector('#print-fallback-overlay')?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).id === 'print-fallback-overlay') cleanup();
   });
 
-  q<HTMLSelectElement>('#print-color-select')?.addEventListener('change', (e) => {
-    const val = (e.target as HTMLSelectElement).value as PrintColorMode;
-    colorMode = val === 'grayscale' || val === 'dark' ? val : 'color';
-    void updatePreview();
-  });
-
-  q<HTMLSelectElement>('#print-dpi')?.addEventListener('change', (e) => {
-    clearPendingFallback();
-    dpi = Number((e.target as HTMLSelectElement).value) === 300 ? 300 : 150;
-  });
-
-  q<HTMLInputElement>('#print-include-anns')?.addEventListener('change', (e) => {
-    includeAnnotations = (e.target as HTMLInputElement).checked;
-    void updatePreview();
-  });
-
-  q('#print-fallback-pdf-btn')?.addEventListener('click', async () => {
-    if (!pendingFallbackSheets || pendingFallbackSheets.length === 0) return;
-    const btn = q<HTMLButtonElement>('#print-fallback-pdf-btn');
-    if (btn) btn.disabled = true;
+  btn?.addEventListener('click', async () => {
     try {
-      await downloadPrintablePdfFromSheets(pendingFallbackSheets, doc.name);
+      if (prebuiltBytes && prebuiltBytes.length > 0) {
+        const baseName = (docName || 'Document').replace(/\.pdf$/i, '');
+        triggerBlobDownload(prebuiltBytes, `${baseName}-printable.pdf`);
+      } else {
+        await downloadPrintablePdfFromSheets(sheets, docName);
+      }
       showToast(tr('Print-ready PDF saved', 'نسخه آماده چاپ (PDF) ذخیره شد'), 'success');
-      close();
+      cleanup();
     } catch (err: any) {
       showToast(tr(`Export failed: ${err?.message || err}`, `خطا در خروجی: ${err?.message || err}`), 'error');
-    } finally {
-      if (btn) btn.disabled = false;
     }
   });
+}
 
-  const setPrintBusy = (state: boolean) => {
-    busy = state;
-    if (submitBtn) submitBtn.disabled = state;
-    if (systemLinkBtn) systemLinkBtn.disabled = state;
-    if (submitLabel) {
-      submitLabel.textContent = state
-        ? tr('Preparing…', 'در حال آماده‌سازی…')
-        : tr('Print…', 'چاپ…');
+async function runDirectBrowserPrint(docName: string, pageCount: number, colorMode: PrintColorMode): Promise<void> {
+  if (printInFlight) return;
+  printInFlight = true;
+  showToast(tr('Preparing print sheets…', 'در حال آماده‌سازی صفحات برای چاپ…'), 'progress');
+  try {
+    const pageIndices = Array.from({ length: pageCount }, (_, i) => i);
+    const result = await executeDocumentPrint({
+      pageIndices,
+      includeAnnotations: true,
+      dpi: 150,
+      colorMode,
+      pagesPerSheet: 1
+    });
+    if (result.opened) {
+      showToast(tr('Print dialog ready', 'پنجره چاپ آماده شد'), 'success');
+    } else if (result.blockedBySandbox) {
+      showPrintFallbackModal(docName, result.sheets, result.releaseSheets);
     }
+  } catch (err: any) {
+    showToast(tr(`Print failed: ${err?.message || err}`, `خطا در چاپ: ${err?.message || err}`), 'error');
+  } finally {
+    printInFlight = false;
+  }
+}
+
+/**
+ * Triggers printing:
+ * - In Light Mode: opens the browser's built-in system print dialog immediately.
+ * - In Dark Mode: briefly asks the user whether to print on Light Paper or Dark Mode,
+ *   then immediately opens the browser's built-in system print dialog.
+ */
+export function openPrintDialog(): void {
+  const doc = store.activeDocument;
+  if (!doc) {
+    showToast(tr('Open a PDF document before printing', 'ابتدا یک سند PDF باز کنید'), 'error');
+    return;
+  }
+  if (printInFlight) return;
+
+  const isDarkPdf = Boolean(
+    store.appSettings.invertDocumentOled ||
+    document.body.classList.contains('invert-pdf-document')
+  );
+
+  if (!isDarkPdf) {
+    void runDirectBrowserPrint(doc.name, doc.pageCount, 'color');
+    return;
+  }
+
+  // Dark Mode active: ask user cleanly whether to print in Light Paper or Dark Mode before invoking browser print dialog.
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  let closed = false;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    window.removeEventListener('keydown', onKey, true);
+    host.remove();
   };
 
-  const triggerPrintRun = async () => {
-    if (busy || closed) return;
-    const pageIndices = resolvePageIndices();
-    if (pageIndices.length === 0) {
-      showToast(tr('Please enter a valid page range (e.g. 1-3, 5)', 'لطفاً یک بازه صفحه معتبر وارد کنید (مثلاً 1-3, 5)'), 'error');
-      customInput?.focus();
-      return;
-    }
-
-    clearPendingFallback();
-    setPrintBusy(true);
-    try {
-      const result = await executeDocumentPrint({
-        pageIndices,
-        includeAnnotations,
-        dpi,
-        colorMode,
-        pagesPerSheet
-      });
-
-      if (result.opened) {
-        showToast(tr('Print dialog ready', 'پنجره چاپ آماده شد'), 'success');
-        close();
-      } else if (result.blockedBySandbox) {
-        pendingFallbackSheets = result.sheets;
-        pendingFallbackRelease = result.releaseSheets;
-        if (sandboxNoticeEl) sandboxNoticeEl.hidden = false;
-        showToast(
-          tr(
-            'System print dialog is blocked in this embedded preview frame. Use Download Print-Ready PDF instead.',
-            'پنجره چاپ سیستم در این قاب پیش‌نمایش مسدود است؛ از دکمه دانلود PDF آماده چاپ استفاده کنید.'
-          ),
-          'info'
-        );
-      }
-    } catch (err: any) {
-      showToast(tr(`Print failed: ${err?.message || err}`, `خطا در چاپ: ${err?.message || err}`), 'error');
-    } finally {
-      if (!closed) setPrintBusy(false);
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
     }
   };
+  window.addEventListener('keydown', onKey, true);
 
-  submitBtn?.addEventListener('click', () => {
-    void triggerPrintRun();
-  });
-  systemLinkBtn?.addEventListener('click', () => {
-    void triggerPrintRun();
+  host.innerHTML = `
+    <div class="modal-overlay" id="print-theme-overlay">
+      <div class="modal-dialog form-dialog print-theme-dialog" role="dialog" aria-modal="true" aria-label="${tr('Print Paper Appearance', 'نحوه چاپ در حالت تاریک')}">
+        <div class="panel-header">
+          <span>${getIconSvg('printer', 15)} ${tr('Print in Dark Mode', 'نحوه چاپ صفحات')}</span>
+          <button type="button" id="print-theme-close" class="icon-btn" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">${getIconSvg('close', 14)}</button>
+        </div>
+        <div class="form-dialog-body print-theme-body">
+          <p class="print-theme-desc">${tr(
+            'Dark viewing mode is active. Choose how your printed pages should look before opening the system print dialog:',
+            'نمای تاریک فعال است. پیش از باز شدن پنجره چاپ سیستم، حالت کاغذ را انتخاب کنید:'
+          )}</p>
+          <div class="print-theme-choices">
+            <button type="button" id="print-choice-light" class="print-theme-card is-recommended">
+              <span class="print-theme-swatch is-light" aria-hidden="true">Aa</span>
+              <span class="print-theme-info">
+                <span class="print-theme-title">${tr('Light Paper (Recommended)', 'کاغذ روشن (پیشنهادی)')}</span>
+                <span class="print-theme-sub">${tr('Crisp white background · saves printer ink', 'پس‌زمینه سفید اصلی · صرفه‌جویی در جوهر')}</span>
+              </span>
+            </button>
+            <button type="button" id="print-choice-dark" class="print-theme-card">
+              <span class="print-theme-swatch is-dark" aria-hidden="true">Aa</span>
+              <span class="print-theme-info">
+                <span class="print-theme-title">${tr('Dark Mode (As Displayed)', 'تم تاریک (مشابه صفحه)')}</span>
+                <span class="print-theme-sub">${tr('Dark background · keeps current night look', 'پس‌زمینه تیره مطابق نمای فعلی برنامه')}</span>
+              </span>
+            </button>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="print-theme-cancel" class="header-btn">${tr('Cancel', 'انصراف')}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  host.querySelector('#print-theme-close')?.addEventListener('click', cleanup);
+  host.querySelector('#print-theme-cancel')?.addEventListener('click', cleanup);
+  host.querySelector('#print-theme-overlay')?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).id === 'print-theme-overlay') cleanup();
   });
 
-  // Kick off live preview rendering asynchronously without blocking modal open
-  void updatePreview();
+  host.querySelector('#print-choice-light')?.addEventListener('click', () => {
+    cleanup();
+    void runDirectBrowserPrint(doc.name, doc.pageCount, 'color');
+  });
+
+  host.querySelector('#print-choice-dark')?.addEventListener('click', () => {
+    cleanup();
+    void runDirectBrowserPrint(doc.name, doc.pageCount, 'dark');
+  });
 }
 

@@ -293,8 +293,16 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
         try {
           if (opts.format === 'xfdf') {
             const xml = dataExporter.exportToXFDF();
-            dataExporter.downloadTextFile(xml, opts.filename, 'application/vnd.adobe.xfdf');
-            showToast(tr(`Exported XFDF as ${opts.filename}`, `فایل XFDF با نام ${opts.filename} ذخیره شد`), 'success');
+            if (opts.password) {
+              const xfdfBytes = new TextEncoder().encode(xml);
+              const baseName = opts.filename.replace(/\.xfdf$/i, '') || 'annotations';
+              const zipBlob = buildZipBlob([{ name: opts.filename, data: xfdfBytes }], opts.password);
+              imageExporter.downloadImage(zipBlob, `${baseName}-xfdf.zip`);
+              showToast(tr(`Exported password-protected XFDF ZIP`, `فایل XFDF رمزگذاری‌شده در ZIP ذخیره شد`), 'success');
+            } else {
+              dataExporter.downloadTextFile(xml, opts.filename, 'application/vnd.adobe.xfdf');
+              showToast(tr(`Exported XFDF as ${opts.filename}`, `فایل XFDF با نام ${opts.filename} ذخیره شد`), 'success');
+            }
             resolve(true);
             return;
           }
@@ -325,7 +333,7 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
             const ext = opts.format === 'png' ? 'png' : 'jpg';
             const darkMode = opts.darkMode === true;
 
-            if (targetPages.length === 1) {
+            if (targetPages.length === 1 && !opts.password) {
               const blob = await imageExporter.exportPageToImage(targetPages[0], {
                 format: opts.format,
                 dpi: opts.dpi,
@@ -347,19 +355,24 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
                 });
                 const buf = new Uint8Array(await blob.arrayBuffer());
                 const pageLabel = String(pageIdx + 1).padStart(padDigits, '0');
-                zipEntries.push({
-                  name: `${baseName}-page-${pageLabel}.${ext}`,
-                  data: buf
-                });
+                const entryName = targetPages.length === 1
+                  ? `${baseName}.${ext}`
+                  : `${baseName}-page-${pageLabel}.${ext}`;
+                zipEntries.push({ name: entryName, data: buf });
               }
-              const zipBlob = buildZipBlob(zipEntries);
-              imageExporter.downloadImage(zipBlob, `${baseName}-${ext}-pages.zip`);
+              const zipBlob = buildZipBlob(zipEntries, opts.password);
+              const zipName = targetPages.length === 1
+                ? `${baseName}-${ext}.zip`
+                : `${baseName}-${ext}-pages.zip`;
+              imageExporter.downloadImage(zipBlob, zipName);
             }
 
             showToast(
-              targetPages.length > 1
-                ? tr(`Bundled ${targetPages.length} pages into ZIP (${opts.format.toUpperCase()})`, `${targetPages.length} صفحه با فرمت ${opts.format.toUpperCase()} در یک فایل ZIP ذخیره شد`)
-                : tr(`Exported ${targetPages.length} page as ${opts.format.toUpperCase()}`, `${targetPages.length} صفحه با فرمت ${opts.format.toUpperCase()} ذخیره شد`),
+              opts.password
+                ? tr(`Exported password-protected ZIP (${opts.format.toUpperCase()})`, `فایل ZIP رمزگذاری‌شده (${opts.format.toUpperCase()}) ذخیره شد`)
+                : targetPages.length > 1
+                  ? tr(`Bundled ${targetPages.length} pages into ZIP (${opts.format.toUpperCase()})`, `${targetPages.length} صفحه با فرمت ${opts.format.toUpperCase()} در یک فایل ZIP ذخیره شد`)
+                  : tr(`Exported ${targetPages.length} page as ${opts.format.toUpperCase()}`, `${targetPages.length} صفحه با فرمت ${opts.format.toUpperCase()} ذخیره شد`),
               'success'
             );
             resolve(true);

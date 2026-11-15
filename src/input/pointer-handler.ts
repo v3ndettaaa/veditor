@@ -19,7 +19,7 @@ import { highlighterTool } from '../annotations/tools/highlighter';
 import { eraserTool } from '../annotations/tools/eraser';
 import { shapesTool } from '../annotations/tools/shapes';
 import { textTool } from '../annotations/tools/text';
-import { stickyNoteTool } from '../annotations/tools/sticky-note';
+import { stickyNoteTool, getStickyNoteLayoutMetrics, computeViewportStickyNoteBox } from '../annotations/tools/sticky-note';
 import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
 import { pdfEngine } from '../core/pdf-engine';
@@ -34,6 +34,8 @@ import {
   normalizeDragBox,
   cloneAnnotation,
   transformAnnotation,
+  computeSelectionBoxTransform,
+  computeVertexResizeTransform,
   rotatePoint,
   boxCenter,
   BoxTransform,
@@ -1504,17 +1506,26 @@ export class PointerHandler {
               const handle = drag.handle;
               doc.annotations[pageIndex] = doc.annotations[pageIndex].map(a => {
                 const orig = drag.originals.get(a.id);
-                return orig && (orig.type === 'line' || orig.type === 'arrow')
-                  ? moveAnnotationEndpoint(orig, handle, lastPt)
-                  : a;
+                if (!orig || (orig.type !== 'line' && orig.type !== 'arrow')) return a;
+                if (shiftKey) {
+                  const ptIdx = handle === 'start' ? 0 : Math.max(0, (orig.points?.length || 1) - 1);
+                  const vt = computeVertexResizeTransform(orig, ptIdx, lastPt);
+                  if (vt) return transformAnnotation(orig, vt);
+                }
+                return moveAnnotationEndpoint(orig, handle, lastPt);
               });
               doc.lastModifiedAt = Date.now();
             } else if (typeof drag.handle === 'string' && drag.handle.startsWith('vertex:')) {
               const vertexIdx = parseInt(drag.handle.slice(7), 10);
-              const keepRect = shiftKey ? !this._rectCornerLockMode : this._rectCornerLockMode;
+              const keepRect = this._rectCornerLockMode;
               doc.annotations[pageIndex] = doc.annotations[pageIndex].map(a => {
                 const orig = drag.originals.get(a.id);
-                return orig ? moveAnnotationVertex(orig, vertexIdx, lastPt, keepRect) : a;
+                if (!orig) return a;
+                if (shiftKey) {
+                  const vt = computeVertexResizeTransform(orig, vertexIdx, lastPt);
+                  if (vt) return transformAnnotation(orig, vt);
+                }
+                return moveAnnotationVertex(orig, vertexIdx, lastPt, keepRect);
               });
               doc.lastModifiedAt = Date.now();
             } else if (drag.mode === 'rotate') {
@@ -1636,8 +1647,8 @@ export class PointerHandler {
             const previewBox: BoundingBox = {
               x: rawBox.x,
               y: rawBox.y,
-              width: Math.max(180, rawBox.width),
-              height: Math.max(150, rawBox.height)
+              width: Math.max(56, rawBox.width),
+              height: Math.max(46, rawBox.height)
             };
             const ts = store.toolSettings;
             this.withScratchOffset(ctx, activeScratch, () => {
@@ -1944,30 +1955,64 @@ export class PointerHandler {
         const endPt = drag ? drag.current : startPt;
         const dist = distance(startPt, endPt);
         const ts = store.toolSettings;
-        let customBox: BoundingBox | undefined;
+        const zoom = Math.max(store.zoom || 1, 0.15);
+        const pageBounds = this.getPageBounds(pageIndex, scratchCanvas);
+
+        let customBox: BoundingBox;
+        let uiScale = 1.0;
+
         if (dist > 14) {
           const raw = normalizeDragBox(startPt, endPt);
           customBox = {
             x: raw.x,
             y: raw.y,
-            width: Math.max(180, raw.width),
-            height: Math.max(150, raw.height)
+            width: Math.max(56, raw.width),
+            height: Math.max(46, raw.height)
           };
+          uiScale = getStickyNoteLayoutMetrics(customBox).uiScale;
+        } else {
+          // Compute the page's visible rect inside the viewport scroll container
+          // so zoomed-in clicks spawn a card sized and positioned inside the visible area.
+          let visRect: { left: number; top: number; right: number; bottom: number } | null = null;
+          const containerEl = scratchCanvas.parentElement;
+          const scrollEl = document.getElementById('document-scroll-container') || document.querySelector<HTMLElement>('.document-scroll-area');
+          if (containerEl && scrollEl) {
+            const scRect = scrollEl.getBoundingClientRect();
+            const pgRect = containerEl.getBoundingClientRect();
+            if (scRect.width > 0 && scRect.height > 0 && pgRect.width > 0 && pgRect.height > 0) {
+              visRect = {
+                left: Math.max(0, scRect.left - pgRect.left) / zoom,
+                top: Math.max(0, scRect.top - pgRect.top) / zoom,
+                right: Math.min(pgRect.width, scRect.right - pgRect.left) / zoom,
+                bottom: Math.min(pgRect.height, scRect.bottom - pgRect.top) / zoom
+              };
+            }
+          }
+          const placed = computeViewportStickyNoteBox(
+            pageBounds.width,
+            pageBounds.height,
+            zoom,
+            visRect,
+            startPt
+          );
+          customBox = placed.box;
+          uiScale = placed.uiScale;
         }
-        const rawNote = stickyNoteTool.createStickyNote(pageIndex, startPt, {
+
+        const baseFontSize = ts.noteFontSize || 18;
+        const scaledFontSize = Math.max(7, Math.round(baseFontSize * uiScale * 10) / 10);
+
+        const noteAnn = stickyNoteTool.createStickyNote(pageIndex, startPt, {
           layerId: defaultLayerId,
           box: customBox,
           color: ts.noteColor || '#ebd09e',
           textColor: ts.noteTextColor || '#3b2f1e',
-          fontSize: ts.noteFontSize || 24,
+          fontSize: scaledFontSize,
           fontFamily: ts.fontFamily || 'Inter',
           textAlign: ts.textAlign || 'left',
-          author: ''
+          author: '',
+          allowCompact: true
         });
-        const pageBounds = this.getPageBounds(pageIndex, scratchCanvas);
-        const noteAnn = (!customBox && (pageBounds.width > 0 || pageBounds.height > 0))
-          ? stickyNoteTool.expandStickyNoteForPage(rawNote, pageBounds.width, pageBounds.height)
-          : rawNote;
         history.execute(new AddAnnotationCommand(pageIndex, noteAnn));
         store.setActiveTool('select');
         this.selectCreatedAnnotation(noteAnn.id);
@@ -2066,74 +2111,14 @@ export class PointerHandler {
     cur: Point,
     shiftKey: boolean = false
   ): BoxTransform {
-    const m = drag.merged;
-    if (drag.mode === 'move') {
-      return {
-        dx: cur.x - drag.startPt.x,
-        dy: cur.y - drag.startPt.y,
-        scaleX: 1,
-        scaleY: 1,
-        originX: m.x,
-        originY: m.y
-      };
-    }
-
-    const dx = cur.x - drag.startPt.x;
-    const dy = cur.y - drag.startPt.y;
-    let x1 = m.x;
-    let y1 = m.y;
-    let x2 = m.x + m.width;
-    let y2 = m.y + m.height;
-    const h = drag.handle;
-
-    // Corner resizing scales freely by default; holding Shift locks aspect ratio proportionally across all annotation types.
-    const isCorner = h === 'nw' || h === 'ne' || h === 'se' || h === 'sw';
-    const lockAspect = isCorner && shiftKey;
-
-    if (lockAspect && m.width > 0.5 && m.height > 0.5) {
-      const nx = h.includes('w') ? -dx / m.width : dx / m.width;
-      const ny = h.includes('n') ? -dy / m.height : dy / m.height;
-      const u = Math.abs(nx) >= Math.abs(ny) ? nx : ny;
-      const minScale = Math.max(8 / m.width, 8 / m.height);
-      const uniformScale = Math.max(minScale, 1 + u);
-      const nextW = m.width * uniformScale;
-      const nextH = m.height * uniformScale;
-
-      if (h === 'se') {
-        x2 = m.x + nextW;
-        y2 = m.y + nextH;
-      } else if (h === 'nw') {
-        x1 = (m.x + m.width) - nextW;
-        y1 = (m.y + m.height) - nextH;
-      } else if (h === 'ne') {
-        x2 = m.x + nextW;
-        y1 = (m.y + m.height) - nextH;
-      } else if (h === 'sw') {
-        x1 = (m.x + m.width) - nextW;
-        y2 = m.y + nextH;
-      }
-    } else {
-      if (h.includes('e')) x2 += dx;
-      if (h.includes('s')) y2 += dy;
-      if (h.includes('w')) x1 += dx;
-      if (h.includes('n')) y1 += dy;
-    }
-
-    // Enforce minimum size by clamping the dragged edge.
-    if (x2 - x1 < 8) {
-      if (h.includes('w')) x1 = x2 - 8; else x2 = x1 + 8;
-    }
-    if (y2 - y1 < 8) {
-      if (h.includes('n')) y1 = y2 - 8; else y2 = y1 + 8;
-    }
-    return {
-      dx: x1 - m.x,
-      dy: y1 - m.y,
-      scaleX: m.width > 0.5 ? (x2 - x1) / m.width : 1,
-      scaleY: m.height > 0.5 ? (y2 - y1) / m.height : 1,
-      originX: m.x,
-      originY: m.y
-    };
+    return computeSelectionBoxTransform(
+      drag.merged,
+      drag.mode,
+      String(drag.handle),
+      drag.startPt,
+      cur,
+      shiftKey
+    );
   }
 
   /**
@@ -2253,16 +2238,11 @@ export class PointerHandler {
     ctx.scale(magnification, magnification);
     ctx.translate(-targetPt.x, -targetPt.y);
 
-    // 3a. Composite underlying PDF page canvas (respecting dark mode inversion if active)
+    // 3a. Composite underlying PDF page canvas (already holds pre-baked dark mode tones when active)
     const container = scratchCanvas.parentElement;
     const pdfCanvas = container?.querySelector<HTMLCanvasElement>('.pdf-page-canvas:not(.pdf-chunk-canvas)');
     if (pdfCanvas && pdfCanvas.width > 1 && pdfCanvas.height > 1 && pageBounds.width > 0 && pageBounds.height > 0) {
-      ctx.save();
-      if (isDarkPdf) {
-        ctx.filter = 'invert(0.9) hue-rotate(180deg)';
-      }
       ctx.drawImage(pdfCanvas, 0, 0, pageBounds.width, pageBounds.height);
-      ctx.restore();
     }
 
     // 3b. Render background paper grid/lines (if enabled) and vector-crisp annotations at 2.5x
@@ -2797,15 +2777,16 @@ export class PointerHandler {
     if (ann.collapsed) return;
     const zoom = store.zoom;
     const cRect = canvas.getBoundingClientRect();
-    const padX = 16;
-    const headerH = 36;
-    const footerH = 14;
+    const metrics = getStickyNoteLayoutMetrics(ann.box);
+    const padX = metrics.padX;
+    const headerH = metrics.headerHeight;
+    const footerH = metrics.footerReserve;
 
     const screenRect = {
       left: cRect.left + (ann.box.x + padX) * zoom,
       top: cRect.top + (ann.box.y + headerH) * zoom,
-      width: Math.max(90, (ann.box.width - padX * 2) * zoom),
-      height: Math.max(48, (ann.box.height - headerH - footerH) * zoom)
+      width: Math.max(40, (ann.box.width - padX * 2) * zoom),
+      height: Math.max(24, (ann.box.height - headerH - footerH) * zoom)
     };
 
     annotationEngine.setEditingAnnotationId(ann.id);
@@ -2814,12 +2795,12 @@ export class PointerHandler {
     openInlineEditor({
       rect: screenRect,
       value: ann.text || '',
-      fontSize: (ann.fontSize || 24) * zoom,
+      fontSize: Math.max(5, (ann.fontSize || 15)) * zoom,
       fontFamily: ann.fontFamily || 'Inter',
       color: ann.textColor || '#3b2f1e',
       backgroundColor: 'transparent',
       textAlign: ann.textAlign || 'left',
-      padding: 4 * zoom,
+      padding: Math.max(2, 4 * metrics.uiScale) * zoom,
       placeholder: '',
       selectAllOnOpen: false,
       multilineEnter: true,

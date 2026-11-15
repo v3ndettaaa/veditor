@@ -13,6 +13,7 @@ import { t, tr } from '../i18n';
 import { Annotation } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
 import { stickyNoteTool } from '../../annotations/tools/sticky-note';
+import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
 
 /** Validates free-typed hex colors (`#rrggbb`, `#rgb`, with/without `#`). */
 function parseHexInput(raw: string): string | null {
@@ -74,7 +75,8 @@ export class PropertiesPanelComponent {
     const activeEl = document.activeElement as HTMLElement | null;
     const userIsEditing = !!activeEl && this._container.contains(activeEl) &&
       ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeEl.tagName);
-    if (userIsEditing && selectedKey === this._lastSelectedKey &&
+    const draggingSlider = isSliderDragging() || Boolean(this._container.querySelector('input[data-dragging="1"]'));
+    if ((userIsEditing || draggingSlider) && selectedKey === this._lastSelectedKey &&
         this._container.querySelector('#prop-width-val, #prop-color-picker')) {
       return;
     }
@@ -310,6 +312,8 @@ export class PropertiesPanelComponent {
         </div>
       </div>
     `;
+
+    enhanceRangeSliders(this._container);
 
     this._container.querySelector('#close-props-btn')?.addEventListener('click', () => {
       store.clearSelection();

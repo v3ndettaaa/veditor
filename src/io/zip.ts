@@ -1,6 +1,7 @@
 /**
- * Lightweight pure-TypeScript ZIP archive builder (STORE / method 0 with IEEE 802.3 CRC-32).
- * Used to bundle multi-page PNG/JPEG exports into a single downloadable `.zip` file.
+ * Lightweight pure-TypeScript ZIP archive builder (STORE / method 0 with IEEE 802.3 CRC-32)
+ * with optional PKWARE Traditional ZipCrypto password encryption (flag 0x0001).
+ * Used to bundle single or multi-page PNG/JPEG/XFDF exports into downloadable `.zip` files.
  */
 
 export interface ZipEntryInput {
@@ -29,6 +30,104 @@ export function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+function crc32Step(crc: number, byte: number): number {
+  return (CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)) >>> 0;
+}
+
+class ZipCryptoCipher {
+  private k0 = 0x12345678;
+  private k1 = 0x23456789;
+  private k2 = 0x34567890;
+
+  constructor(passwordBytes: Uint8Array) {
+    for (let i = 0; i < passwordBytes.length; i++) {
+      this.updateKeys(passwordBytes[i]);
+    }
+  }
+
+  private updateKeys(byte: number): void {
+    this.k0 = crc32Step(this.k0, byte);
+    this.k1 = (this.k1 + (this.k0 & 0xff)) >>> 0;
+    this.k1 = (Math.imul(this.k1, 134775813) + 1) >>> 0;
+    this.k2 = crc32Step(this.k2, (this.k1 >>> 24) & 0xff);
+  }
+
+  private keystreamByte(): number {
+    const temp = (this.k2 & 0xffff) | 2;
+    return (((temp * (temp ^ 1)) >>> 8) & 0xff);
+  }
+
+  public encryptByte(plainByte: number): number {
+    const out = plainByte ^ this.keystreamByte();
+    this.updateKeys(plainByte);
+    return out;
+  }
+
+  public decryptByte(cipherByte: number): number {
+    const plain = cipherByte ^ this.keystreamByte();
+    this.updateKeys(plain);
+    return plain;
+  }
+}
+
+function fillRandomBytes(target: Uint8Array): void {
+  const gCrypto = typeof globalThis !== 'undefined' ? (globalThis as any).crypto : undefined;
+  if (gCrypto && typeof gCrypto.getRandomValues === 'function') {
+    gCrypto.getRandomValues(target);
+    return;
+  }
+  for (let i = 0; i < target.length; i++) {
+    target[i] = Math.floor(Math.random() * 256) & 0xff;
+  }
+}
+
+/**
+ * Encrypts one ZIP entry payload using PKWARE Traditional ZipCrypto (12-byte verification header + data).
+ */
+export function encryptZipCryptoPayload(data: Uint8Array, crc: number, password: string): Uint8Array {
+  const pwdBytes = new TextEncoder().encode(password);
+  const cipher = new ZipCryptoCipher(pwdBytes);
+  const header = new Uint8Array(12);
+  fillRandomBytes(header.subarray(0, 11));
+  header[11] = (crc >>> 24) & 0xff;
+
+  const out = new Uint8Array(12 + data.length);
+  for (let i = 0; i < 12; i++) {
+    out[i] = cipher.encryptByte(header[i]);
+  }
+  for (let i = 0; i < data.length; i++) {
+    out[12 + i] = cipher.encryptByte(data[i]);
+  }
+  return out;
+}
+
+/**
+ * Decrypts a ZipCrypto-encrypted STORE entry payload and verifies the header check byte + CRC-32.
+ */
+export function decryptZipCryptoEntry(encryptedPayload: Uint8Array, expectedCrc: number, password: string): Uint8Array {
+  if (encryptedPayload.length < 12) {
+    throw new Error('Encrypted ZIP payload too short');
+  }
+  const pwdBytes = new TextEncoder().encode(password);
+  const cipher = new ZipCryptoCipher(pwdBytes);
+  let lastHeaderByte = 0;
+  for (let i = 0; i < 12; i++) {
+    lastHeaderByte = cipher.decryptByte(encryptedPayload[i]);
+  }
+  const expectedCheckByte = (expectedCrc >>> 24) & 0xff;
+  if (lastHeaderByte !== expectedCheckByte) {
+    throw new Error('Invalid ZIP password');
+  }
+  const plain = new Uint8Array(encryptedPayload.length - 12);
+  for (let i = 0; i < plain.length; i++) {
+    plain[i] = cipher.decryptByte(encryptedPayload[12 + i]);
+  }
+  if (crc32(plain) !== (expectedCrc >>> 0)) {
+    throw new Error('ZIP CRC mismatch');
+  }
+  return plain;
+}
+
 function dosDateTime(date: Date): { dosTime: number; dosDate: number } {
   const year = Math.max(1980, date.getFullYear());
   const dosTime =
@@ -52,13 +151,16 @@ function sanitizeZipEntryName(name: string, index: number): string {
 }
 
 /**
- * Builds an uncompressed (STORE) ZIP archive byte buffer with UTF-8 filename flags.
+ * Builds an uncompressed (STORE) ZIP archive byte buffer with UTF-8 filename flags
+ * and optional ZipCrypto password encryption.
  */
-export function buildZipArchive(entries: ZipEntryInput[]): Uint8Array {
+export function buildZipArchive(entries: ZipEntryInput[], password?: string): Uint8Array {
   const encoder = new TextEncoder();
   const now = new Date();
   const localParts: Uint8Array[] = [];
   const centralParts: Uint8Array[] = [];
+  const hasPassword = typeof password === 'string' && password.length > 0;
+  const gpFlags = hasPassword ? (0x0800 | 0x0001) : 0x0800;
   let offset = 0;
   let centralSize = 0;
 
@@ -66,8 +168,9 @@ export function buildZipArchive(entries: ZipEntryInput[]): Uint8Array {
     const entry = entries[i];
     const fileName = sanitizeZipEntryName(entry.name, i);
     const nameBytes = encoder.encode(fileName);
-    const data = entry.data;
-    const crc = crc32(data);
+    const plainData = entry.data;
+    const crc = crc32(plainData);
+    const payload = hasPassword ? encryptZipCryptoPayload(plainData, crc, password!) : plainData;
     const { dosTime, dosDate } = dosDateTime(entry.modifiedAt ?? now);
 
     // Local file header (30 bytes + filename)
@@ -75,18 +178,18 @@ export function buildZipArchive(entries: ZipEntryInput[]): Uint8Array {
     const ldv = new DataView(localHeader.buffer);
     ldv.setUint32(0, 0x04034b50, true); // Local file header signature
     ldv.setUint16(4, 20, true);         // Version needed (2.0)
-    ldv.setUint16(6, 0x0800, true);     // UTF-8 filename flag (bit 11)
+    ldv.setUint16(6, gpFlags, true);    // UTF-8 filename flag (bit 11) + optional ZipCrypto flag (bit 0)
     ldv.setUint16(8, 0, true);          // Compression method: 0 = STORE
     ldv.setUint16(10, dosTime, true);
     ldv.setUint16(12, dosDate, true);
     ldv.setUint32(14, crc, true);
-    ldv.setUint32(18, data.length, true);
-    ldv.setUint32(22, data.length, true);
+    ldv.setUint32(18, payload.length, true);   // Compressed size (includes 12-byte ZipCrypto header when encrypted)
+    ldv.setUint32(22, plainData.length, true); // Uncompressed size
     ldv.setUint16(26, nameBytes.length, true);
     ldv.setUint16(28, 0, true);         // Extra field length
     localHeader.set(nameBytes, 30);
 
-    localParts.push(localHeader, data);
+    localParts.push(localHeader, payload);
 
     // Central directory header (46 bytes + filename)
     const centralHeader = new Uint8Array(46 + nameBytes.length);
@@ -94,13 +197,13 @@ export function buildZipArchive(entries: ZipEntryInput[]): Uint8Array {
     cdv.setUint32(0, 0x02014b50, true); // Central directory signature
     cdv.setUint16(4, 20, true);         // Version made by
     cdv.setUint16(6, 20, true);         // Version needed
-    cdv.setUint16(8, 0x0800, true);     // UTF-8 flag
+    cdv.setUint16(8, gpFlags, true);    // UTF-8 + optional ZipCrypto flag
     cdv.setUint16(10, 0, true);         // Compression method: 0 = STORE
     cdv.setUint16(12, dosTime, true);
     cdv.setUint16(14, dosDate, true);
     cdv.setUint32(16, crc, true);
-    cdv.setUint32(20, data.length, true);
-    cdv.setUint32(24, data.length, true);
+    cdv.setUint32(20, payload.length, true);
+    cdv.setUint32(24, plainData.length, true);
     cdv.setUint16(28, nameBytes.length, true);
     cdv.setUint16(30, 0, true);         // Extra length
     cdv.setUint16(32, 0, true);         // File comment length
@@ -112,7 +215,7 @@ export function buildZipArchive(entries: ZipEntryInput[]): Uint8Array {
 
     centralParts.push(centralHeader);
     centralSize += centralHeader.length;
-    offset += localHeader.length + data.length;
+    offset += localHeader.length + payload.length;
   }
 
   // End of Central Directory (22 bytes)
@@ -142,7 +245,7 @@ export function buildZipArchive(entries: ZipEntryInput[]): Uint8Array {
   return out;
 }
 
-export function buildZipBlob(entries: ZipEntryInput[]): Blob {
-  const bytes = buildZipArchive(entries);
+export function buildZipBlob(entries: ZipEntryInput[], password?: string): Blob {
+  const bytes = buildZipArchive(entries, password);
   return new Blob([bytes as any], { type: 'application/zip' });
 }

@@ -33,6 +33,77 @@ function effectiveDpr(): number {
   }
 }
 
+export const PDF_DARK_MODE_FILTER = 'invert(0.92) hue-rotate(180deg) brightness(0.95) contrast(1.05)';
+
+export function isPdfDarkModeActive(): boolean {
+  try {
+    if (typeof document !== 'undefined' && document.body?.classList.contains('invert-pdf-document')) {
+      return true;
+    }
+    return Boolean(store.appSettings.invertDocumentOled);
+  } catch (_) {
+    return false;
+  }
+}
+
+function applyDarkModeInvertFallback(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  try {
+    const img = ctx.getImageData(0, 0, width, height);
+    const data = img.data;
+    for (let i = 0; i < data.length; i += 4) {
+      // Luminance-preserving invert approximation when Canvas2D ctx.filter is unavailable
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const invR = 255 - r;
+      const invG = 255 - g;
+      const invB = 255 - b;
+      const max = Math.max(invR, invG, invB);
+      const min = Math.min(invR, invG, invB);
+      const mid = max + min;
+      // Hue-rotate 180deg reflects RGB channels across (max+min)/2, plus slight brightness/contrast curve
+      const hr = mid - invR;
+      const hg = mid - invG;
+      const hb = mid - invB;
+      data[i] = Math.max(18, Math.min(242, Math.round(hr * 0.96 + 12)));
+      data[i + 1] = Math.max(18, Math.min(242, Math.round(hg * 0.96 + 12)));
+      data[i + 2] = Math.max(18, Math.min(242, Math.round(hb * 0.96 + 12)));
+    }
+    ctx.putImageData(img, 0, 0);
+  } catch (_) {}
+}
+
+function blitPdfBitmap(
+  source: HTMLCanvasElement,
+  target: HTMLCanvasElement,
+  targetWidth: number,
+  targetHeight: number,
+  darkMode: boolean,
+  highQuality: boolean = false
+): void {
+  if (target.width !== targetWidth || target.height !== targetHeight) {
+    target.width = targetWidth;
+    target.height = targetHeight;
+  }
+  const ctx = target.getContext('2d', { alpha: false });
+  if (!ctx) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = highQuality ? 'medium' : 'low';
+  const hasFilter = typeof (ctx as any).filter === 'string';
+  if (darkMode && hasFilter) {
+    ctx.filter = PDF_DARK_MODE_FILTER;
+  } else if (hasFilter) {
+    ctx.filter = 'none';
+  }
+  ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
+  ctx.restore();
+  if (darkMode && !hasFilter) {
+    applyDarkModeInvertFallback(ctx, targetWidth, targetHeight);
+  }
+  target.dataset.darkMode = darkMode ? '1' : '0';
+}
+
 function resolveAssetUrl(path: string): string {
   try {
     const extUrl = extensionApi.runtime.getURL(path);
@@ -753,16 +824,12 @@ export class PDFEngine {
     const totalRotation = ((rotation || 0) % 360 + 360) % 360;
 
     // Fast path: if we already have an exact cached bitmap for this page/scale/rotation,
-    // blit it synchronously without waiting for any async work.
+    // blit it synchronously (applying Dark Mode tones if active) without async work.
+    const darkMode = isPdfDarkModeActive();
     const exactKey = bitmapKey(pageIndex, scale, totalRotation);
     const exactCached = this._renderedBitmaps.get(exactKey);
     if (exactCached && exactCached.width > 0 && exactCached.height > 0) {
-      if (canvas.width !== exactCached.width || canvas.height !== exactCached.height) {
-        canvas.width = exactCached.width;
-        canvas.height = exactCached.height;
-      }
-      const ctx = canvas.getContext('2d', { alpha: false });
-      ctx?.drawImage(exactCached.canvas, 0, 0);
+      blitPdfBitmap(exactCached.canvas, canvas, exactCached.width, exactCached.height, darkMode, false);
       return;
     }
 
@@ -842,16 +909,7 @@ export class PDFEngine {
     // only the backing store is touched here to avoid ±1px seam drift.
     const cached = this._renderedBitmaps.get(exactKey) ?? this.findAnyBitmap(pageIndex);
     if (cached) {
-      if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-      }
-      const ctx = canvas.getContext('2d', { alpha: false });
-      if (ctx) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'medium';
-        ctx.drawImage(cached.canvas, 0, 0, targetWidth, targetHeight);
-      }
+      blitPdfBitmap(cached.canvas, canvas, targetWidth, targetHeight, isPdfDarkModeActive(), true);
 
       if (cached.scale === scale && cached.rotation === totalRotation && cached.width === targetWidth && cached.height === targetHeight) {
         return;
@@ -947,14 +1005,9 @@ export class PDFEngine {
       });
       storedInCache = true;
 
-      // Atomic blit to visible canvas with zero flicker and zero blank frame.
+      // Atomic blit to visible canvas with zero flicker, zero blank frame, and pre-baked theme.
       // Backing store only — CSS size stays owned by the viewport layout.
-      if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-      }
-      const ctx = canvas.getContext('2d', { alpha: false });
-      ctx?.drawImage(offscreen, 0, 0);
+      blitPdfBitmap(offscreen, canvas, targetWidth, targetHeight, isPdfDarkModeActive(), false);
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {
         console.error(`Error rendering page ${pageIndex}:`, err);
@@ -1035,7 +1088,8 @@ export class PDFEngine {
     const chunkPixelW = Math.max(1, Math.round(rect.width * chunkDpr));
     const chunkPixelH = Math.max(1, Math.round(rect.height * chunkDpr));
 
-    const chunkKey = `${scale.toFixed(4)}|${totalRotation}|${chunkPixelX},${chunkPixelY},${chunkPixelW},${chunkPixelH}`;
+    const darkMode = isPdfDarkModeActive();
+    const chunkKey = `${scale.toFixed(4)}|${totalRotation}|${chunkPixelX},${chunkPixelY},${chunkPixelW},${chunkPixelH}|${darkMode ? 1 : 0}`;
     if (chunkCanvas.dataset.chunkKey === chunkKey && chunkCanvas.style.display !== 'none') {
       return;
     }
@@ -1091,8 +1145,7 @@ export class PDFEngine {
       chunkCanvas.dataset.baseHeight = String(rect.height);
       chunkCanvas.style.display = 'block';
 
-      const ctx = chunkCanvas.getContext('2d', { alpha: false });
-      ctx?.drawImage(offscreen, 0, 0);
+      blitPdfBitmap(offscreen, chunkCanvas, chunkPixelW, chunkPixelH, darkMode, false);
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {
         console.error(`Error rendering chunk for page ${pageIndex}:`, err);
@@ -1106,6 +1159,27 @@ export class PDFEngine {
         this._activeChunkTasks.delete(pageIndex);
       }
     }
+  }
+
+  /**
+   * Synchronously re-blits an already-rendered page canvas from the clean Light Mode bitmap cache
+   * with the requested Dark Mode state (returns true if a cached bitmap was blitted immediately).
+   */
+  public refreshRenderedCanvasTheme(
+    pageIndex: number,
+    canvas: HTMLCanvasElement,
+    darkMode: boolean,
+    scale: number = 1.0,
+    rotation: number = 0
+  ): boolean {
+    const totalRotation = ((rotation || 0) % 360 + 360) % 360;
+    const exactKey = bitmapKey(pageIndex, scale, totalRotation);
+    const cached = this._renderedBitmaps.get(exactKey) ?? this.findAnyBitmap(pageIndex);
+    if (!cached || cached.width <= 0 || cached.height <= 0) return false;
+    const targetW = canvas.width > 1 ? canvas.width : cached.width;
+    const targetH = canvas.height > 1 ? canvas.height : cached.height;
+    blitPdfBitmap(cached.canvas, canvas, targetW, targetH, darkMode, true);
+    return true;
   }
 
   /**

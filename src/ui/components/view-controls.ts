@@ -57,6 +57,7 @@ export class ViewControlsComponent {
     this._invertDocument = typeof store.appSettings.invertDocumentOled === 'boolean'
       ? store.appSettings.invertDocumentOled
       : document.body.classList.contains('invert-pdf-document');
+    document.body.classList.toggle('invert-pdf-document', this._invertDocument);
 
     this._container.style.display = 'flex';
     const zoomPct = Math.round(store.zoom * 100);
@@ -405,6 +406,7 @@ export class ViewControlsComponent {
       store.updateAppSettings({ invertDocumentOled: this._invertDocument });
       const invertBtn = this._container.querySelector<HTMLElement>('#view-invert-doc');
       invertBtn?.classList.toggle('active', this._invertDocument);
+      (window as any).app?.refreshPdfDarkMode?.();
     });
 
     this._container.querySelector('#view-collapse-btn')?.addEventListener('click', (e) => {
