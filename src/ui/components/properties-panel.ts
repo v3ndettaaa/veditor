@@ -14,6 +14,7 @@ import { Annotation } from '../../core/types';
 import { textTool } from '../../annotations/tools/text';
 import { stickyNoteTool } from '../../annotations/tools/sticky-note';
 import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
+import { APP_FONT_OPTIONS, resolveAnnotationFontFamily } from '../../core/fonts';
 
 /** Validates free-typed hex colors (`#rrggbb`, `#rgb`, with/without `#`). */
 function parseHexInput(raw: string): string | null {
@@ -205,6 +206,24 @@ export class PropertiesPanelComponent {
                    aria-label="${t('properties.strokeWidth')}">
           </div>
         </div>
+
+        ${isTextAnn ? `
+          <div class="prop-group">
+            <span class="prop-label">${tr('Font Family', 'فونت متن')}</span>
+            <div class="gn-tile-grid cols-2" role="group" aria-label="${tr('Font family', 'فونت متن')}">
+              ${APP_FONT_OPTIONS.map(opt => {
+                const activeFam = resolveAnnotationFontFamily((firstAnn as any).fontFamily);
+                const isActive = activeFam.toLowerCase() === opt.id.toLowerCase();
+                return `
+                  <button type="button" class="gn-icon-tile is-compact ${isActive ? 'active' : ''}" data-prop-font-fam="${opt.id}">
+                    <span class="gn-font-glyph" style="font-family:${opt.cssFamily};">${opt.glyph}</span>
+                    <span class="gn-tile-label">${tr(opt.labelEn, opt.labelFa)}</span>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
 
         ${hasCornerRadius ? `
           <div class="prop-group">
@@ -515,7 +534,7 @@ export class PropertiesPanelComponent {
           const measured = textTool.measureTextBox(
             a.text || '',
             nf,
-            a.fontFamily || 'Inter',
+            resolveAnnotationFontFamily(a.fontFamily),
             a.padding ?? 8,
             a.fontWeight,
             a.fontStyle
@@ -733,6 +752,49 @@ export class PropertiesPanelComponent {
         store.setActiveTool('select');
       }
       store.setActivePageIndex(store.activePageIndex);
+    });
+
+    // Text / Sticky Note font family tiles
+    this._container.querySelectorAll<HTMLElement>('[data-prop-font-fam]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const nextFam = btn.getAttribute('data-prop-font-fam');
+        if (!nextFam) return;
+        this._container.querySelectorAll<HTMLElement>('[data-prop-font-fam]').forEach(el => {
+          el.classList.toggle('active', el === btn);
+        });
+        executeBatchModify(ann => {
+          if (ann.type === 'sticky-note') {
+            return { ...ann, fontFamily: nextFam, updatedAt: Date.now() };
+          }
+          if (ann.type === 'text') {
+            const measured = textTool.measureTextBox(
+              ann.text || '',
+              ann.fontSize || 16,
+              nextFam,
+              ann.padding ?? 8,
+              ann.fontWeight,
+              ann.fontStyle
+            );
+            return {
+              ...ann,
+              fontFamily: nextFam,
+              box: {
+                x: ann.box.x,
+                y: ann.box.y,
+                width: measured.width,
+                height: measured.height
+              },
+              updatedAt: Date.now()
+            };
+          }
+          if ('fontFamily' in ann) {
+            return { ...ann, fontFamily: nextFam };
+          }
+          return null;
+        });
+        store.updateToolSettings({ fontFamily: nextFam });
+        store.setActivePageIndex(store.activePageIndex);
+      });
     });
 
     this._container.querySelector('#prop-note-clear-ink-btn')?.addEventListener('click', () => {

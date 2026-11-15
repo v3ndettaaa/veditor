@@ -489,7 +489,7 @@ export class MeasureTool {
 
   private drawBadge(ctx: CanvasRenderingContext2D, x: number, y: number, text: string) {
     ctx.save();
-    ctx.font = '600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif';
+    ctx.font = '600 11px "JetBrains Mono", "Manrope", -apple-system, BlinkMacSystemFont, sans-serif';
     const textW = ctx.measureText(text).width;
     const padX = 7;
     const badgeW = textW + padX * 2;

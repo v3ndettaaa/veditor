@@ -4,6 +4,8 @@
  * Ctrl+Z-style Tab-out. Used by the text tool.
  */
 
+import { resolveAnnotationFontCss } from '../../core/fonts';
+
 export interface InlineEditorOptions {
   /** Screen-space rect (CSS px) to cover. */
   rect: { left: number; top: number; width: number; height: number };
@@ -56,7 +58,7 @@ export function openInlineEditor(options: InlineEditorOptions): void {
 
   const { rect, value, onCommit, onCancel } = options;
   const fontSize = Math.max(11, Math.round(options.fontSize ?? 16));
-  const fontFamily = options.fontFamily ?? 'Inter';
+  const fontCss = resolveAnnotationFontCss(options.fontFamily);
   const pad = Math.max(4, Math.round(options.padding ?? 8));
   const textColor = options.color || '#111827';
   const hasBg = !!options.backgroundColor && options.backgroundColor !== 'transparent';
@@ -93,7 +95,7 @@ export function openInlineEditor(options: InlineEditorOptions): void {
     background: editorBg,
     color: textColor,
     textAlign: options.textAlign || 'left',
-    font: `500 ${fontSize}px "${fontFamily}", -apple-system, BlinkMacSystemFont, sans-serif`,
+    font: `500 ${fontSize}px ${fontCss}`,
     lineHeight: '1.35',
     outline: 'none',
     boxShadow: options.seamlessCard

@@ -25,6 +25,7 @@ import {
 import type { PdfSearchMatch, PdfTextSelection } from './pdf-text-layout';
 import { getSystemDpi } from '../utils/dpi';
 import { pruneUnsupportedAnnotations } from '../annotations/migrate';
+import { DEFAULT_APP_FONT } from './fonts';
 
 export interface ToolbarLayoutItem {
   id: ToolType;
@@ -85,7 +86,7 @@ class StateStore {
     textColor: '#111827',
     textBgColor: 'transparent',
     fontSize: 16,
-    fontFamily: 'Inter',
+    fontFamily: DEFAULT_APP_FONT,
     textAlign: 'left',
     measureMode: 'measure-distance',
     measureUnit: 'mm',
@@ -637,7 +638,7 @@ class StateStore {
       textColor: '#111827',
       textBgColor: 'transparent',
       fontSize: 16,
-      fontFamily: 'Inter',
+      fontFamily: DEFAULT_APP_FONT,
       textAlign: 'left',
       measureMode: 'measure-distance',
       measureUnit: 'mm',

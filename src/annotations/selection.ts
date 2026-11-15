@@ -1766,7 +1766,7 @@ export class SelectionManager {
         ? `${Math.round(box.width)} × ${Math.round(box.height)} • ${Math.round((rotation * 180) / Math.PI)}°`
         : `${Math.round(box.width)} × ${Math.round(box.height)}`;
       ctx.save();
-      ctx.font = '10px Inter, -apple-system, sans-serif';
+      ctx.font = '600 10px "JetBrains Mono", "Manrope", -apple-system, sans-serif';
       const tw = ctx.measureText(dimText).width;
       const pw = tw + 12;
       const ph = 18;

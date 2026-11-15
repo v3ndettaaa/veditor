@@ -118,6 +118,8 @@ export class ViewControlsComponent {
             width: ${inputWidth}px;
             height: 24px;
             padding: 0 4px;
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
             font-size: 12px;
             font-weight: 600;
             text-align: center;
@@ -129,8 +131,8 @@ export class ViewControlsComponent {
             transition: all 0.15s ease;
           "
         />
-        <span style="font-size:12px; font-weight:600; color:var(--text-tertiary);">/</span>
-        <span id="view-total-pages" style="font-size:12px; font-weight:600; color:var(--text-secondary); min-width:14px; text-align:center;">${totalPages}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; font-weight:600; color:var(--text-tertiary);">/</span>
+        <span id="view-total-pages" class="tabular-nums" style="font-family:var(--font-mono); font-size:12px; font-weight:600; color:var(--text-secondary); min-width:14px; text-align:center;">${totalPages}</span>
       </div>
 
       <button id="view-next-page" class="view-btn" ${currentPage >= totalPages ? 'disabled style="opacity:0.4;"' : ''} title="${tr('Next Page', 'صفحه بعد')}">

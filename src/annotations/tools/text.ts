@@ -4,6 +4,7 @@
  */
 
 import { Point, TextAnnotation, BoundingBox } from '../../core/types';
+import { DEFAULT_APP_FONT, resolveAnnotationFontCss, resolveAnnotationFontFamily } from '../../core/fonts';
 
 export class TextTool {
   private _measureCtx: CanvasRenderingContext2D | null = null;
@@ -28,7 +29,7 @@ export class TextTool {
   public measureTextBox(
     text: string,
     fontSize: number = 16,
-    fontFamily: string = 'Inter',
+    fontFamily: string = DEFAULT_APP_FONT,
     padding: number = 8,
     fontWeight: string | number = 'normal',
     fontStyle: string = 'normal'
@@ -38,7 +39,7 @@ export class TextTool {
     const lineHeight = fontSize * 1.35;
     const ctx = this.getMeasureContext();
     if (ctx) {
-      ctx.font = `${fontStyle || 'normal'} ${fontWeight || 'normal'} ${fontSize}px "${fontFamily}", sans-serif`;
+      ctx.font = `${fontStyle || 'normal'} ${fontWeight || 'normal'} ${fontSize}px ${resolveAnnotationFontCss(fontFamily)}`;
     }
 
     let maxLineWidth = 0;
@@ -71,13 +72,14 @@ export class TextTool {
     layerId: string,
     initialText: string = 'Double click to edit text',
     fontSize: number = 16,
-    fontFamily: string = 'Inter',
+    fontFamily: string = DEFAULT_APP_FONT,
     color: string = '#111827',
     bgColor: string = 'transparent',
     align: 'left' | 'center' | 'right' = 'left'
   ): TextAnnotation {
+    const resolvedFamily = resolveAnnotationFontFamily(fontFamily);
     const padding = 8;
-    const measured = this.measureTextBox(initialText, fontSize, fontFamily, padding);
+    const measured = this.measureTextBox(initialText, fontSize, resolvedFamily, padding);
 
     const box: BoundingBox = {
       x: point.x,
@@ -93,7 +95,7 @@ export class TextTool {
       type: 'text',
       box,
       text: initialText,
-      fontFamily,
+      fontFamily: resolvedFamily,
       fontSize,
       color,
       backgroundColor: bgColor,
@@ -126,7 +128,7 @@ export class TextTool {
       ctx.strokeRect(b.x, b.y, b.width, b.height);
     }
 
-    ctx.font = `${ann.fontStyle || 'normal'} ${ann.fontWeight || 'normal'} ${ann.fontSize}px "${ann.fontFamily}", sans-serif`;
+    ctx.font = `${ann.fontStyle || 'normal'} ${ann.fontWeight || 'normal'} ${ann.fontSize}px ${resolveAnnotationFontCss(ann.fontFamily)}`;
     ctx.fillStyle = ann.color;
     ctx.textBaseline = 'top';
 

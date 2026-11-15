@@ -8,6 +8,55 @@
   text-align: right;
 }
 
+[dir="rtl"] .header-logo,
+[dir="rtl"] .panel-header,
+[dir="rtl"] .panel-header-title,
+[dir="rtl"] .sidebar-active-tab-title,
+[dir="rtl"] .sidebar-empty-title,
+[dir="rtl"] .print-inspector-title,
+[dir="rtl"] .crop-modal-title,
+[dir="rtl"] .about-name,
+[dir="rtl"] .gn-card-title,
+[dir="rtl"] .landing-title,
+[dir="rtl"] .landing-section-title,
+[dir="rtl"] .dropzone-prompt,
+[dir="rtl"] .pdf-loading-title,
+[dir="rtl"] .scratchpad-title {
+  font-family: var(--font-display);
+}
+
+[dir="rtl"] .sc-keycap,
+[dir="rtl"] .shortcut-badge,
+[dir="rtl"] .gn-num-badge,
+[dir="rtl"] .props-num-badge,
+[dir="rtl"] .view-zoom-text,
+[dir="rtl"] .view-page-jump-box,
+[dir="rtl"] .props-size-badge,
+[dir="rtl"] .gn-card-meta,
+[dir="rtl"] .prop-value,
+[dir="rtl"] .thumbnail-label,
+[dir="rtl"] .thumbnail-badge,
+[dir="rtl"] .bookmark-page-pill,
+[dir="rtl"] .search-result-index,
+[dir="rtl"] .sidebar-search-count,
+[dir="rtl"] .annot-page-count,
+[dir="rtl"] .badge,
+[dir="rtl"] .kbd,
+[dir="rtl"] .annotation-context-shortcut,
+[dir="rtl"] .list-card-meta,
+[dir="rtl"] .crop-dimensions-pill,
+[dir="rtl"] .folder-count,
+[dir="rtl"] .cover-page-count,
+[dir="rtl"] .sidebar-select-count-num,
+[dir="rtl"] .header-docs-item-meta,
+[dir="rtl"] .dpi-chip,
+[dir="rtl"] .dpi-number-input,
+[dir="rtl"] .print-seg-btn {
+  font-family: var(--font-mono);
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 [dir="rtl"] .app-sidebar {
   border-right: none;
   border-left: 1px solid var(--border-subtle);
@@ -29,10 +78,6 @@
 [dir="rtl"] .floating-view-controls {
   right: auto;
   left: 24px;
-}
-
-[dir="rtl"] .sidebar-header {
-  flex-direction: row-reverse;
 }
 
 [dir="rtl"] .header-left {

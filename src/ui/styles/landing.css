@@ -5,6 +5,7 @@
  */
 
 .tabular-nums {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -74,10 +75,11 @@
 }
 
 .landing-title {
+  font-family: var(--font-display);
   font-size: clamp(40px, 4.6vw, 62px);
   font-weight: 800;
   line-height: 1.08;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.04em;
   margin: 0 0 18px;
   color: var(--text-primary);
   text-wrap: balance;
@@ -114,6 +116,7 @@
 }
 
 .landing-metric-val {
+  font-family: var(--font-mono);
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -224,6 +227,7 @@
 }
 
 .dropzone-prompt {
+  font-family: var(--font-display);
   font-size: 17.5px;
   font-weight: 700;
   letter-spacing: -0.015em;
@@ -314,6 +318,7 @@
 }
 
 .landing-section-title {
+  font-family: var(--font-display);
   font-size: 18px;
   font-weight: 700;
   color: var(--text-primary);
@@ -336,6 +341,7 @@
 }
 
 .library-total-summary {
+  font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
   color: var(--text-muted);
@@ -568,6 +574,7 @@
   padding: 0 5px;
   border-radius: 5px;
   background: var(--border-subtle);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -826,6 +833,7 @@
 .sheet-type-mark {
   align-self: flex-start;
   margin-left: 4px;
+  font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -841,6 +849,7 @@
   border-radius: 4px;
   background: rgba(15, 23, 42, 0.76);
   color: #f8fafc;
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;

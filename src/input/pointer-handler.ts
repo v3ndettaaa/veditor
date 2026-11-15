@@ -23,6 +23,7 @@ import { stickyNoteTool, getStickyNoteLayoutMetrics, computeViewportStickyNoteBo
 import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
 import { pdfEngine } from '../core/pdf-engine';
+import { resolveAnnotationFontFamily } from '../core/fonts';
 import {
   hitTestPageTextPoint,
   getTextRangeRects,
@@ -2008,7 +2009,7 @@ export class PointerHandler {
           color: ts.noteColor || '#ebd09e',
           textColor: ts.noteTextColor || '#3b2f1e',
           fontSize: scaledFontSize,
-          fontFamily: ts.fontFamily || 'Inter',
+          fontFamily: resolveAnnotationFontFamily(ts.fontFamily),
           textAlign: ts.textAlign || 'left',
           author: '',
           allowCompact: true
@@ -2287,7 +2288,7 @@ export class PointerHandler {
 
     // Coordinate readout pill at the bottom of the lens
     const coordText = `${Math.round(targetPt.x)}, ${Math.round(targetPt.y)}`;
-    ctx.font = `600 ${9.5 * invZoom}px Inter, -apple-system, sans-serif`;
+    ctx.font = `600 ${9.5 * invZoom}px "JetBrains Mono", "Manrope", -apple-system, sans-serif`;
     const pillW = Math.max(42 * invZoom, ctx.measureText(coordText).width + 10 * invZoom);
     const pillH = 14 * invZoom;
     const pillX = loupeCenter.x - pillW / 2;
@@ -2635,7 +2636,7 @@ export class PointerHandler {
     const tSettings = store.toolSettings;
     const defaultLayerId = 'layer-default';
     const fontSize = this.lensWidth(tSettings.fontSize || 16);
-    const fontFamily = tSettings.fontFamily || 'Inter';
+    const fontFamily = resolveAnnotationFontFamily(tSettings.fontFamily);
     const textColor = tSettings.textColor || '#111827';
     const textBgColor = tSettings.textBgColor || 'transparent';
     const textAlign = tSettings.textAlign || 'left';
@@ -2717,7 +2718,7 @@ export class PointerHandler {
       rect: screenRect,
       value: ann.text,
       fontSize: ann.fontSize * zoom,
-      fontFamily: ann.fontFamily || 'Inter',
+      fontFamily: resolveAnnotationFontFamily(ann.fontFamily),
       color: ann.color || '#111827',
       backgroundColor: ann.backgroundColor || 'transparent',
       textAlign: ann.textAlign || 'left',
@@ -2796,7 +2797,7 @@ export class PointerHandler {
       rect: screenRect,
       value: ann.text || '',
       fontSize: Math.max(5, (ann.fontSize || 15)) * zoom,
-      fontFamily: ann.fontFamily || 'Inter',
+      fontFamily: resolveAnnotationFontFamily(ann.fontFamily),
       color: ann.textColor || '#3b2f1e',
       backgroundColor: 'transparent',
       textAlign: ann.textAlign || 'left',
@@ -2844,7 +2845,7 @@ export class PointerHandler {
     const tSettings = store.toolSettings;
     const defaultLayerId = 'layer-default';
     const fontSize = this.lensWidth(tSettings.fontSize || 16);
-    const fontFamily = tSettings.fontFamily || 'Inter';
+    const fontFamily = resolveAnnotationFontFamily(tSettings.fontFamily);
     const textColor = tSettings.textColor || note.textColor || '#3b2f1e';
     const textBgColor = tSettings.textBgColor || 'transparent';
     const textAlign = tSettings.textAlign || 'left';

@@ -17,6 +17,7 @@ import { pointerHandler } from '../../input/pointer-handler';
 import { showToast } from './toast';
 import { tr } from '../i18n';
 import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
+import { DEFAULT_APP_FONT, PERSIAN_APP_FONT, resolveAnnotationFontFamily } from '../../core/fonts';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
 
@@ -780,7 +781,7 @@ export class FloatingPropsBarComponent {
         const measured = textTool.measureTextBox(
           a.text || '',
           nf,
-          a.fontFamily || 'Inter',
+          resolveAnnotationFontFamily(a.fontFamily),
           a.padding ?? 8,
           a.fontWeight,
           a.fontStyle
@@ -980,7 +981,7 @@ export class FloatingPropsBarComponent {
           color: store.toolSettings.noteColor || '#fef08a',
           textColor: store.toolSettings.noteTextColor || '#3b2f1e',
           textAlign: hasRtl ? 'right' : 'left',
-          fontFamily: hasRtl ? 'Vazirmatn' : 'Inter',
+          fontFamily: hasRtl ? PERSIAN_APP_FONT : DEFAULT_APP_FONT,
           collapsed: false,
         }
       );

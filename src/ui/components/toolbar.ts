@@ -12,6 +12,7 @@ import { t, tr } from '../i18n';
 import { ToolType, EraserMode, toolbarFamily, ToolbarDock, ToolOptionKey, SEGMENT_TOOLS } from '../../core/types';
 import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
 import { detectToolbarSnapEdge, clampToolbarFloatPos } from '../toolbar-dock';
+import { APP_FONT_OPTIONS, resolveAnnotationFontCss, resolveAnnotationFontFamily } from '../../core/fonts';
 
 /** Short labels for tools, reused by Settings → Toolbar. */
 export const TOOL_SHORT_LABELS: Record<string, string> = {
@@ -811,22 +812,27 @@ export class ToolbarComponent {
               <!-- Live Typography Preview Stage -->
               <div class="gn-preview-stage gn-text-preview-stage">
                 <span class="gn-text-preview-sample"
-                      style="color:${s.textColor}; font-family:${s.fontFamily || 'Inter'}; font-size:${Math.min(34, Math.max(12, s.fontSize))}px;">
+                      style="color:${s.textColor}; font-family:${resolveAnnotationFontCss(s.fontFamily)}; font-size:${Math.min(34, Math.max(12, s.fontSize))}px;">
                   Aa متن نمونه
                 </span>
               </div>
 
               <!-- Font Family Icon Cards -->
               <div class="gn-section">
+                <div class="gn-section-header">
+                  <span class="gn-section-label">${tr('Font', 'فونت متن')}</span>
+                </div>
                 <div class="gn-tile-grid cols-2" role="group" aria-label="${tr('Font family', 'نوع فونت')}">
-                  <button type="button" class="gn-icon-tile mode-toggle-btn font-fam-btn ${(s.fontFamily || 'Inter').includes('Inter') ? 'active' : ''}" data-font-fam="Inter">
-                    <span class="gn-font-glyph" style="font-family:var(--font-en);">Aa</span>
-                    <span class="gn-tile-label">Inter</span>
-                  </button>
-                  <button type="button" class="gn-icon-tile mode-toggle-btn font-fam-btn ${(s.fontFamily || '').includes('Vazirmatn') ? 'active' : ''}" data-font-fam="Vazirmatn">
-                    <span class="gn-font-glyph" style="font-family:var(--font-fa);">الف</span>
-                    <span class="gn-tile-label">وزیرمتن</span>
-                  </button>
+                  ${APP_FONT_OPTIONS.map(opt => {
+                    const activeFam = resolveAnnotationFontFamily(s.fontFamily);
+                    const isActive = activeFam.toLowerCase() === opt.id.toLowerCase();
+                    return `
+                      <button type="button" class="gn-icon-tile is-compact mode-toggle-btn font-fam-btn ${isActive ? 'active' : ''}" data-font-fam="${opt.id}">
+                        <span class="gn-font-glyph" style="font-family:${opt.cssFamily};">${opt.glyph}</span>
+                        <span class="gn-tile-label">${tr(opt.labelEn, opt.labelFa)}</span>
+                      </button>
+                    `;
+                  }).join('')}
                 </div>
               </div>
 
@@ -895,7 +901,7 @@ export class ToolbarComponent {
                 <div class="gn-note-preview-card"
                      style="width:168px; height:60px; border-radius:8px; background:${s.noteColor || '#ebd09e'}; border:1.5px solid rgba(59,47,30,0.22); padding:6px 10px; display:flex; flex-direction:column; justify-content:space-between; box-shadow:0 3px 10px rgba(0,0,0,0.16);">
                   <span class="gn-note-preview-text"
-                        style="color:${s.noteTextColor || '#3b2f1e'}; font-family:${s.fontFamily || 'Inter'}; font-size:${Math.min(18, Math.max(11, Math.round((s.noteFontSize || 24) * 0.65)))}px; font-weight:500; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
+                        style="color:${s.noteTextColor || '#3b2f1e'}; font-family:${resolveAnnotationFontCss(s.fontFamily)}; font-size:${Math.min(18, Math.max(11, Math.round((s.noteFontSize || 24) * 0.65)))}px; font-weight:500; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;"></span>
                 </div>
               </div>
 
@@ -931,6 +937,27 @@ export class ToolbarComponent {
                     <button type="button" class="color-swatch ${(s.noteTextColor || '#3b2f1e').toLowerCase() === c ? 'active' : ''}"
                             style="background-color:${c};" data-note-textcolor="${c}" title="${c}"></button>
                   `).join('')}
+                </div>
+              </div>
+
+              <div class="gn-divider"></div>
+
+              <!-- Note Font Family -->
+              <div class="gn-section">
+                <div class="gn-section-header">
+                  <span class="gn-section-label">${tr('Note Font', 'فونت یادداشت')}</span>
+                </div>
+                <div class="gn-tile-grid cols-2" role="group" aria-label="${tr('Sticky note font family', 'نوع فونت یادداشت')}">
+                  ${APP_FONT_OPTIONS.map(opt => {
+                    const activeFam = resolveAnnotationFontFamily(s.fontFamily);
+                    const isActive = activeFam.toLowerCase() === opt.id.toLowerCase();
+                    return `
+                      <button type="button" class="gn-icon-tile is-compact mode-toggle-btn font-fam-btn ${isActive ? 'active' : ''}" data-font-fam="${opt.id}">
+                        <span class="gn-font-glyph" style="font-family:${opt.cssFamily};">${opt.glyph}</span>
+                        <span class="gn-tile-label">${tr(opt.labelEn, opt.labelFa)}</span>
+                      </button>
+                    `;
+                  }).join('')}
                 </div>
               </div>
 
@@ -1473,7 +1500,7 @@ export class ToolbarComponent {
     const textSample = this._container.querySelector<HTMLElement>('.gn-text-preview-sample');
     if (textSample) {
       textSample.style.color = s.textColor;
-      textSample.style.fontFamily = s.fontFamily || 'Inter';
+      textSample.style.fontFamily = resolveAnnotationFontCss(s.fontFamily);
       textSample.style.fontSize = `${Math.min(34, Math.max(12, s.fontSize))}px`;
     }
 
@@ -1506,8 +1533,8 @@ export class ToolbarComponent {
 
     this._container.querySelectorAll('[data-font-fam]').forEach(el => {
       const fam = el.getAttribute('data-font-fam');
-      const activeFam = s.fontFamily || 'Inter';
-      el.classList.toggle('active', fam ? activeFam.includes(fam) : false);
+      const activeFam = resolveAnnotationFontFamily(s.fontFamily);
+      el.classList.toggle('active', !!fam && activeFam.toLowerCase() === fam.toLowerCase());
     });
 
     // 5b. Sticky Note Indicators + Live Preview
@@ -1528,7 +1555,7 @@ export class ToolbarComponent {
     const notePreviewText = this._container.querySelector<HTMLElement>('.gn-note-preview-text');
     if (notePreviewText) {
       notePreviewText.style.color = noteTxtCol;
-      notePreviewText.style.fontFamily = s.fontFamily || 'Inter';
+      notePreviewText.style.fontFamily = resolveAnnotationFontCss(s.fontFamily);
       notePreviewText.style.fontSize = `${Math.min(18, Math.max(11, Math.round(noteFs * 0.65)))}px`;
     }
 

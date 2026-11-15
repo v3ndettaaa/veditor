@@ -817,7 +817,7 @@ export class SettingsModalComponent {
           <div class="settings-grid">
             <button class="secondary-btn lang-card ${app.language === 'en' ? 'is-selected' : ''}" data-set-lang="en">
               <span class="lang-card-name">English</span>
-              <span class="lang-card-desc">Left-to-Right (LTR) • Inter</span>
+              <span class="lang-card-desc">Left-to-Right (LTR) • Plus Jakarta & Manrope</span>
             </button>
             <button class="secondary-btn lang-card is-fa ${app.language === 'fa' ? 'is-selected' : ''}" data-set-lang="fa">
               <span class="lang-card-name">فارسی</span>

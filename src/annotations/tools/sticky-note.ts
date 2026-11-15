@@ -16,6 +16,7 @@ import {
 import { isPointInBox, traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead } from '../../utils/geometry';
 import { renderSmoothStroke } from '../spline';
 import { textTool } from './text';
+import { DEFAULT_APP_FONT, resolveAnnotationFontCss, resolveAnnotationFontFamily } from '../../core/fonts';
 
 export const STICKY_NOTE_DEFAULT_SIZE = 210;
 export const STICKY_NOTE_MIN_WIDTH = 150;
@@ -261,7 +262,7 @@ export class StickyNoteTool {
   private _color: string = '#fef08a';
   private _textColor: string = '#3b2f1e';
   private _fontSize: number = 15;
-  private _fontFamily: string = 'Inter';
+  private _fontFamily: string = DEFAULT_APP_FONT;
   private _author: string = '';
 
   /**
@@ -323,7 +324,7 @@ export class StickyNoteTool {
       text: finalText,
       textColor: opts.textColor || '#3b2f1e',
       fontSize: opts.fontSize || 15,
-      fontFamily: opts.fontFamily || 'Inter',
+      fontFamily: resolveAnnotationFontFamily(opts.fontFamily),
       textAlign: opts.textAlign || 'left',
       author: opts.author !== undefined ? opts.author : '',
       ...(opts.iconWidth !== undefined ? { iconWidth: Math.max(20, opts.iconWidth) } : {}),
@@ -598,7 +599,7 @@ export class StickyNoteTool {
     color: string = '#fef08a',
     textColor: string = '#3b2f1e',
     fontSize: number = 15,
-    fontFamily: string = 'Inter',
+    fontFamily: string = DEFAULT_APP_FONT,
     author: string = ''
   ): void {
     this._active = true;
@@ -608,7 +609,7 @@ export class StickyNoteTool {
     this._color = color || '#fef08a';
     this._textColor = textColor || '#3b2f1e';
     this._fontSize = fontSize || 15;
-    this._fontFamily = fontFamily || 'Inter';
+    this._fontFamily = resolveAnnotationFontFamily(fontFamily);
     this._author = author ?? '';
   }
 
@@ -797,7 +798,7 @@ export class StickyNoteTool {
       text: '',
       textColor,
       fontSize: 15,
-      fontFamily: 'Inter',
+      fontFamily: DEFAULT_APP_FONT,
       textAlign: 'left',
       author,
       strokes: [],
@@ -887,8 +888,8 @@ export class StickyNoteTool {
         const fontSize = Math.max(5, ann.fontSize || 15);
         const weight = ann.fontWeight === 'bold' || Number(ann.fontWeight) >= 600 ? 'bold' : 'normal';
         const style = ann.fontStyle === 'italic' ? 'italic' : 'normal';
-        const family = ann.fontFamily || 'Inter';
-        ctx.font = `${style} ${weight} ${fontSize}px ${family}, -apple-system, BlinkMacSystemFont, sans-serif`;
+        const familyCss = resolveAnnotationFontCss(ann.fontFamily);
+        ctx.font = `${style} ${weight} ${fontSize}px ${familyCss}`;
         ctx.fillStyle = ann.textColor || '#3b2f1e';
         ctx.textBaseline = 'top';
 

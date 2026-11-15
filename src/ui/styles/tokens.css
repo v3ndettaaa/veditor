@@ -1,6 +1,21 @@
-/* Import self-hosted offline fonts */
-@import "@fontsource/inter/index.css";
-@import "@fontsource/vazirmatn/index.css";
+/* Import self-hosted offline fonts (essential weights only) */
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/500.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/plus-jakarta-sans/800.css";
+@import "@fontsource/manrope/400.css";
+@import "@fontsource/manrope/500.css";
+@import "@fontsource/manrope/600.css";
+@import "@fontsource/manrope/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+@import "@fontsource/jetbrains-mono/700.css";
+@import "@fontsource/vazirmatn/400.css";
+@import "@fontsource/vazirmatn/500.css";
+@import "@fontsource/vazirmatn/600.css";
+@import "@fontsource/vazirmatn/700.css";
 
 /**
  * Design tokens - the single source of truth for veditor's visual language.
@@ -18,10 +33,13 @@
  */
 :root {
   /* Fonts */
-  --font-en: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-fa: "Vazirmatn", -apple-system, BlinkMacSystemFont, Tahoma, sans-serif;
+  --font-en: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display-en: "Plus Jakarta Sans", "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-fa: "Vazirmatn", "Manrope", -apple-system, BlinkMacSystemFont, Tahoma, sans-serif;
+  --font-display-fa: "Vazirmatn", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, Tahoma, sans-serif;
   --font-family: var(--font-en);
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-display: var(--font-display-en);
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   /* Spacing */
   --space-1: 4px;
@@ -154,6 +172,7 @@ body.density-compact {
 /* RTL Language Token Override */
 [dir="rtl"] {
   --font-family: var(--font-fa);
+  --font-display: var(--font-display-fa);
 }
 
 /* Respect the OS "reduce motion" preference across the whole UI */

@@ -68,6 +68,7 @@ export class SidePanelsComponent {
   private _searchToken = 0;
   private _searchDebounceTimer: number | null = null;
   private _annotationFilter: AnnotationFilterCategory = 'all';
+  private _selectionMode = false;
 
   constructor(container: HTMLElement) {
     sidePanelsInstance = this;
@@ -145,6 +146,7 @@ export class SidePanelsComponent {
       outlineSig,
       historySig,
       annotSig,
+      this._selectionMode ? '1' : '0',
       store.appSettings.language
     ].join('|');
 
@@ -185,6 +187,7 @@ export class SidePanelsComponent {
     if (this._anchorDocId !== (doc?.id ?? null)) {
       this._anchorDocId = doc?.id ?? null;
       this._pageAnchor = null;
+      this._selectionMode = false;
     }
 
     const lang = store.appSettings.language;
@@ -212,8 +215,17 @@ export class SidePanelsComponent {
 
     const prevThumbListScrollTop = this._container.querySelector<HTMLElement>('#thumbnail-list')?.scrollTop ?? null;
 
+    const selectModeLabel = lang === 'fa' ? 'حالت انتخاب چند صفحه' : 'Multi-select pages';
     this._container.innerHTML = `
       <div class="sidebar-header">
+        <button type="button"
+                class="sidebar-select-toggle ${this._selectionMode ? 'is-active' : ''}"
+                id="sidebar-select-toggle"
+                aria-pressed="${this._selectionMode ? 'true' : 'false'}"
+                title="${escapeHtml(selectModeLabel)}"
+                aria-label="${escapeHtml(selectModeLabel)}">
+          ${getIconSvg('checkCircle', 16, 1.8)}
+        </button>
         <div class="sidebar-tabs-nav" role="tablist">
           <button class="sidebar-tab-btn ${activeTab === 'thumbnails' ? 'active' : ''}" data-tab="thumbnails" role="tab" aria-selected="${activeTab === 'thumbnails'}" title="${escapeHtml(t('sidebar.thumbnails'))}" aria-label="${escapeHtml(t('sidebar.thumbnails'))}">
             <span class="sidebar-tab-icon">${getIconSvg('gridView', 15)}</span>
@@ -231,7 +243,7 @@ export class SidePanelsComponent {
             <span class="sidebar-tab-icon">${getIconSvg('history', 15)}</span>
           </button>
         </div>
-        <button type="button" class="sidebar-close-btn" id="sidebar-close-btn" title="${lang === 'fa' ? 'بستن نوار کناری' : 'Close Sidebar'}" aria-label="Close Sidebar">
+        <button type="button" class="sidebar-close-btn" id="sidebar-close-btn" title="${lang === 'fa' ? 'بستن نوار کناری' : 'Close Sidebar'}" aria-label="${lang === 'fa' ? 'بستن نوار کناری' : 'Close Sidebar'}">
           ${getIconSvg('close', 14)}
         </button>
       </div>
@@ -242,6 +254,18 @@ export class SidePanelsComponent {
 
       <div class="sidebar-content" id="sidebar-tab-content"></div>
     `;
+
+    this._container.querySelector('#sidebar-select-toggle')?.addEventListener('click', () => {
+      this._selectionMode = !this._selectionMode;
+      if (this._selectionMode && store.activeSidebarTab !== 'thumbnails') {
+        store.setSidebarTab('thumbnails');
+      }
+      if (!this._selectionMode && doc) {
+        store.setSelectedPageIndices([]);
+      }
+      this._lastRenderKey = '';
+      this.render();
+    });
 
     // Tab switcher events
     this._container.querySelectorAll('[data-tab]').forEach(el => {
@@ -312,9 +336,11 @@ export class SidePanelsComponent {
   }
 
   private syncPageSelection(): void {
+    const doc = store.activeDocument;
     const selected = store.selectedPageIndices;
     const active = store.activePageIndex;
     const effective = store.effectivePageSelection();
+    const lang = store.appSettings.language;
     let activeCard: HTMLElement | null = null;
     this._container.querySelectorAll<HTMLElement>('.thumbnail-card[data-page]').forEach(card => {
       const idx = parseInt(card.dataset.page || '-1', 10);
@@ -349,6 +375,40 @@ export class SidePanelsComponent {
       extractBtnLabel.textContent = effective.length > 1
         ? `${tr('Extract', 'استخراج')} (${effective.length})`
         : tr('Extract', 'استخراج');
+    }
+
+    // Keep the multi-select toggle & contextual selection bar synced
+    const selectToggleBtn = this._container.querySelector<HTMLElement>('#sidebar-select-toggle');
+    if (selectToggleBtn) {
+      selectToggleBtn.classList.toggle('is-active', this._selectionMode);
+      selectToggleBtn.setAttribute('aria-pressed', this._selectionMode ? 'true' : 'false');
+    }
+
+    const selectionBar = this._container.querySelector<HTMLElement>('#sidebar-selection-bar');
+    if (selectionBar) {
+      const showBar = this._selectionMode || selected.size > 1;
+      selectionBar.classList.toggle('is-hidden', !showBar);
+      const countEl = selectionBar.querySelector<HTMLElement>('.sidebar-select-count');
+      if (countEl) {
+        const count = selected.size > 0 ? selected.size : (this._selectionMode ? 0 : effective.length);
+        countEl.innerHTML = lang === 'fa'
+          ? `<span class="sidebar-select-count-num tabular-nums">${count}</span> انتخاب‌شده`
+          : `<span class="sidebar-select-count-num tabular-nums">${count}</span> selected`;
+      }
+      const deleteBtn = selectionBar.querySelector<HTMLButtonElement>('#sidebar-sel-delete-btn');
+      if (deleteBtn && doc) {
+        deleteBtn.disabled = effective.length === 0 || effective.length >= doc.pageCount;
+      }
+      const dupBtn = selectionBar.querySelector<HTMLButtonElement>('#sidebar-sel-duplicate-btn');
+      if (dupBtn) dupBtn.disabled = selected.size === 0 && !doc;
+      const rotBtn = selectionBar.querySelector<HTMLButtonElement>('#sidebar-sel-rotate-btn');
+      if (rotBtn) rotBtn.disabled = selected.size === 0 && !doc;
+    }
+
+    const thumbList = this._container.querySelector<HTMLElement>('#thumbnail-list');
+    if (thumbList) {
+      thumbList.classList.toggle('is-selection-mode', this._selectionMode);
+      thumbList.classList.toggle('has-multi-select', selected.size > 1);
     }
 
     if (activeCard && this._lastActivePageIndex !== active) {
@@ -498,7 +558,12 @@ export class SidePanelsComponent {
 
     if (tab === 'thumbnails') {
       const selected = store.selectedPageIndices;
+      const effective = store.effectivePageSelection();
       const isNotebook = !!doc.notebook;
+      const bookmarkedPages = new Set((doc.userBookmarks || []).map(b => b.pageIndex));
+      const showSelectionBar = this._selectionMode || selected.size > 1;
+      const selCount = selected.size > 0 ? selected.size : (this._selectionMode ? 0 : effective.length);
+
       el.innerHTML = `
         <div class="sidebar-pages-toolbar">
           <button type="button" class="sidebar-page-action-btn" id="sidebar-merge-pdf-btn" ${isNotebook ? 'disabled' : ''} title="${escapeHtml(tr('Merge external PDF file(s) into this document (or drag & drop PDF here)', 'ادغام فایل پی‌دی‌اف خارجی در این سند (یا رها کردن فایل در اینجا)'))}">
@@ -514,31 +579,82 @@ export class SidePanelsComponent {
             <span>${tr('Crop', 'برش')}</span>
           </button>
         </div>
-        <div class="thumbnail-list" id="thumbnail-list" tabindex="0" role="listbox" aria-multiselectable="true">
+        <div class="sidebar-selection-bar ${showSelectionBar ? '' : 'is-hidden'}" id="sidebar-selection-bar">
+          <span class="sidebar-select-count">${lang === 'fa' ? `<span class="sidebar-select-count-num tabular-nums">${selCount}</span> انتخاب‌شده` : `<span class="sidebar-select-count-num tabular-nums">${selCount}</span> selected`}</span>
+          <div class="sidebar-select-actions">
+            <button type="button" class="sidebar-sel-btn" id="sidebar-sel-all-btn" title="${escapeHtml(t('sidebar.pages.selectAll'))}">
+              ${tr('All', 'همه')}
+            </button>
+            <button type="button" class="sidebar-sel-btn is-icon" id="sidebar-sel-duplicate-btn" title="${escapeHtml(t('sidebar.pages.duplicate'))}" aria-label="${escapeHtml(t('sidebar.pages.duplicate'))}">
+              ${getIconSvg('copy', 12)}
+            </button>
+            <button type="button" class="sidebar-sel-btn is-icon" id="sidebar-sel-rotate-btn" title="${escapeHtml(t('sidebar.pages.rotateCw'))}" aria-label="${escapeHtml(t('sidebar.pages.rotateCw'))}">
+              ${getIconSvg('rotate', 12)}
+            </button>
+            <button type="button" class="sidebar-sel-btn is-icon is-danger" id="sidebar-sel-delete-btn" ${effective.length === 0 || effective.length >= doc.pageCount ? 'disabled' : ''} title="${escapeHtml(t('sidebar.pages.delete'))}" aria-label="${escapeHtml(t('sidebar.pages.delete'))}">
+              ${getIconSvg('trash', 12)}
+            </button>
+            <button type="button" class="sidebar-sel-btn is-done" id="sidebar-sel-done-btn">
+              ${tr('Done', 'تایید')}
+            </button>
+          </div>
+        </div>
+        <div class="thumbnail-list ${this._selectionMode ? 'is-selection-mode' : ''} ${selected.size > 1 ? 'has-multi-select' : ''}" id="thumbnail-list" tabindex="0" role="listbox" aria-multiselectable="true">
           <div class="thumbnail-drop-indicator" id="thumbnail-drop-indicator" aria-hidden="true"></div>
           ${doc.pages.map((_p, idx) => {
             const isActive = idx === store.activePageIndex;
             const isSelected = selected.has(idx);
             const annotCount = doc.annotations[idx]?.length || 0;
+            const isBookmarked = bookmarkedPages.has(idx);
             const cachedSrc = this._thumbnailCache.get(`${doc.id}:${this._structureRevision}:${idx}`);
             const fallbackSrc = cachedSrc || this._prevThumbnailByPage.get(`${doc.id}:${idx}`);
             const isStale = !cachedSrc && Boolean(fallbackSrc);
             const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg);"` : '';
+            const bmTitle = isBookmarked
+              ? (lang === 'fa' ? 'حذف نشانک صفحه' : 'Remove page bookmark')
+              : (lang === 'fa' ? 'نشانه‌گذاری صفحه' : 'Bookmark this page');
+            const moreTitle = lang === 'fa' ? 'عملیات صفحه' : 'Page options';
             return `
-              <button class="thumbnail-card ${isActive ? 'is-active' : ''} ${isSelected ? 'is-selected' : ''}"
-                      data-page="${idx}" role="option" draggable="true"
-                      aria-current="${isActive ? 'true' : 'false'}"
-                      aria-selected="${isSelected ? 'true' : 'false'}"
-                      title="${escapeHtml(t('sidebar.pages.goTo', { page: idx + 1 }))}">
-                <span class="thumbnail-frame ${fallbackSrc ? '' : 'is-loading'}" data-thumb-frame="${idx}">
-                  ${fallbackSrc ? `<img src="${fallbackSrc}" ${isStale ? 'data-stale="true"' : ''} decoding="async" alt="Page ${idx + 1} preview"${rotStyle}>` : ''}
+              <div class="thumbnail-card ${isActive ? 'is-active' : ''} ${isSelected ? 'is-selected' : ''}"
+                   data-page="${idx}" role="option" tabindex="0" draggable="true"
+                   aria-current="${isActive ? 'true' : 'false'}"
+                   aria-selected="${isSelected ? 'true' : 'false'}"
+                   title="${escapeHtml(t('sidebar.pages.goTo', { page: idx + 1 }))}">
+                <div class="thumbnail-frame ${fallbackSrc ? '' : 'is-loading'}" data-thumb-frame="${idx}">
+                  ${fallbackSrc ? `<img src="${fallbackSrc}" ${isStale ? 'data-stale="true"' : ''} decoding="async" draggable="false" alt="Page ${idx + 1} preview"${rotStyle}>` : ''}
                   ${annotCount > 0 ? `<span class="thumbnail-badge">${annotCount}</span>` : ''}
-                </span>
-                <span class="thumbnail-label">${idx + 1}</span>
-              </button>
+                  <button type="button"
+                          class="thumbnail-bookmark-btn ${isBookmarked ? 'is-bookmarked' : ''}"
+                          data-thumb-bookmark="${idx}"
+                          aria-pressed="${isBookmarked ? 'true' : 'false'}"
+                          title="${escapeHtml(bmTitle)}"
+                          aria-label="${escapeHtml(bmTitle)}">
+                    ${getIconSvg(isBookmarked ? 'bookmarkFilled' : 'bookmark', 14, 1.85)}
+                  </button>
+                  <span class="thumbnail-check-indicator" aria-hidden="true">${getIconSvg('check', 11, 2.8)}</span>
+                </div>
+                <div class="thumbnail-footer">
+                  <span class="thumbnail-label">${idx + 1}</span>
+                  <button type="button"
+                          class="thumbnail-more-btn"
+                          data-thumb-more="${idx}"
+                          title="${escapeHtml(moreTitle)}"
+                          aria-label="${escapeHtml(moreTitle)}">
+                    ${getIconSvg('moreHorizontal', 15)}
+                  </button>
+                </div>
+              </div>
             `;
           }).join('')}
+          <div class="thumbnail-add-slot">
+            <button type="button" class="thumbnail-add-card" id="thumbnail-add-page-btn"
+                    title="${escapeHtml(tr('Add blank page at end', 'افزودن صفحه خالی در انتها'))}"
+                    aria-label="${escapeHtml(tr('Add page', 'افزودن صفحه'))}">
+              <span class="thumbnail-add-icon">${getIconSvg('plus', 18, 1.8)}</span>
+              <span class="thumbnail-add-text">${tr('Add page', 'افزودن صفحه')}</span>
+            </button>
+          </div>
         </div>
       `;
 
@@ -555,6 +671,54 @@ export class SidePanelsComponent {
       });
       el.querySelector('#sidebar-crop-pdf-btn')?.addEventListener('click', () => {
         void cropDialog.open(store.activePageIndex);
+      });
+
+      // Multi-select action bar listeners
+      el.querySelector('#sidebar-sel-all-btn')?.addEventListener('click', () => {
+        if (store.selectedPageIndices.size >= doc.pageCount) {
+          store.setSelectedPageIndices([]);
+        } else {
+          const all: number[] = [];
+          for (let i = 0; i < doc.pageCount; i++) all.push(i);
+          store.setSelectedPageIndices(all);
+        }
+      });
+      el.querySelector('#sidebar-sel-duplicate-btn')?.addEventListener('click', () => {
+        const sel = store.effectivePageSelection();
+        if (sel.length === 0) return;
+        void this.runPageAction(() => pageActions.duplicatePages(sel));
+      });
+      el.querySelector('#sidebar-sel-rotate-btn')?.addEventListener('click', () => {
+        const sel = store.effectivePageSelection();
+        if (sel.length === 0) return;
+        void this.runPageAction(() => pageActions.rotatePages(sel, 90));
+      });
+      el.querySelector('#sidebar-sel-delete-btn')?.addEventListener('click', () => {
+        const sel = store.effectivePageSelection();
+        if (sel.length === 0 || sel.length >= doc.pageCount) return;
+        void this.runPageAction(async () => {
+          const ok = await pageActions.deletePages(sel);
+          if (ok) {
+            showToast(sel.length > 1
+              ? t('sidebar.pages.deletedMany', { count: sel.length })
+              : t('sidebar.pages.deleted'), 'success');
+          }
+          return ok;
+        });
+      });
+      el.querySelector('#sidebar-sel-done-btn')?.addEventListener('click', () => {
+        this._selectionMode = false;
+        store.setSelectedPageIndices([]);
+        this._lastRenderKey = '';
+        this.render();
+      });
+
+      el.querySelector('#thumbnail-add-page-btn')?.addEventListener('click', () => {
+        void this.runPageAction(async () => {
+          const ok = await pageActions.insertBlankPages(doc.pageCount, 1);
+          if (ok) showToast(t('sidebar.pages.blankInserted'), 'success');
+          return ok;
+        });
       });
 
       const list = el.querySelector<HTMLElement>('#thumbnail-list');
@@ -1119,7 +1283,46 @@ export class SidePanelsComponent {
     for (const card of cards) {
       const idx = parseInt(card.dataset.page || '0', 10);
 
+      const bookmarkBtn = card.querySelector<HTMLButtonElement>('[data-thumb-bookmark]');
+      bookmarkBtn?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const lang = store.appSettings.language;
+        const existing = (doc.userBookmarks || []).filter(b => b.pageIndex === idx);
+        if (existing.length > 0) {
+          for (const bm of existing) {
+            store.removeUserBookmark(bm.id);
+          }
+          triggerAutoSave();
+          showToast(lang === 'fa' ? `نشانک صفحه ${idx + 1} حذف شد` : `Bookmark removed from Page ${idx + 1}`, 'info');
+        } else {
+          const title = lang === 'fa' ? `صفحه ${idx + 1}` : `Page ${idx + 1}`;
+          store.addUserBookmark(idx, title);
+          triggerAutoSave();
+          showToast(lang === 'fa' ? `صفحه ${idx + 1} نشانه‌گذاری شد` : `Bookmarked Page ${idx + 1}`, 'success');
+        }
+      });
+
+      const moreBtn = card.querySelector<HTMLButtonElement>('[data-thumb-more]');
+      moreBtn?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const effective = store.effectivePageSelection();
+        if (!effective.includes(idx)) {
+          this._pageAnchor = idx;
+          store.setSelectedPageIndices([idx]);
+        } else if (store.selectedPageIndices.size === 0) {
+          store.setSelectedPageIndices([idx]);
+        }
+        const rect = moreBtn.getBoundingClientRect();
+        this.openPageMenu(rect.left + rect.width / 2, rect.bottom + 4, idx);
+      });
+
       card.addEventListener('click', (e) => {
+        const targetEl = e.target as HTMLElement | null;
+        if (targetEl?.closest('[data-thumb-bookmark]') || targetEl?.closest('[data-thumb-more]')) {
+          return;
+        }
         if (e.shiftKey) {
           const anchor = this._pageAnchor ?? store.activePageIndex;
           const from = Math.min(anchor, idx);
@@ -1129,7 +1332,7 @@ export class SidePanelsComponent {
           store.setSelectedPageIndices(range);
           return;
         }
-        if (e.ctrlKey || e.metaKey) {
+        if (this._selectionMode || e.ctrlKey || e.metaKey) {
           this._pageAnchor = idx;
           store.togglePageIndex(idx);
           return;
@@ -1137,6 +1340,15 @@ export class SidePanelsComponent {
         this._pageAnchor = idx;
         store.setSelectedPageIndices([idx]);
         viewportManager.scrollToPage(idx);
+      });
+
+      card.addEventListener('keydown', (e) => {
+        if (e.target !== card) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          card.click();
+        }
       });
 
       card.addEventListener('contextmenu', (e) => {
@@ -1495,6 +1707,7 @@ export class SidePanelsComponent {
       const img = document.createElement('img');
       img.src = src;
       img.decoding = 'async';
+      img.draggable = false;
       img.alt = `Page ${idx + 1} preview`;
       const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
       if (rot) img.style.transform = `rotate(${rot}deg)`;

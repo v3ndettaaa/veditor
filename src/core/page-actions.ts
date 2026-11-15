@@ -504,7 +504,7 @@ class PageActions {
     if (!doc) return;
     const anchor = removedAt >= 0 && removedAt < doc.pageCount ? removedAt : count;
     const target = Math.max(0, Math.min(doc.pageCount - 1, anchor));
-    doc.activePageIndex = target;
+    store.setActivePageIndex(target);
     store.setSelectedPageIndices([]);
   }
 
@@ -513,8 +513,9 @@ class PageActions {
     if (!doc) return;
     const range: number[] = [];
     for (let i = from; i < from + count && i < doc.pageCount; i++) range.push(i);
-    doc.activePageIndex = Math.min(doc.pageCount - 1, Math.max(0, from));
-    store.setSelectedPageIndices(range);
+    const target = Math.min(doc.pageCount - 1, Math.max(0, from));
+    store.setActivePageIndex(target);
+    store.setSelectedPageIndices(range.length > 1 ? range : []);
   }
 }
 

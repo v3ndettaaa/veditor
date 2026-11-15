@@ -126,7 +126,7 @@ export class StampTool {
 
       // Fit the label to the box: derive from height then shrink to width.
       let fontSize = Math.max(6, b.height * (22 / 64));
-      const fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif';
+      const fontFamily = '"Plus Jakarta Sans", "Manrope", -apple-system, BlinkMacSystemFont, sans-serif';
       ctx.font = `bold ${fontSize}px ${fontFamily}`;
       const maxTextWidth = Math.max(8, b.width * 0.86);
       const measured = ctx.measureText(preset.label).width;
