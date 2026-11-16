@@ -1373,12 +1373,63 @@ input.prop-num-input::-webkit-inner-spin-button {
   white-space: normal;
 }
 
-@media (max-height: 640px) {
+@media (max-height: 675px) {
   .tool-hover-card.gn-popover {
-    max-height: calc(100vh - 88px);
+    max-height: calc(100vh - 120px);
     overflow-y: auto;
     overflow-x: hidden;
+    scrollbar-width: thin;
   }
+}
+
+.tool-hover-card.gn-popover.gn-popover-shape {
+  padding: 11px 13px;
+  gap: 7px;
+}
+
+.gn-popover-shape .gn-preview-stage {
+  height: 48px;
+}
+
+.gn-popover-shape .gn-section {
+  gap: 5px;
+}
+
+.gn-popover-shape .gn-icon-tile {
+  padding: 5px 4px;
+  gap: 2px;
+  border-radius: 9px;
+}
+
+.gn-popover-shape .gn-slider-wrap {
+  height: 22px;
+}
+
+.gn-popover-shape .gn-range-slider {
+  height: 22px;
+}
+
+.gn-popover-shape .gn-swatch-grid {
+  gap: 5.5px;
+}
+
+.gn-popover-shape .gn-swatch-grid .color-swatch,
+.gn-popover-shape .gn-swatch-grid .color-picker-wrapper {
+  width: 20px;
+  height: 20px;
+}
+
+.gn-popover-shape .gn-fill-opacity-header {
+  margin-top: 4px;
+}
+
+.gn-popover-shape .gn-setting-row {
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.gn-popover-shape .gn-divider {
+  margin: 0;
 }
 
 .tool-hover-card.gn-popover.gn-popover-compact {
@@ -3199,7 +3250,7 @@ html.platform-linux .app-header,
 html.platform-linux .header-docs-menu,
 html.platform-linux .floating-toolbar,
 html.platform-linux .floating-view-controls,
-html.platform-linux .floating-props-bar,
+html.platform-linux .floating-props-bar .props-bar-inner,
 html.platform-linux .tool-popover,
 html.platform-linux .modal-overlay,
 html.platform-linux .pdf-loading-overlay,
@@ -3209,7 +3260,7 @@ html.platform-desktop .app-header,
 html.platform-desktop .header-docs-menu,
 html.platform-desktop .floating-toolbar,
 html.platform-desktop .floating-view-controls,
-html.platform-desktop .floating-props-bar,
+html.platform-desktop .floating-props-bar .props-bar-inner,
 html.platform-desktop .tool-popover {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -3218,12 +3269,12 @@ html.platform-desktop .tool-popover {
 html.platform-linux .floating-view-controls,
 html.platform-linux .toolbar-main-row,
 html.platform-linux .toolbar-sub-row,
-html.platform-linux .floating-props-bar,
+html.platform-linux .floating-props-bar .props-bar-inner,
 html.platform-linux .tool-popover,
 html.platform-desktop .floating-view-controls,
 html.platform-desktop .toolbar-main-row,
 html.platform-desktop .toolbar-sub-row,
-html.platform-desktop .floating-props-bar,
+html.platform-desktop .floating-props-bar .props-bar-inner,
 html.platform-desktop .tool-popover {
   background: var(--bg-surface);
 }

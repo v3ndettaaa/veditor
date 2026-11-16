@@ -739,7 +739,7 @@ export class ToolbarComponent {
               <span class="tool-color-dot shape-dot" style="background-color:${s.shapeColor};"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
-            <div class="tool-hover-card gn-popover">
+            <div class="tool-hover-card gn-popover gn-popover-shape">
               ${this.renderShapeHoverCard(s, 'rectangle')}
             </div>
           </div>
@@ -750,7 +750,7 @@ export class ToolbarComponent {
               ${getIconSvg('ellipse')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
-            <div class="tool-hover-card gn-popover">
+            <div class="tool-hover-card gn-popover gn-popover-shape">
               ${this.renderShapeHoverCard(s, 'ellipse')}
             </div>
           </div>
@@ -761,7 +761,7 @@ export class ToolbarComponent {
               ${getIconSvg('line')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
-            <div class="tool-hover-card gn-popover">
+            <div class="tool-hover-card gn-popover gn-popover-shape">
               ${this.renderShapeHoverCard(s, 'line')}
             </div>
           </div>
@@ -772,7 +772,7 @@ export class ToolbarComponent {
               ${getIconSvg('arrow')}
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
-            <div class="tool-hover-card gn-popover">
+            <div class="tool-hover-card gn-popover gn-popover-shape">
               ${this.renderShapeHoverCard(s, 'arrow')}
             </div>
           </div>
@@ -784,7 +784,7 @@ export class ToolbarComponent {
               <span class="tool-color-dot shape-dot" style="background-color:${s.shapeColor};"></span>
               <span class="tool-chevron">${getIconSvg('chevronDown', 9, 2.5)}</span>
             </button>
-            <div class="tool-hover-card gn-popover">
+            <div class="tool-hover-card gn-popover gn-popover-shape">
               ${this.renderShapeHoverCard(s, 'polygon')}
             </div>
           </div>
@@ -1888,7 +1888,7 @@ export class ToolbarComponent {
               <input type="color" class="color-picker-input shape-fill-picker" value="${s.shapeFillColor === 'transparent' ? '#ffffff' : s.shapeFillColor}">
             </div>
           </div>
-          <div class="gn-section-header" style="margin-top: 10px;">
+          <div class="gn-section-header gn-fill-opacity-header">
             <span class="gn-section-label">${tr('Fill Opacity', 'شفافیت داخل شکل')}</span>
             <div class="gn-size-header-controls">
               <div class="gn-num-badge">

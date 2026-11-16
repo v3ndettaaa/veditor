@@ -2232,6 +2232,9 @@ input[type="range"] {
 .floating-props-bar {
   position: absolute;
   z-index: 1200;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  border-radius: var(--radius-full);
   transform: translate(-50%, 0) scale(1);
   transition:
     opacity 180ms var(--ease-spring),
@@ -2250,9 +2253,14 @@ input[type="range"] {
 
 .props-bar-inner {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 5px;
+  max-width: calc(100vw - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
+  padding: 5px 9px;
   background: var(--bg-surface-elevated, #16161a);
   border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.16));
   border-radius: var(--radius-full);
@@ -2261,17 +2269,23 @@ input[type="range"] {
   -webkit-backdrop-filter: blur(16px);
 }
 
+.props-bar-inner::-webkit-scrollbar {
+  display: none;
+}
+
 .props-bar-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 .props-bar-divider {
   width: 1px;
   height: 18px;
   background: var(--border-subtle);
-  margin: 0 2px;
+  margin: 0 1px;
+  flex-shrink: 0;
 }
 
 .props-color-bubble-wrap {
@@ -2361,6 +2375,9 @@ input[type="range"] {
 }
 
 .props-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 7px;
   font-size: 11px;
   font-weight: 600;
@@ -2386,7 +2403,7 @@ input[type="range"] {
 .props-slider-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .props-slider-label {
@@ -2400,8 +2417,8 @@ input[type="range"] {
   --slider-pct: 100%;
   -webkit-appearance: none;
   appearance: none;
-  width: 78px;
-  height: 26px;
+  width: 52px;
+  height: 24px;
   background: transparent;
   outline: none;
   cursor: pointer;
@@ -2475,14 +2492,14 @@ input[type="range"] {
   display: inline-flex;
   align-items: center;
   gap: 1px;
-  padding: 2px 5px;
+  padding: 2px 4px;
   border-radius: var(--radius-sm, 6px);
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.14));
-  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.14));
+  background: var(--bg-surface, rgba(15, 23, 42, 0.35));
 }
 
 .props-num-input {
-  width: 28px;
+  width: 22px;
   border: none;
   background: transparent;
   color: var(--text-primary, #f8fafc);

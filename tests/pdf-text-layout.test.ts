@@ -270,5 +270,96 @@ describe('Mathematical PDF Text Layout Engine', () => {
     expect(faSel).not.toBeNull();
     expect(faSel!.text).toBe('کتاب');
   });
-});
 
+  it('excludes Persian punctuation and handles ZWNJ compound words accurately on double-click', async () => {
+    const viewport = {
+      width: 612,
+      height: 792,
+      transform: [1, 0, 0, -1, 0, 792],
+    };
+    const mockFaPage = {
+      getPage: async () => ({
+        rotate: 0,
+        getViewport: () => viewport,
+        getTextContent: async () => ({
+          items: [
+            { str: 'سلام، می‌شود؟', width: 120, height: 14, transform: [14, 0, 0, 14, 200, 700], hasEOL: true },
+          ],
+        }),
+      }),
+    };
+
+    const layout = await extractPageTextLayout(mockFaPage as any, 0, 0);
+    // "سلام، می‌شود؟" spans x=200..320 (RTL: "سلام،" is on the right ~x=280..320; "می‌شود؟" is on the left ~x=200..265)
+    const rightWord = getWordOrMathRangeAtPoint(layout, 302, 88);
+    expect(rightWord).not.toBeNull();
+    expect(rightWord!.text).toBe('سلام');
+
+    const leftWord = getWordOrMathRangeAtPoint(layout, 232, 88);
+    expect(leftWord).not.toBeNull();
+    expect(leftWord!.text).toBe('می‌شود');
+  });
+
+  it('selects exact prose words near parentheses and slashes without bleeding into math mode', async () => {
+    const viewport = {
+      width: 612,
+      height: 792,
+      transform: [1, 0, 0, -1, 0, 792],
+    };
+    const mockProsePage = {
+      getPage: async () => ({
+        rotate: 0,
+        getViewport: () => viewport,
+        getTextContent: async () => ({
+          items: [
+            { str: 'Select Tool / Hand (Crop, Merge)', width: 220, height: 12, transform: [12, 0, 0, 12, 80, 700], hasEOL: true },
+          ],
+        }),
+      }),
+    };
+
+    const layout = await extractPageTextLayout(mockProsePage as any, 0, 0);
+    const run = layout.runs[0];
+    const toolIdx = run.str.indexOf('Tool');
+    const toolMidX = run.chars[toolIdx + 1].x + run.chars[toolIdx + 1].width / 2;
+    const toolSel = getWordOrMathRangeAtPoint(layout, toolMidX, 88);
+    expect(toolSel).not.toBeNull();
+    expect(toolSel!.text).toBe('Tool');
+
+    const cropIdx = run.str.indexOf('Crop');
+    const cropMidX = run.chars[cropIdx + 1].x + run.chars[cropIdx + 1].width / 2;
+    const cropSel = getWordOrMathRangeAtPoint(layout, cropMidX, 88);
+    expect(cropSel).not.toBeNull();
+    expect(cropSel!.text).toBe('Crop');
+  });
+
+  it('tracks unloaded font names separately and hit-tests hover points reliably', async () => {
+    const viewport = {
+      width: 612,
+      height: 792,
+      transform: [1, 0, 0, -1, 0, 792],
+    };
+    const mockFontPage = {
+      getPage: async () => ({
+        rotate: 0,
+        getViewport: () => viewport,
+        getTextContent: async () => ({
+          items: [
+            { str: 'HoverText', fontName: 'CustomFont_A', width: 70, height: 12, transform: [12, 0, 0, 12, 80, 700], hasEOL: true },
+          ],
+          styles: {
+            CustomFont_A: { fontFamily: 'sans-serif' },
+          },
+        }),
+      }),
+    };
+
+    const layout = await extractPageTextLayout(mockFontPage as any, 0, 0);
+    expect(layout.unloadedFontNames ?? []).toEqual([]);
+    const run = layout.runs[0];
+    const hit = hitTestPageTextPoint(layout, run.box.x + run.box.width / 2, run.box.y + run.box.height / 2, 4, false);
+    expect(hit).not.toBeNull();
+    const miss = hitTestPageTextPoint(layout, run.box.x + run.box.width + 20, run.box.y + run.box.height / 2, 4, false);
+    expect(miss).toBeNull();
+  });
+});

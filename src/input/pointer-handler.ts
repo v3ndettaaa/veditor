@@ -55,10 +55,12 @@ import {
 } from '../annotations/selection';
 import { floatingPropsBar } from '../ui/components/floating-props';
 import { openInlineEditor } from '../ui/components/inline-editor';
+import { drawingCursorValue } from '../ui/cursor';
 
 export class PointerHandler {
   private _isPointerDown: boolean = false;
   private _activePageIndex: number = -1;
+  private _lastHoverTarget: { pageIndex: number; canvas: HTMLCanvasElement; pt: Point } | null = null;
   private _pageScratchCanvas: HTMLCanvasElement | null = null;
   private _pageScratchCtx: CanvasRenderingContext2D | null = null;
   /** Cached bounding rect for the active scratchpad canvas during a stroke to avoid layout reflows on 240Hz pointermove. */
@@ -2445,11 +2447,18 @@ export class PointerHandler {
     );
   }
 
+  public clearHover(pageIndex?: number): void {
+    if (pageIndex === undefined || this._lastHoverTarget?.pageIndex === pageIndex) {
+      this._lastHoverTarget = null;
+    }
+  }
+
   public handleHover(e: PointerEvent, pageIndex: number, canvas: HTMLCanvasElement): void {
     const doc = store.activeDocument;
     if (!doc) return;
     const pageAnns = doc.annotations[pageIndex] || [];
     const pt = this.getPointInPage(e, canvas);
+    this._lastHoverTarget = { pageIndex, canvas, pt: { x: pt.x, y: pt.y } };
 
     const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
     if (selected.length > 0) {
@@ -2503,17 +2512,40 @@ export class PointerHandler {
       }
       const layout = pdfEngine.getCachedPageTextLayout(pageIndex);
       if (layout) {
-        const textHit = hitTestPageTextPoint(layout, pt.x, pt.y, 3.5, false);
-        canvas.style.cursor = textHit ? 'text' : '';
+        const textHit = hitTestPageTextPoint(layout, pt.x, pt.y, 4, false);
+        canvas.style.cursor = textHit ? 'text' : 'default';
       } else {
-        void pdfEngine.getPageTextLayout(pageIndex);
-        canvas.style.cursor = '';
+        canvas.style.cursor = 'default';
+        void pdfEngine.getPageTextLayout(pageIndex).then((loadedLayout) => {
+          const target = this._lastHoverTarget;
+          if (
+            !loadedLayout ||
+            this._isPointerDown ||
+            store.activeTool !== 'select' ||
+            !target ||
+            target.pageIndex !== pageIndex ||
+            target.canvas !== canvas ||
+            !canvas.isConnected
+          ) {
+            return;
+          }
+          const latestAnns = store.activeDocument?.annotations[pageIndex] || [];
+          if (selectionManager.findAnnotationAtPoint(target.pt, latestAnns)) return;
+          const delayedHit = hitTestPageTextPoint(loadedLayout, target.pt.x, target.pt.y, 4, false);
+          if (delayedHit) {
+            canvas.style.cursor = 'text';
+          }
+        });
       }
       return;
     }
 
     if (selected.length > 0) {
-      canvas.style.cursor = '';
+      canvas.style.cursor = drawingCursorValue(
+        store.activeTool,
+        store.toolSettings.drawingCursor || 'pen',
+        store.zoom
+      );
     }
   }
 

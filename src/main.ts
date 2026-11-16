@@ -2352,6 +2352,7 @@ class VeditorApp {
       if (this._lastCanvasPointer?.pageIndex === pageIndex) {
         this._lastCanvasPointer.inside = false;
       }
+      pointerHandler.clearHover(pageIndex);
       floatingPropsBar?.setHoverState(false);
     });
 

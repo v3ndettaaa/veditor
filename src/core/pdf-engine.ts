@@ -1345,16 +1345,36 @@ export class PDFEngine {
     return `${docId}:${pageIndex}:${normRot}`;
   }
 
+  private hasPendingFontsNowLoaded(layout: PageTextLayout): boolean {
+    if (!layout.hasUnloadedFonts || !layout.unloadedFontNames?.length) return false;
+    if (typeof document === 'undefined' || !document.fonts) return false;
+    const wanted = new Set(layout.unloadedFontNames);
+    for (const ff of document.fonts) {
+      if (ff.status !== 'loaded') continue;
+      const cleanName = ff.family.replace(/^["']|["']$/g, '');
+      if (wanted.has(cleanName)) return true;
+    }
+    return false;
+  }
+
   public getCachedPageTextLayout(pageIndex: number, rotationOverride?: number): PageTextLayout | null {
     const key = this.textLayoutKey(pageIndex, rotationOverride);
-    return this._textLayoutCache.get(key) ?? null;
+    const cached = this._textLayoutCache.get(key) ?? null;
+    if (cached && this.hasPendingFontsNowLoaded(cached)) {
+      this._textLayoutCache.delete(key);
+      return null;
+    }
+    return cached;
   }
 
   public async getPageTextLayout(pageIndex: number, rotationOverride?: number): Promise<PageTextLayout | null> {
     if (!this._pdfDoc) return null;
     const key = this.textLayoutKey(pageIndex, rotationOverride);
     const cached = this._textLayoutCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      if (!this.hasPendingFontsNowLoaded(cached)) return cached;
+      this._textLayoutCache.delete(key);
+    }
 
     const existingPromise = this._textLayoutInFlight.get(key);
     if (existingPromise) return existingPromise;
@@ -1372,7 +1392,7 @@ export class PDFEngine {
         return null;
       });
 
-      this._textLayoutInFlight.set(key, promise);
+    this._textLayoutInFlight.set(key, promise);
     return promise;
   }
 

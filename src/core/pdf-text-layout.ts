@@ -29,6 +29,9 @@ export interface PageTextLayout {
   rotation: number;
   fullText: string;
   runs: PdfTextRun[];
+  hasUnloadedFonts?: boolean;
+  requiredFontNames?: string[];
+  unloadedFontNames?: string[];
 }
 
 export interface PdfSearchMatch {
@@ -55,14 +58,19 @@ export interface PdfTextSelection {
 
 interface RawTextItem {
   str: string;
+  dir?: string;
   transform: number[];
   width: number;
   height: number;
+  fontName?: string;
   hasEOL?: boolean;
 }
 
 interface PositionedRawRun {
   str: string;
+  textDir: string;
+  fontName: string;
+  fontFamilyStyle: string;
   hasEOL: boolean;
   baselineX: number;
   baselineY: number;
@@ -81,7 +89,8 @@ function normalizeRotation(deg: number): number {
 
 const MATH_CHAR_REGEX = /[=+\-−×÷*/^_<>≤≥≠≈≡±∓∞∑∏∫∮√∂∇∈∉⊂⊃⊆⊇∪∩∀∃⇒⇔↔→←α-ωΑ-ΩπθλμσΔΣΠΩ0-9()[\]{}|]/;
 const RTL_CHAR_REGEX = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
-const LTR_CHAR_REGEX = /[A-Za-z0-9]/;
+const LOGICAL_RTL_LETTER_REGEX = /[\u0590-\u05FF\u0600-\u08FF]/;
+const LTR_CHAR_REGEX = /[A-Za-z0-9\u0660-\u0669\u06F0-\u06F9]/;
 
 export function isMathLikeText(str: string): boolean {
   return MATH_CHAR_REGEX.test(str);
@@ -95,18 +104,16 @@ function countDirectionalChars(str: string): { rtl: number; ltr: number } {
   let rtl = 0;
   let ltr = 0;
   for (const ch of str) {
-    if (RTL_CHAR_REGEX.test(ch)) rtl++;
+    if (RTL_CHAR_REGEX.test(ch) && !/[\u0660-\u0669\u06F0-\u06F9]/.test(ch)) rtl++;
     else if (LTR_CHAR_REGEX.test(ch)) ltr++;
   }
   return { rtl, ltr };
 }
 
 /**
- * Computes per-character visual bounding boxes within `[boxX, boxX + boxW]`.
- * - For LTR strings, characters progress from left (`boxX`) to right (`boxX + boxW`).
- * - For RTL strings (Persian/Arabic), logical character index 0 is on the RIGHT
- *   (`boxX + boxW - charW`) and progresses right-to-left toward `boxX`, while
- *   keeping any embedded LTR number/word sub-run ordered left-to-right within its span.
+ * Computes per-character visual bounding boxes within `[boxX, boxX + boxW]`
+ * using font-aware heuristic weights (used in headless/Node environments or
+ * when browser DOM measurement is unavailable).
  */
 function buildRunCharBoxes(
   str: string,
@@ -130,7 +137,7 @@ function buildRunCharBoxes(
         charIndex: cursorOffset + c,
         x: accX,
         y: boxY,
-        width: Math.max(0.5, w),
+        width: w === 0 ? 0 : Math.max(0.5, w),
         height: boxH,
       });
       accX += w;
@@ -175,7 +182,7 @@ function buildRunCharBoxes(
           charIndex: cursorOffset + c,
           x: Math.max(boxX, ltrX),
           y: boxY,
-          width: Math.max(0.5, w),
+          width: w === 0 ? 0 : Math.max(0.5, w),
           height: boxH,
         };
         ltrX += w;
@@ -189,7 +196,7 @@ function buildRunCharBoxes(
           charIndex: cursorOffset + c,
           x: Math.max(boxX, curRight),
           y: boxY,
-          width: Math.max(0.5, w),
+          width: w === 0 ? 0 : Math.max(0.5, w),
           height: boxH,
         };
       }
@@ -215,6 +222,8 @@ export async function extractPageTextLayout(
   const viewport = page.getViewport({ scale: 1.0, rotation: totalRotation });
   const textContent = await page.getTextContent();
   const viewportScale = Math.hypot(viewport.transform[0], viewport.transform[1]) || 1;
+
+  const textStyles = ((textContent as { styles?: Record<string, { fontFamily?: string }> }).styles) ?? {};
 
   // Step 1: Transform raw PDF.js text items into viewport space
   const rawRuns: PositionedRawRun[] = [];
@@ -278,8 +287,14 @@ export async function extractPageTextLayout(
     boxW = Math.max(1, Math.min(viewport.width - boxX, boxW));
     boxH = Math.max(1, Math.min(viewport.height - boxY, boxH));
 
+    const fontName = item.fontName || '';
+    const fontFamilyStyle = textStyles[fontName]?.fontFamily || 'sans-serif';
+
     rawRuns.push({
       str,
+      textDir: item.dir || '',
+      fontName,
+      fontFamilyStyle,
       hasEOL: Boolean(item.hasEOL),
       baselineX,
       baselineY,
@@ -364,6 +379,7 @@ export async function extractPageTextLayout(
 
   // Step 3: Order runs within each visual line band using BiDi-aware sorting
   const runs: PdfTextRun[] = [];
+  const runFontMeta: Array<{ fontName: string; fontFamilyStyle: string; textDir: string }> = [];
   const textParts: string[] = [];
   let cursorOffset = 0;
 
@@ -483,8 +499,15 @@ export async function extractPageTextLayout(
         angle: item.angle,
         chars,
       });
+      runFontMeta.push({
+        fontName: item.fontName,
+        fontFamilyStyle: item.fontFamilyStyle,
+        textDir: item.textDir,
+      });
     }
   }
+
+  const fontStatus = await refineRunsWithBrowserLayout(runs, runFontMeta);
 
   return {
     pageIndex,
@@ -493,15 +516,224 @@ export async function extractPageTextLayout(
     rotation: totalRotation,
     fullText: textParts.join(''),
     runs,
+    hasUnloadedFonts: fontStatus.hasUnloadedFonts,
+    requiredFontNames: fontStatus.requiredFontNames,
+    unloadedFontNames: fontStatus.unloadedFontNames,
+  };
+}
+
+interface LoadedFontDescriptor {
+  status: FontFaceLoadStatus;
+  weight: string;
+  style: string;
+  loadedPromise: Promise<FontFace>;
+}
+
+/**
+ * Measures exact per-character bounding boxes using the browser's native
+ * HarfBuzz + BiDi layout engine in a single offscreen batch, utilizing the
+ * actual embedded PDF fonts registered by PDF.js in `document.fonts` when
+ * available. Scales measured widths proportionally into each run's exact
+ * `run.box` coordinates so selection and highlight boxes match rendered text
+ * pixels in both English (LTR) and Persian (RTL/BiDi).
+ */
+async function refineRunsWithBrowserLayout(
+  runs: PdfTextRun[],
+  meta: Array<{ fontName: string; fontFamilyStyle: string; textDir: string }>
+): Promise<{ hasUnloadedFonts: boolean; requiredFontNames: string[]; unloadedFontNames: string[] }> {
+  if (typeof document === 'undefined' || !document.body || runs.length === 0) {
+    return { hasUnloadedFonts: false, requiredFontNames: [], unloadedFontNames: [] };
+  }
+
+  const fontMap = new Map<string, LoadedFontDescriptor>();
+  const fontSet = document.fonts;
+  if (fontSet) {
+    for (const ff of fontSet) {
+      const cleanFamily = ff.family.replace(/^["']|["']$/g, '');
+      const prev = fontMap.get(cleanFamily);
+      if (!prev || ff.status === 'loaded') {
+        fontMap.set(cleanFamily, {
+          status: ff.status,
+          weight: ff.weight || 'normal',
+          style: ff.style || 'normal',
+          loadedPromise: ff.loaded,
+        });
+      }
+    }
+  }
+
+  // Wait briefly if any required PDF font is currently mid-load
+  const loadingWaiters: Promise<unknown>[] = [];
+  const requiredSet = new Set<string>();
+  for (const m of meta) {
+    if (!m.fontName) continue;
+    requiredSet.add(m.fontName);
+    const desc = fontMap.get(m.fontName);
+    if (desc && desc.status === 'loading') {
+      loadingWaiters.push(desc.loadedPromise.catch(() => null));
+    }
+  }
+  if (loadingWaiters.length > 0) {
+    await Promise.race([
+      Promise.allSettled(loadingWaiters),
+      new Promise<void>((resolve) => setTimeout(resolve, 60)),
+    ]);
+    if (fontSet) {
+      for (const ff of fontSet) {
+        const cleanFamily = ff.family.replace(/^["']|["']$/g, '');
+        if (ff.status === 'loaded') {
+          fontMap.set(cleanFamily, {
+            status: ff.status,
+            weight: ff.weight || 'normal',
+            style: ff.style || 'normal',
+            loadedPromise: ff.loaded,
+          });
+        }
+      }
+    }
+  }
+
+  const unloadedSet = new Set<string>();
+  for (const fn of requiredSet) {
+    const desc = fontMap.get(fn);
+    if (!desc || desc.status !== 'loaded') {
+      unloadedSet.add(fn);
+    }
+  }
+  const hasUnloadedFonts = unloadedSet.size > 0;
+
+  const container = document.createElement('div');
+  container.style.cssText =
+    'position:fixed;left:-99999px;top:0;visibility:hidden;pointer-events:none;white-space:pre;line-height:1;contain:layout style;';
+  const nodes: Array<{ run: PdfTextRun; el: HTMLDivElement } | null> = new Array(runs.length).fill(null);
+
+  try {
+    for (let i = 0; i < runs.length; i++) {
+      const run = runs[i];
+      if (!run.str || run.str.length === 0) continue;
+      // Skip pure whitespace-only runs (already trivial uniform width)
+      if (!/\S/.test(run.str)) continue;
+
+      const m = meta[i];
+      const hasLogicalRtl = LOGICAL_RTL_LETTER_REGEX.test(run.str);
+      const isVisualLtrPresentationForms =
+        m.textDir === 'ltr' && !hasLogicalRtl && RTL_CHAR_REGEX.test(run.str);
+      const isRtl =
+        m.textDir === 'rtl' ||
+        (!isVisualLtrPresentationForms && isRtlText(run.str));
+
+      const desc = m.fontName ? fontMap.get(m.fontName) : undefined;
+      const loaded = desc?.status === 'loaded';
+      const baseFallback = isRtl ? `'Vazirmatn', ${m.fontFamilyStyle || 'sans-serif'}` : (m.fontFamilyStyle || 'sans-serif');
+      const cssFamily = loaded ? `"${m.fontName}", ${baseFallback}` : baseFallback;
+      const measureFontSize = Math.max(48, run.fontSize * 4);
+
+      const el = document.createElement('div');
+      el.dir = isRtl ? 'rtl' : 'ltr';
+      el.style.display = 'block';
+      el.style.width = 'max-content';
+      el.style.fontFamily = cssFamily;
+      el.style.fontSize = `${measureFontSize}px`;
+      el.style.fontWeight = loaded ? desc.weight : 'normal';
+      el.style.fontStyle = loaded ? desc.style : 'normal';
+      el.textContent = run.str;
+      container.appendChild(el);
+      nodes[i] = { run, el };
+    }
+
+    if (container.childNodes.length === 0) {
+      return {
+        hasUnloadedFonts,
+        requiredFontNames: Array.from(requiredSet),
+        unloadedFontNames: Array.from(unloadedSet),
+      };
+    }
+
+    document.body.appendChild(container);
+    const range = document.createRange();
+
+    for (let i = 0; i < nodes.length; i++) {
+      const entry = nodes[i];
+      if (!entry) continue;
+      const { run, el } = entry;
+      const textNode = el.firstChild;
+      if (!textNode) continue;
+
+      const spanRect = el.getBoundingClientRect();
+      if (!(spanRect.width > 0.5)) continue;
+
+      const str = run.str;
+      const scaleX = run.box.width / spanRect.width;
+      const measuredChars: PdfTextCharBox[] = new Array(str.length);
+
+      for (let c = 0; c < str.length; c++) {
+        const code = str.charCodeAt(c);
+        const isHighSurrogate =
+          code >= 0xd800 &&
+          code <= 0xdbff &&
+          c + 1 < str.length &&
+          str.charCodeAt(c + 1) >= 0xdc00 &&
+          str.charCodeAt(c + 1) <= 0xdfff;
+        const endIdx = isHighSurrogate ? c + 2 : c + 1;
+
+        range.setStart(textNode, c);
+        range.setEnd(textNode, endIdx);
+        const cr = range.getBoundingClientRect();
+
+        const rawRelLeft = (cr.left - spanRect.left) * scaleX;
+        const clampedRelLeft = Math.max(0, Math.min(run.box.width, rawRelLeft));
+        const scaledW = cr.width * scaleX;
+        const charW =
+          cr.width <= 0.01
+            ? 0
+            : Math.max(0.5, Math.min(run.box.width - clampedRelLeft, scaledW));
+
+        const box: PdfTextCharBox = {
+          charIndex: run.startOffset + c,
+          x: run.box.x + clampedRelLeft,
+          y: run.box.y,
+          width: charW,
+          height: run.box.height,
+        };
+        measuredChars[c] = box;
+
+        if (isHighSurrogate) {
+          measuredChars[c + 1] = {
+            charIndex: run.startOffset + c + 1,
+            x: box.x,
+            y: box.y,
+            width: 0,
+            height: box.height,
+          };
+          c++;
+        }
+      }
+
+      run.chars = measuredChars;
+    }
+  } catch {
+    // Keep heuristic fallback char boxes if DOM Range measurement fails
+  } finally {
+    if (container.parentNode) {
+      container.parentNode.removeChild(container);
+    }
+  }
+
+  return {
+    hasUnloadedFonts,
+    requiredFontNames: Array.from(requiredSet),
+    unloadedFontNames: Array.from(unloadedSet),
   };
 }
 
 function getGlyphRelativeWeight(ch: string): number {
-  if ('\u200c\u200d\u064b\u064c\u064d\u064e\u064f\u0650\u0651\u0652'.includes(ch)) return 0.08;
-  if ('ilI1!|.,:;\'"` اآإأدذرزژو'.includes(ch)) return 0.58;
-  if ('mwMW@%&QGO∑∏∫شصضطظعغفقکگلمنهی'.includes(ch)) return 1.22;
-  if ('frtJ()[]{}'.includes(ch)) return 0.72;
-  return 1.0;
+  if ('\u200c\u200d\u064b\u064c\u064d\u064e\u064f\u0650\u0651\u0652'.includes(ch)) return 0.0;
+  if (ch === ' ') return 0.34;
+  if ('ilI1!|.,:;\'"`اآإأ'.includes(ch)) return 0.38;
+  if ('frtJ()[]{}دذرزژول'.includes(ch)) return 0.56;
+  if ('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.includes(ch)) return 1.18;
+  if ('mwMW@%&QGO∑∏∫شصضطظعغفکگم'.includes(ch)) return 1.24;
+  return 0.96;
 }
 
 export function getRunSliceRect(
@@ -673,19 +905,19 @@ export function hitTestPageTextPoint(
   const targetRun = bestDirectRun ?? (snapNearest ? findNearestRun(layout, pageX, pageY) : null);
   if (!targetRun || targetRun.chars.length === 0) return null;
 
-  // Find the character box in targetRun that contains pageX, or whose center is closest to pageX
+  // Find the visible character box in targetRun that contains pageX, or whose center is closest to pageX
   let bestChar = targetRun.chars[0];
   let bestCharDist = Infinity;
   for (let i = 0; i < targetRun.chars.length; i++) {
     const ch = targetRun.chars[i];
-    if (pageX >= ch.x && pageX <= ch.x + ch.width) {
+    if (ch.width > 0 && pageX >= ch.x && pageX <= ch.x + ch.width) {
       bestChar = ch;
       bestCharDist = 0;
       break;
     }
     const midX = ch.x + ch.width / 2;
     const dist = Math.abs(pageX - midX);
-    if (dist < bestCharDist) {
+    if (dist < bestCharDist || (dist === bestCharDist && ch.width > bestChar.width)) {
       bestCharDist = dist;
       bestChar = ch;
     }
@@ -742,32 +974,55 @@ export function getWordOrMathRangeAtPoint(
   const maxRunOffset = clickedRun ? Math.max(clickedRun.startOffset, clickedRun.endOffset - 1) : len - 1;
   let pivot = Math.min(Math.max(minRunOffset, hit.charOffset), Math.min(maxRunOffset, len - 1));
 
-  // If clicked on a space inside the run, step to adjacent non-space inside the same run
+  // If clicked on a space inside the run, pick the visually closer non-space neighbor inside the same run
   if (/\s/.test(text[pivot])) {
-    if (pivot > minRunOffset && !/\s/.test(text[pivot - 1])) {
+    const prevValid = pivot > minRunOffset && !/\s/.test(text[pivot - 1]);
+    const nextValid = pivot < maxRunOffset && !/\s/.test(text[pivot + 1]);
+    if (prevValid && nextValid && clickedRun) {
+      const prevBox = clickedRun.chars[pivot - 1 - clickedRun.startOffset];
+      const nextBox = clickedRun.chars[pivot + 1 - clickedRun.startOffset];
+      const prevDist = prevBox ? Math.abs(pageX - (prevBox.x + prevBox.width / 2)) : Infinity;
+      const nextDist = nextBox ? Math.abs(pageX - (nextBox.x + nextBox.width / 2)) : Infinity;
+      pivot = nextDist < prevDist ? pivot + 1 : pivot - 1;
+    } else if (prevValid) {
       pivot -= 1;
-    } else if (pivot < maxRunOffset && !/\s/.test(text[pivot + 1])) {
+    } else if (nextValid) {
       pivot += 1;
     }
   }
   if (/\s/.test(text[pivot])) return null;
 
   const pivotChar = text[pivot];
-  const pivotIsRtl = RTL_CHAR_REGEX.test(pivotChar);
+  const isArabicDigit = /[\u0660-\u0669\u06F0-\u06F9]/.test(pivotChar);
+  const pivotIsRtl = RTL_CHAR_REGEX.test(pivotChar) && !isArabicDigit;
 
-  // Script-aware word character predicates (includes ZWNJ \u200C for Persian words like «می‌شود»)
-  const isRtlWordChar = (ch: string) => /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF\u200C\u200D]/u.test(ch);
-  const isLtrWordChar = (ch: string) => /[A-Za-z0-9_'-]/.test(ch);
+  // Script-aware word character predicates:
+  // - Persian/Arabic includes ZWNJ/ZWJ (\u200C/\u200D) for compound words like «می‌شود»,
+  //   while excluding Persian/Arabic punctuation («،», «؛», «؟», «٪», «٫», «٬», «٭», «۔»).
+  // - English/Latin supports letters, digits, underscores, internal apostrophes/hyphens.
+  const isRtlPunct = (ch: string) => /[\u060C\u061B\u061F\u066A-\u066D\u06D4]/.test(ch);
+  const isRtlWordChar = (ch: string) =>
+    !isRtlPunct(ch) &&
+    !/[\u0660-\u0669\u06F0-\u06F9]/.test(ch) &&
+    /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF\u200C\u200D]/u.test(ch);
+  const isLtrWordChar = (ch: string) => /[A-Za-z0-9_'\u0660-\u0669\u06F0-\u06F9-]/.test(ch);
   const isSameScriptWordChar = (ch: string) => (pivotIsRtl ? isRtlWordChar(ch) : isLtrWordChar(ch));
 
   const isMathTokenChar = (ch: string) =>
     !RTL_CHAR_REGEX.test(ch) &&
     /[\p{L}\p{N}_+\-−×÷*/^=<>≤≥≠≈≡±∓∞∑∏∫∮√∂∇∈∉⊂⊃⊆⊇∪∩∀∃⇒⇔↔→←()[\]{}.,:|]/u.test(ch);
 
-  // Check if the surrounding window looks like a math expression (only when not clicking Persian text)
-  const winStart = Math.max(0, pivot - 8);
-  const winEnd = Math.min(len, pivot + 9);
-  const windowStr = text.slice(winStart, winEnd);
+  // Measure the base word length around pivot to avoid falsely treating normal prose
+  // near parentheses or slashes (e.g. "(Crop, Merge)" or "Tool / Hand") as math expressions.
+  let plainWordStart = pivot;
+  let plainWordEnd = pivot + 1;
+  if (isLtrWordChar(pivotChar)) {
+    while (plainWordStart > 0 && /[A-Za-z0-9_]/.test(text[plainWordStart - 1])) plainWordStart--;
+    while (plainWordEnd < len && /[A-Za-z0-9_]/.test(text[plainWordEnd])) plainWordEnd++;
+  }
+  const plainWordLen = plainWordEnd - plainWordStart;
+
+  const tightWindow = text.slice(Math.max(0, pivot - 4), Math.min(len, pivot + 5));
   const neighborRunA = layout.runs[hit.runIndex - 1];
   const neighborRunB = layout.runs[hit.runIndex + 1];
   const hasBaselineShiftNeighbor = Boolean(
@@ -775,11 +1030,13 @@ export function getWordOrMathRangeAtPoint(
     ((neighborRunA && Math.abs(neighborRunA.baselineY - clickedRun.baselineY) > 1.2 && Math.abs(neighborRunA.baselineY - clickedRun.baselineY) < clickedRun.fontSize * 0.85) ||
      (neighborRunB && Math.abs(neighborRunB.baselineY - clickedRun.baselineY) > 1.2 && Math.abs(neighborRunB.baselineY - clickedRun.baselineY) < clickedRun.fontSize * 0.85))
   );
+  const hasExplicitMathOperator = /[=+\-−×÷*^<>≤≥≠≈≡±∓∞∑∏∫∮√∂∇∈∉⊂⊃∪∩]/.test(tightWindow);
+  const looksLikeProseWord = plainWordLen >= 3 && !hasBaselineShiftNeighbor && !/[=<>≤≥≠≈≡±∓∞∑∏∫∮√∂∇∈∉⊂⊃∪∩]/.test(tightWindow);
 
   const mathMode =
     !pivotIsRtl &&
-    isMathLikeText(windowStr) &&
-    (hasBaselineShiftNeighbor || /[=+\-−×÷*/^_<>≤≥≠≈≡±∓∞∑∏∫∮√∂∇∈∉⊂⊃∪∩()]/.test(windowStr));
+    !looksLikeProseWord &&
+    (hasBaselineShiftNeighbor || hasExplicitMathOperator);
 
   let start = pivot;
   let end = pivot + 1;
@@ -807,12 +1064,22 @@ export function getWordOrMathRangeAtPoint(
         break;
       }
     }
-    while (end > start + 1 && /[.,;:]/.test(text[end - 1])) {
+    while (end > start + 1 && /[.,;:\s]/.test(text[end - 1])) {
       end--;
+    }
+    while (start < end - 1 && /\s/.test(text[start])) {
+      start++;
     }
   } else if (isSameScriptWordChar(pivotChar)) {
     while (start > 0 && isSameScriptWordChar(text[start - 1])) start--;
     while (end < len && isSameScriptWordChar(text[end])) end++;
+    if (pivotIsRtl) {
+      while (start < end - 1 && (text[start] === '\u200C' || text[start] === '\u200D')) start++;
+      while (end > start + 1 && (text[end - 1] === '\u200C' || text[end - 1] === '\u200D')) end--;
+    } else {
+      while (start < end - 1 && (text[start] === "'" || text[start] === '-')) start++;
+      while (end > start + 1 && (text[end - 1] === "'" || text[end - 1] === '-')) end--;
+    }
   } else {
     while (start > 0 && !/\s/.test(text[start - 1]) && !isRtlWordChar(text[start - 1]) && !isLtrWordChar(text[start - 1])) start--;
     while (end < len && !/\s/.test(text[end]) && !isRtlWordChar(text[end]) && !isLtrWordChar(text[end])) end++;
