@@ -887,8 +887,8 @@ export class PDFEngine {
     const rawW = Math.floor(rawViewport.width);
     const rawH = Math.floor(rawViewport.height);
     const largest = Math.max(rawW, rawH);
-    const maxDim = scale > 2.2 ? 2048 : ADAPTIVE_CANVAS_MAX_DIMENSION;
-    const maxPixels = scale > 2.2 ? 2048 * 2048 : ADAPTIVE_CANVAS_MAX_PIXELS;
+    const maxDim = scale > 2.2 ? 1536 : ADAPTIVE_CANVAS_MAX_DIMENSION;
+    const maxPixels = scale > 2.2 ? 1536 * 1536 : ADAPTIVE_CANVAS_MAX_PIXELS;
     if (largest > maxDim && largest > 0) {
       renderScale *= maxDim / largest;
     }

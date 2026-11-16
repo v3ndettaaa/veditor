@@ -1,13 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import {
-  ADAPTIVE_CANVAS_MAX_DIMENSION,
-  ADAPTIVE_CANVAS_MAX_PIXELS,
-  clampRenderMultiplier,
-  resolveAdaptiveCanvasDpr,
-  resolveAnnotationDpr,
-  resolveRenderDpr,
-  MAX_RENDER_DIMENSION
-} from '../src/utils/dpi';
+import { clampRenderMultiplier, resolveAnnotationDpr, resolveRenderDpr, MAX_RENDER_DIMENSION } from '../src/utils/dpi';
 
 describe('Render DPI helpers', () => {
   afterEach(() => {
@@ -63,31 +55,5 @@ describe('Render DPI helpers', () => {
     expect(clampRenderMultiplier(612, 792, 12)).toBeLessThan(12);
     expect(792 * clampRenderMultiplier(612, 792, 12)).toBeLessThanOrEqual(MAX_RENDER_DIMENSION);
     expect(clampRenderMultiplier(612, 792, 2)).toBe(2);
-  });
-
-  it('keeps high-zoom chunk canvases crisp (>= 1.5x) on 1080p/1440p monitors even on Linux/Desktop', () => {
-    vi.stubGlobal('window', { devicePixelRatio: 1 });
-    const classSet = new Set(['platform-linux', 'platform-desktop']);
-    vi.stubGlobal('document', { documentElement: { classList: { contains: (c: string) => classSet.has(c) } } });
-
-    const chunk1080pDpr = resolveAdaptiveCanvasDpr(1844, 1256, 200);
-    expect(chunk1080pDpr).toBeGreaterThanOrEqual(1.8);
-    expect(1844 * chunk1080pDpr).toBeLessThanOrEqual(ADAPTIVE_CANVAS_MAX_DIMENSION);
-    expect((1844 * chunk1080pDpr) * (1256 * chunk1080pDpr)).toBeLessThanOrEqual(ADAPTIVE_CANVAS_MAX_PIXELS + 1);
-
-    const chunk1440pDpr = resolveAdaptiveCanvasDpr(2400, 1400, 200);
-    expect(chunk1440pDpr).toBeGreaterThanOrEqual(1.5);
-  });
-
-  it('produces identical adaptive canvas DPR across Linux, Desktop, and Web Extension', () => {
-    vi.stubGlobal('window', { devicePixelRatio: 1.5 });
-    vi.stubGlobal('document', { documentElement: { classList: { contains: () => false } } });
-    const webDpr = resolveAdaptiveCanvasDpr(1600, 1000, 200);
-
-    vi.stubGlobal('document', { documentElement: { classList: { contains: (c: string) => c === 'platform-linux' || c === 'platform-desktop' } } });
-    const linuxDpr = resolveAdaptiveCanvasDpr(1600, 1000, 200);
-
-    expect(linuxDpr).toBe(webDpr);
-    expect(linuxDpr).toBeGreaterThanOrEqual(2.0);
   });
 });

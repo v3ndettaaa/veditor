@@ -6,7 +6,7 @@
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
 import { getWordOrMathRangeAtPoint } from './core/pdf-text-layout';
-import { viewportManager, rotatedPageSize, normalizeWheelDeltaY } from './core/viewport';
+import { viewportManager, rotatedPageSize } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
 import { HeaderComponent } from './ui/components/header';
@@ -128,8 +128,6 @@ class VeditorApp {
   private _previewPendingFactor: number = 1;
   private _previewPendingCenter: { x: number; y: number } | null = null;
   private _isZoomGestureActive: boolean = false;
-  /** Most recently drawn page whose scratchpad backing store stays pooled to avoid per-stroke Cairo allocations. */
-  private _warmScratchPageIndex: number = -1;
 
   /**
    * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
@@ -270,15 +268,10 @@ class VeditorApp {
       }
     });
 
-    // Rebuilding a notebook replaces its PDF bytes, so invalidate mounted pages
-    // in place without tearing down active containers/scratchpads mid-stroke.
+    // Rebuilding a notebook replaces its PDF bytes, so every mounted page has
+    // to be dropped and re-rendered from the new document.
     notebookController.init(() => {
-      const count = store.activeDocument?.pageCount ?? 0;
-      if (count === 0) {
-        this.clearRenderedPages();
-      } else {
-        this.invalidateRenderedPagesInPlace(count);
-      }
+      this.clearRenderedPages();
       viewportManager.updateLayout(true);
     });
 
@@ -960,7 +953,6 @@ class VeditorApp {
       }
     }
     this._renderedPages.clear();
-    this._warmScratchPageIndex = -1;
   }
 
   /**
@@ -990,9 +982,6 @@ class VeditorApp {
         p.needsRaster = true;
         p.needsRepaint = true;
       }
-    }
-    if (this._warmScratchPageIndex >= newPageCount) {
-      this._warmScratchPageIndex = -1;
     }
   }
 
@@ -1169,11 +1158,8 @@ class VeditorApp {
         this.invalidateRenderedPagesInPlace(store.activeDocument.pageCount);
       }
       // The size-indicating cursors are drawn at the on-screen brush size, so
-      // they have to be refreshed on zoom as well as on tool changes. Defer
-      // SVG cursor regeneration until commitZoomPreview() finishes a gesture.
-      if (!this._isZoomGestureActive) {
-        this.updateCanvasCursors();
-      }
+      // they have to be refreshed on zoom as well as on tool changes.
+      this.updateCanvasCursors();
       viewportManager.updateLayout(true);
       return;
     }
@@ -1277,7 +1263,6 @@ class VeditorApp {
       return;
     }
     this._isZoomGestureActive = false;
-    this.updateCanvasCursors();
     viewportManager.handleScroll(true);
   }
 
@@ -1300,7 +1285,7 @@ class VeditorApp {
     chunk: HTMLCanvasElement | undefined,
     _container: HTMLElement,
     layout: { top: number; left: number; width: number; height: number },
-    marginPx: number = 32
+    marginPx: number = 48
   ): boolean {
     if (!chunk || chunk.style.display !== 'block' || chunk.width <= 1 || chunk.height <= 1) return false;
     if (!this._scrollContainer) return false;
@@ -1351,7 +1336,7 @@ class VeditorApp {
     layout: { top: number; left: number; width: number; height: number }
   ): { x: number; y: number; width: number; height: number } | null {
     if (!this._scrollContainer) return null;
-    const pad = 128;
+    const pad = 192;
     const pageW = Math.max(1, Math.ceil(layout.width));
     const pageH = Math.max(1, Math.ceil(layout.height));
 
@@ -1425,8 +1410,7 @@ class VeditorApp {
           p.scratchChunkCanvas.width = 0;
           p.scratchChunkCanvas.height = 0;
         }
-        const wasAnnotZero = p.annotCanvas.width <= 1 || p.annotCanvas.height <= 1;
-        if (layout && (!this._isFastScrolling || wasAnnotZero)) {
+        if (layout && !this._isFastScrolling) {
           const dpr = resolveAdaptiveCanvasDpr(layout.width, layout.height, store.appSettings.targetDPI);
           const w = Math.max(1, Math.round(layout.width * dpr));
           const h = Math.max(1, Math.round(layout.height * dpr));
@@ -1467,23 +1451,17 @@ class VeditorApp {
         continue;
       }
 
-      const annotMissing =
-        !p.annotChunkCanvas ||
-        p.annotChunkCanvas.style.display !== 'block' ||
-        p.annotChunkCanvas.width <= 1 ||
-        p.annotChunkCanvas.height <= 1;
-
-      if (this._isFastScrolling && !forceUpdate && !annotMissing) {
+      if (this._isFastScrolling && !forceUpdate) {
         continue;
       }
 
-      const annotCovered = !forceUpdate && this.doesChunkCoverViewport(p.annotChunkCanvas, p.container, layout, 32);
+      const annotCovered = !forceUpdate && this.doesChunkCoverViewport(p.annotChunkCanvas, p.container, layout, 48);
       if (!annotCovered) {
         this.updateAnnotationChunkGeometry(pageIndex, p, chunkRect, false);
       }
 
-      if (renderPdfRaster && (!this._isFastScrolling || forceUpdate)) {
-        const pdfCovered = !forceUpdate && this.doesChunkCoverViewport(chunkCanvas, p.container, layout, 32);
+      if (renderPdfRaster) {
+        const pdfCovered = !forceUpdate && this.doesChunkCoverViewport(chunkCanvas, p.container, layout, 48);
         if (!pdfCovered) {
           void pdfEngine.renderPageChunkToCanvas(pageIndex, chunkCanvas, store.zoom, rot, chunkRect);
         }
@@ -1538,7 +1516,12 @@ class VeditorApp {
     const scratchChunk = p.scratchChunkCanvas;
     if (!annotChunk || !scratchChunk) return;
 
-    const targetChunkDpi = Math.max(store.appSettings.targetDPI || 200, 200);
+    const isLinuxDesktop =
+      document.documentElement.classList.contains('platform-linux') ||
+      document.documentElement.classList.contains('platform-desktop');
+    const targetChunkDpi = isLinuxDesktop
+      ? (store.appSettings.targetDPI || 150)
+      : Math.max(store.appSettings.targetDPI || 200, 200);
     const nativeDpr = resolveAdaptiveCanvasDpr(
       chunkRect.width,
       chunkRect.height,
@@ -1566,10 +1549,7 @@ class VeditorApp {
     }
 
     if (!isStrokeOnPage) {
-      const needScratch =
-        allocateScratch ||
-        pointerHandler.isPolygonActiveOnPage(pageIndex) ||
-        pageIndex === this._warmScratchPageIndex;
+      const needScratch = allocateScratch || pointerHandler.isPolygonActiveOnPage(pageIndex);
       if (needScratch) {
         if (scratchChunk.width !== pw || scratchChunk.height !== ph) {
           scratchChunk.width = pw;
@@ -1615,21 +1595,6 @@ class VeditorApp {
       window.clearTimeout(this._chunkUpdateTimer);
       this._chunkUpdateTimer = null;
     }
-    const prevWarm = this._warmScratchPageIndex;
-    this._warmScratchPageIndex = pageIndex;
-    if (prevWarm !== -1 && prevWarm !== pageIndex && !pointerHandler.isPolygonActiveOnPage(prevWarm)) {
-      const prevPage = this._renderedPages.get(prevWarm);
-      if (prevPage) {
-        if (prevPage.scratchCanvas.width > 1 || prevPage.scratchCanvas.height > 1) {
-          prevPage.scratchCanvas.width = 1;
-          prevPage.scratchCanvas.height = 1;
-        }
-        if (prevPage.scratchChunkCanvas && (prevPage.scratchChunkCanvas.width > 1 || prevPage.scratchChunkCanvas.height > 1)) {
-          prevPage.scratchChunkCanvas.width = 1;
-          prevPage.scratchChunkCanvas.height = 1;
-        }
-      }
-    }
     const p = this._renderedPages.get(pageIndex);
     const layout = viewportManager.getLayout(pageIndex);
     if (!p || !layout) return;
@@ -1663,12 +1628,11 @@ class VeditorApp {
   }
 
   /**
-   * Keeps the active page's scratchpad pooled between consecutive strokes so
-   * WebKitGTK never pays per-stroke Cairo surface allocation lag, and collapses
-   * scratchpads on inactive pages.
+   * Releases the temporary scratchpad backing store back to 1x1 once a stroke
+   * finishes so idle pages consume 0 bytes of scratchpad VRAM.
    */
   private releasePageScratchpad(pageIndex: number): void {
-    if (pageIndex === this._warmScratchPageIndex || pointerHandler.isPolygonActiveOnPage(pageIndex)) return;
+    if (pointerHandler.isPolygonActiveOnPage(pageIndex)) return;
     const p = this._renderedPages.get(pageIndex);
     if (!p) return;
     if (p.scratchCanvas.width !== 1 || p.scratchCanvas.height !== 1) {
@@ -1759,9 +1723,8 @@ class VeditorApp {
     this._scrollContainer.addEventListener('wheel', (e) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        // Normalize line/page wheel deltas & clamp libinput/Wayland spikes
-        const normDeltaY = normalizeWheelDeltaY(e.deltaY, e.deltaMode);
-        const factor = Math.exp(-normDeltaY * 0.0035);
+        // Smooth exponential factor for both trackpad pinch and mouse wheel
+        const factor = Math.exp(-e.deltaY * 0.0035);
         this.previewZoomBy(factor, { x: e.clientX, y: e.clientY });
       }
     }, { passive: false });
@@ -2155,7 +2118,7 @@ class VeditorApp {
     const w = Math.max(1, Math.round(layout.width * dpr));
     const h = Math.max(1, Math.round(layout.height * dpr));
 
-    if (!useChunk && (!this._isFastScrolling || p.annotCanvas.width <= 1 || p.annotCanvas.height <= 1)) {
+    if (!useChunk && !this._isFastScrolling) {
       if (p.annotCanvas.width !== w || p.annotCanvas.height !== h) {
         p.annotCanvas.width = w;
         p.annotCanvas.height = h;
@@ -2166,10 +2129,9 @@ class VeditorApp {
       }
     }
 
-    // Keep idle scratchpad backing stores at 0x0 on non-active pages to save VRAM,
-    // while keeping the most recently drawn page's scratchpad pooled for 0ms pen latency.
+    // Keep idle scratchpad backing stores at 0x0 to save VRAM; allocated on-demand on pointerdown.
     const isStrokeOnPage = pointerHandler.isPointerDown && pageIndex === pointerHandler.activePageIndex;
-    if (!isStrokeOnPage && !pointerHandler.isPolygonActiveOnPage(pageIndex) && pageIndex !== this._warmScratchPageIndex) {
+    if (!isStrokeOnPage && !pointerHandler.isPolygonActiveOnPage(pageIndex)) {
       if (p.scratchCanvas.width > 1 || p.scratchCanvas.height > 1) {
         p.scratchCanvas.width = 0;
         p.scratchCanvas.height = 0;
@@ -2363,12 +2325,12 @@ class VeditorApp {
         this._scrollContainer.scrollTop = this._handPan.scrollT - (e.clientY - this._handPan.startY);
         return;
       }
+      this._lastCanvasPointer = {
+        pageIndex,
+        point: pointerHandler.pagePointForEvent(e, canvas),
+        inside: true
+      };
       if (!pointerHandler.isPointerDown) {
-        this._lastCanvasPointer = {
-          pageIndex,
-          point: pointerHandler.pagePointForEvent(e, canvas),
-          inside: true
-        };
         pointerHandler.handleHover(e, pageIndex, canvas);
         // Polygon vertices are placed on click, so its elastic edge must also
         // receive unpressed moves. `handlePointerMove` returns immediately for

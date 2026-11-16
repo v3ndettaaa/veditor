@@ -130,10 +130,10 @@ async fn native_build_file_tree(root_path: String) -> Result<Option<RustFileNode
     .map_err(|e| e.to_string())?
 }
 
-/// Configures WebKitGTK on Linux (Arch/Hyprland/Wayland/AppImage/X11) so
-/// hardware compositing stays stable without DMA-BUF swapchain corruption,
-/// lag, or sandbox crashes inside FUSE AppImage mounts. Opt back in to DMA-BUF
-/// with `VEDITOR_ENABLE_DMABUF=1`.
+/// Configures WebKitGTK on Linux (Ubuntu/AppImage/Wayland/X11) so hardware-accelerated
+/// compositing stays enabled by default while preventing bubblewrap sandbox crashes inside
+/// FUSE AppImage mounts. Users with broken Mesa/NVIDIA DMA-BUF drivers can still opt out
+/// by setting `VEDITOR_DISABLE_DMABUF=1` or `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 #[cfg(target_os = "linux")]
 fn configure_linux_webview_env() {
     // Safety: called at process startup before spawning threads.
@@ -141,22 +141,13 @@ fn configure_linux_webview_env() {
         if std::env::var_os("WEBKIT_FORCE_SANDBOX").is_none() {
             std::env::set_var("WEBKIT_FORCE_SANDBOX", "0");
         }
-        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
-        }
-        let enable_dmabuf = std::env::var_os("VEDITOR_ENABLE_DMABUF").is_some();
-        let force_disable_dmabuf = std::env::var_os("VEDITOR_DISABLE_DMABUF").is_some();
-        let is_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-            || std::env::var("XDG_SESSION_TYPE")
-                .map(|v| v.eq_ignore_ascii_case("wayland"))
-                .unwrap_or(false);
-        let is_appimage = std::env::var_os("APPIMAGE").is_some();
-        let has_nvidia = Path::new("/proc/driver/nvidia/version").exists();
-
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
-            && (force_disable_dmabuf || (!enable_dmabuf && (is_wayland || is_appimage || has_nvidia)))
+        if std::env::var_os("VEDITOR_DISABLE_DMABUF").is_some()
+            && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
         {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
         }
     }
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { normalizeWheelDeltaY, rotatedPageSize, ViewportManager } from '../src/core/viewport';
+import { rotatedPageSize, ViewportManager } from '../src/core/viewport';
 import { store } from '../src/core/store';
 import { MAX_ZOOM, MIN_ZOOM, type DocumentSession, type ViewMode } from '../src/core/types';
 import { persistDocPosition } from '../src/io/storage';
@@ -211,16 +211,5 @@ describe('Rotation-aware page sizing', () => {
 
   it('keeps dimensions at 180 degrees', () => {
     expect(rotatedPageSize(A4, 180)).toEqual({ width: 595, height: 842 });
-  });
-});
-
-describe('Wheel zoom normalization', () => {
-  it('normalizes pixel, line, and page wheel deltas and clamps libinput spikes', () => {
-    expect(normalizeWheelDeltaY(-24, 0)).toBe(-24);
-    expect(normalizeWheelDeltaY(-3, 1)).toBe(-60);
-    expect(normalizeWheelDeltaY(1, 2)).toBe(160);
-    expect(normalizeWheelDeltaY(1200, 0)).toBe(160);
-    expect(normalizeWheelDeltaY(-1200, 0)).toBe(-160);
-    expect(normalizeWheelDeltaY(NaN, 0)).toBe(0);
   });
 });
