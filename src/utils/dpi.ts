@@ -18,12 +18,12 @@ export const BASE_PDF_DPI = 72;
 export const MAX_RENDER_DIMENSION = 6144;
 
 /**
- * Adaptive interactive canvas dimension ceiling (4096px GPU texture limit) and
- * area budget (~9.4 megapixels = 3072x3072) so integrated GPUs and Linux
- * WebKitGTK never stall or OOM when allocating page backing stores.
+ * Adaptive interactive canvas dimension ceiling (under 4096px GPU texture limit)
+ * and ~9.4 MP area budget (3072x3072) so large zoomed viewports and HiDPI
+ * handwriting chunks stay crisp on every platform including Linux/Wayland.
  */
-export const ADAPTIVE_CANVAS_MAX_DIMENSION = 2304;
-export const ADAPTIVE_CANVAS_MAX_PIXELS = 2304 * 1728;
+export const ADAPTIVE_CANVAS_MAX_DIMENSION = 3840;
+export const ADAPTIVE_CANVAS_MAX_PIXELS = 3072 * 3072;
 
 export function getDevicePixelRatio(): number {
   if (typeof window !== 'undefined' && window.devicePixelRatio) {
@@ -71,41 +71,24 @@ export function clampRenderMultiplier(
   return multiplier;
 }
 
-const LINUX_DESKTOP_MAX_DIMENSION = 1920;
-const LINUX_DESKTOP_MAX_PIXELS = 1920 * 1440;
-
-function isLinuxOrDesktopWebView(): boolean {
-  if (typeof document !== 'undefined') {
-    const cl = document.documentElement?.classList;
-    if (cl && (cl.contains('platform-linux') || cl.contains('platform-desktop'))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /**
- * Smart hardware-friendly backing-store multiplier for live interactive
- * canvases (annotations + scratchpad). Balances crisp 150–200 DPI rendering
- * with a strict 4K dimension/area cap so weak GPUs and Linux WebKitGTK
- * AppImage builds stay at a locked 60fps matching the browser extension.
+ * Hardware-friendly backing-store multiplier for live interactive canvases
+ * (annotations, scratchpad, and viewport chunks). Uses the same 1.5x–2.5x
+ * HiDPI floor/ceiling and 3840px / 9.4MP budget on Linux, Windows, and Web so
+ * ink strokes never drop below 1:1 resolution at high zoom on large monitors.
  */
 export function resolveAdaptiveCanvasDpr(
   cssWidth: number,
   cssHeight: number,
   targetDPI?: number
 ): number {
-  const isLinuxDesktop = isLinuxOrDesktopWebView();
-  const maxDpr = isLinuxDesktop ? 2.0 : 2.5;
-  const minDpr = isLinuxDesktop ? 1.25 : 1.5;
-  const maxDim = isLinuxDesktop ? LINUX_DESKTOP_MAX_DIMENSION : ADAPTIVE_CANVAS_MAX_DIMENSION;
-  const maxPixels = isLinuxDesktop ? LINUX_DESKTOP_MAX_PIXELS : ADAPTIVE_CANVAS_MAX_PIXELS;
-
+  const maxDpr = 2.5;
+  const minDpr = 1.5;
   const rawDpr = Math.min(maxDpr, Math.max(minDpr, getDevicePixelRatio(), resolveRenderDpr(targetDPI)));
-  let mult = clampRenderMultiplier(cssWidth, cssHeight, rawDpr, maxDim);
+  let mult = clampRenderMultiplier(cssWidth, cssHeight, rawDpr, ADAPTIVE_CANVAS_MAX_DIMENSION);
   const area = (cssWidth * mult) * (cssHeight * mult);
-  if (area > maxPixels && area > 0) {
-    mult *= Math.sqrt(maxPixels / area);
+  if (area > ADAPTIVE_CANVAS_MAX_PIXELS && area > 0) {
+    mult *= Math.sqrt(ADAPTIVE_CANVAS_MAX_PIXELS / area);
   }
   return mult;
 }
