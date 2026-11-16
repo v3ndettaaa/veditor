@@ -996,6 +996,7 @@ export class FloatingPropsBarComponent {
       e.stopPropagation();
       const currentSel = store.textSelection;
       if (!currentSel || !currentSel.text) return;
+      store.setClipboardText(currentSel.text);
       try {
         await navigator.clipboard.writeText(currentSel.text);
       } catch {

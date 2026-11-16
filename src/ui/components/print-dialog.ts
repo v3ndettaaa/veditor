@@ -519,9 +519,8 @@ async function runDirectBrowserPrint(docName: string, pageCount: number, colorMo
 
 /**
  * Triggers printing:
- * - In Light Mode: opens the browser's built-in system print dialog immediately.
- * - In Dark Mode: briefly asks the user whether to print on Light Paper or Dark Mode,
- *   then immediately opens the browser's built-in system print dialog.
+ * Always asks the user cleanly whether to print on Light Paper or Dark Mode
+ * before opening the browser's built-in system print dialog.
  */
 export function openPrintDialog(): void {
   const doc = store.activeDocument;
@@ -536,12 +535,7 @@ export function openPrintDialog(): void {
     document.body.classList.contains('invert-pdf-document')
   );
 
-  if (!isDarkPdf) {
-    void runDirectBrowserPrint(doc.name, doc.pageCount, 'color');
-    return;
-  }
-
-  // Dark Mode active: ask user cleanly whether to print in Light Paper or Dark Mode before invoking browser print dialog.
+  // Ask user cleanly whether to print in Light Paper or Dark Mode before invoking browser print dialog.
   const host = document.createElement('div');
   document.body.appendChild(host);
   let closed = false;
@@ -562,27 +556,34 @@ export function openPrintDialog(): void {
   };
   window.addEventListener('keydown', onKey, true);
 
+  const descText = isDarkPdf
+    ? tr(
+        'Dark viewing mode is active. Choose how your printed pages should look before opening the system print dialog:',
+        'نمای تاریک فعال است. پیش از باز شدن پنجره چاپ سیستم، حالت کاغذ را انتخاب کنید:'
+      )
+    : tr(
+        'Choose whether to print your PDF on light paper or in dark mode before opening the system print dialog:',
+        'پیش از باز شدن پنجره چاپ سیستم، چاپ به صورت صفحه روشن یا تم تاریک را انتخاب کنید:'
+      );
+
   host.innerHTML = `
     <div class="modal-overlay" id="print-theme-overlay">
-      <div class="modal-dialog form-dialog print-theme-dialog" role="dialog" aria-modal="true" aria-label="${tr('Print Paper Appearance', 'نحوه چاپ در حالت تاریک')}">
+      <div class="modal-dialog form-dialog print-theme-dialog" role="dialog" aria-modal="true" aria-label="${tr('Print Appearance', 'حالت چاپ صفحات')}">
         <div class="panel-header">
-          <span>${getIconSvg('printer', 15)} ${tr('Print in Dark Mode', 'نحوه چاپ صفحات')}</span>
+          <span>${getIconSvg('printer', 15)} ${tr('Print Appearance', 'حالت چاپ صفحات')}</span>
           <button type="button" id="print-theme-close" class="icon-btn" title="${tr('Close', 'بستن')}" aria-label="${tr('Close', 'بستن')}">${getIconSvg('close', 14)}</button>
         </div>
         <div class="form-dialog-body print-theme-body">
-          <p class="print-theme-desc">${tr(
-            'Dark viewing mode is active. Choose how your printed pages should look before opening the system print dialog:',
-            'نمای تاریک فعال است. پیش از باز شدن پنجره چاپ سیستم، حالت کاغذ را انتخاب کنید:'
-          )}</p>
+          <p class="print-theme-desc">${descText}</p>
           <div class="print-theme-choices">
-            <button type="button" id="print-choice-light" class="print-theme-card is-recommended">
+            <button type="button" id="print-choice-light" class="print-theme-card ${!isDarkPdf ? 'is-recommended' : ''}">
               <span class="print-theme-swatch is-light" aria-hidden="true">Aa</span>
               <span class="print-theme-info">
                 <span class="print-theme-title">${tr('Light Paper (Recommended)', 'کاغذ روشن (پیشنهادی)')}</span>
                 <span class="print-theme-sub">${tr('Crisp white background · saves printer ink', 'پس‌زمینه سفید اصلی · صرفه‌جویی در جوهر')}</span>
               </span>
             </button>
-            <button type="button" id="print-choice-dark" class="print-theme-card">
+            <button type="button" id="print-choice-dark" class="print-theme-card ${isDarkPdf ? 'is-recommended' : ''}">
               <span class="print-theme-swatch is-dark" aria-hidden="true">Aa</span>
               <span class="print-theme-info">
                 <span class="print-theme-title">${tr('Dark Mode (As Displayed)', 'تم تاریک (مشابه صفحه)')}</span>

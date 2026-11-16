@@ -19,12 +19,18 @@ import {
 } from '../../core/types';
 import { pointerHandler } from '../../input/pointer-handler';
 import {
+  appendTextToStickyNote,
   cloneAnnotation,
+  embedAnnotationsInStickyNote,
   getAnnotationSelectionBox,
   moveAnnotationsInZOrder,
   offsetAnnotation,
-  selectionManager
+  selectionManager,
+  wrapPlainTextForTextBox
 } from '../../annotations/selection';
+import { findExpandedStickyNoteTarget } from '../../annotations/tools/sticky-note';
+import { textTool } from '../../annotations/tools/text';
+import { resolveAnnotationFontFamily } from '../../core/fonts';
 import { mergeBoundingBoxes } from '../../utils/geometry';
 import { getIconSvg } from '../../utils/icons';
 import { viewportManager } from '../../core/viewport';
@@ -240,6 +246,15 @@ export class AnnotationContextMenu {
         icon: 'clipboard',
         run: () => this.pasteClipboard(target)
       });
+    } else if (!store.preferInternalClipboard && store.clipboardText.trim().length > 0) {
+      if (entries.length > 0) entries.push({ kind: 'separator' });
+      entries.push({
+        kind: 'action',
+        id: 'paste-text',
+        label: tr('Paste text', 'چسباندن متن'),
+        icon: 'clipboard',
+        run: () => this.pasteTextClipboard(target, store.clipboardText)
+      });
     }
 
     this.open(e.clientX, e.clientY, entries);
@@ -260,6 +275,15 @@ export class AnnotationContextMenu {
         label: `Paste ${clips.length > 1 ? `${clips.length} items` : 'item'}`,
         icon: 'clipboard',
         run: () => this.pasteClipboard(target)
+      });
+      entries.push({ kind: 'separator' });
+    } else if (!store.preferInternalClipboard && store.clipboardText.trim().length > 0) {
+      entries.push({
+        kind: 'action',
+        id: 'paste-text',
+        label: tr('Paste text', 'چسباندن متن'),
+        icon: 'clipboard',
+        run: () => this.pasteTextClipboard(target, store.clipboardText)
       });
       entries.push({ kind: 'separator' });
     }
@@ -320,6 +344,7 @@ export class AnnotationContextMenu {
 
   private copySelection(selection: Annotation[]): void {
     store.setClipboard(selection.map(cloneAnnotation));
+    void navigator.clipboard?.writeText?.('').catch(() => {});
     showToast(selection.length > 1 ? `${selection.length} annotations copied` : 'Annotation copied', 'success');
   }
 
@@ -334,6 +359,32 @@ export class AnnotationContextMenu {
   private pasteClipboard(target: AnnotationMenuTarget): void {
     const source = store.clipboardAnnotations;
     if (source.length === 0) return;
+
+    const doc = store.activeDocument;
+    const pageAnns = doc?.annotations[target.pageIndex] || [];
+    const targetSticky = !source.some(a => a.type === 'sticky-note')
+      ? findExpandedStickyNoteTarget(pageAnns, {
+          point: target.point,
+          allowSelectedFallback: false
+        })
+      : null;
+
+    if (targetSticky) {
+      const { updatedNote, insertedItems } = embedAnnotationsInStickyNote(targetSticky, source, target.point);
+      if (insertedItems.length > 0) {
+        history.execute(new ModifyAnnotationCommand(target.pageIndex, targetSticky, updatedNote));
+        store.setSelectedAnnotationIds([targetSticky.id]);
+        target.onRepaint(target.pageIndex);
+        showToast(
+          insertedItems.length > 1
+            ? tr(`${insertedItems.length} items pasted into sticky note`, `${insertedItems.length} مورد داخل یادداشت چسبان قرار گرفت`)
+            : tr('Pasted into sticky note', 'داخل یادداشت چسبان قرار گرفت'),
+          'success'
+        );
+        return;
+      }
+    }
+
     const sourceBox = mergeBoundingBoxes(source.map(getAnnotationSelectionBox));
     const dx = target.point.x - sourceBox.x;
     const dy = target.point.y - sourceBox.y;
@@ -351,6 +402,45 @@ export class AnnotationContextMenu {
     store.setSelectedAnnotationIds(clones.map(a => a.id));
     target.onRepaint(target.pageIndex);
     showToast(clones.length > 1 ? `${clones.length} annotations pasted` : 'Annotation pasted', 'success');
+  }
+
+  private pasteTextClipboard(target: AnnotationMenuTarget, rawText: string): void {
+    const doc = store.activeDocument;
+    if (!doc) return;
+    const pageAnns = doc.annotations[target.pageIndex] || [];
+    const targetSticky = findExpandedStickyNoteTarget(pageAnns, {
+      point: target.point,
+      allowSelectedFallback: false
+    });
+
+    if (targetSticky) {
+      const updated = appendTextToStickyNote(targetSticky, rawText);
+      if (!updated) return;
+      history.execute(new ModifyAnnotationCommand(target.pageIndex, targetSticky, updated));
+      store.setSelectedAnnotationIds([targetSticky.id]);
+      target.onRepaint(target.pageIndex);
+      showToast(tr('Text pasted into sticky note', 'متن داخل یادداشت چسبان قرار گرفت'), 'success');
+      return;
+    }
+
+    const wrapped = wrapPlainTextForTextBox(rawText);
+    if (!wrapped.trim()) return;
+    const tSettings = store.toolSettings;
+    const textAnn = textTool.createTextAnnotation(
+      target.point,
+      target.pageIndex,
+      'layer-default',
+      wrapped,
+      tSettings.fontSize || 16,
+      resolveAnnotationFontFamily(tSettings.fontFamily),
+      tSettings.textColor || '#111827',
+      tSettings.textBgColor || 'transparent',
+      tSettings.textAlign || 'left'
+    );
+    history.execute(new BulkAddAnnotationsCommand(target.pageIndex, [textAnn]));
+    store.setSelectedAnnotationIds([textAnn.id]);
+    target.onRepaint(target.pageIndex);
+    showToast(tr('Text pasted onto page', 'متن روی صفحه قرار گرفت'), 'success');
   }
 
   private duplicateSelection(target: AnnotationMenuTarget, selection: Annotation[]): void {

@@ -19,7 +19,12 @@ import { highlighterTool } from '../annotations/tools/highlighter';
 import { eraserTool } from '../annotations/tools/eraser';
 import { shapesTool } from '../annotations/tools/shapes';
 import { textTool } from '../annotations/tools/text';
-import { stickyNoteTool, getStickyNoteLayoutMetrics, computeViewportStickyNoteBox } from '../annotations/tools/sticky-note';
+import {
+  stickyNoteTool,
+  getStickyNoteLayoutMetrics,
+  computeViewportStickyNoteBox,
+  findExpandedStickyNoteTarget
+} from '../annotations/tools/sticky-note';
 import { stampTool } from '../annotations/tools/stamp';
 import { measureTool } from '../annotations/tools/measure';
 import { pdfEngine } from '../core/pdf-engine';
@@ -44,6 +49,7 @@ import {
   getAnnotationSelectionBox,
   moveAnnotationEndpoint,
   moveAnnotationVertex,
+  embedAnnotationsInStickyNote,
   computeHandleLoupePlacement,
   resolveDraggedHandleTargetPoint
 } from '../annotations/selection';
@@ -141,6 +147,12 @@ export class PointerHandler {
   } | null = null;
   /** Tracks whether a collapsed sticky note was already selected before pointerdown in Select mode. */
   private _wasCollapsedNoteSelectedOnDown: string | null = null;
+  /** Tracks which Sticky Note is currently open in the floating inline text editor. */
+  private _editingStickyNote: { pageIndex: number; noteId: string } | null = null;
+
+  public get editingStickyNote(): { pageIndex: number; noteId: string } | null {
+    return this._editingStickyNote;
+  }
 
   /**
    * Draw-and-hold shape recognition (pen only): holding the pointer nearly
@@ -1007,13 +1019,28 @@ export class PointerHandler {
         break;
       }
 
-      case 'stamp':
+      case 'stamp': {
         const stampBase = stampTool.createPresetStamp(pt, pageIndex, defaultLayerId, tSettings.stampPreset || 'APPROVED');
+        const targetNote = findExpandedStickyNoteTarget(pageAnns, {
+          point: pt,
+          allowSelectedFallback: false
+        });
+        if (targetNote) {
+          const { updatedNote, insertedItems } = embedAnnotationsInStickyNote(targetNote, [stampBase], pt);
+          if (insertedItems.length > 0) {
+            history.execute(new ModifyAnnotationCommand(pageIndex, targetNote, updatedNote));
+            store.setActiveTool('select');
+            this.selectCreatedAnnotation(targetNote.id);
+            onNeedRepaint();
+            break;
+          }
+        }
         history.execute(new AddAnnotationCommand(pageIndex, stampBase));
         store.setActiveTool('select');
         this.selectCreatedAnnotation(stampBase.id);
         onNeedRepaint();
         break;
+      }
 
       case 'measure-distance':
         measureTool.start(
@@ -2791,6 +2818,7 @@ export class PointerHandler {
     };
 
     annotationEngine.setEditingAnnotationId(ann.id);
+    this._editingStickyNote = { pageIndex, noteId: ann.id };
     onNeedRepaint();
 
     openInlineEditor({
@@ -2808,6 +2836,9 @@ export class PointerHandler {
       fixedSize: true,
       seamlessCard: true,
       onCommit: (rawText: string) => {
+        if (this._editingStickyNote?.noteId === ann.id) {
+          this._editingStickyNote = null;
+        }
         annotationEngine.setEditingAnnotationId(null);
         const cleaned = rawText.replace(/\r\n/g, '\n');
         const latestDoc = store.activeDocument;
@@ -2825,6 +2856,9 @@ export class PointerHandler {
         onNeedRepaint();
       },
       onCancel: () => {
+        if (this._editingStickyNote?.noteId === ann.id) {
+          this._editingStickyNote = null;
+        }
         annotationEngine.setEditingAnnotationId(null);
         onNeedRepaint();
       }
@@ -3025,6 +3059,7 @@ export class PointerHandler {
             return true;
           }
           const b = item.box;
+          const itemPt = item.rotation ? rotatePoint(localPt, boxCenter(b), -item.rotation) : localPt;
           const expanded = {
             x: b.x - radius,
             y: b.y - radius,
@@ -3032,10 +3067,10 @@ export class PointerHandler {
             height: b.height + radius * 2
           };
           return !(
-            localPt.x >= expanded.x &&
-            localPt.x <= expanded.x + expanded.width &&
-            localPt.y >= expanded.y &&
-            localPt.y <= expanded.y + expanded.height
+            itemPt.x >= expanded.x &&
+            itemPt.x <= expanded.x + expanded.width &&
+            itemPt.y >= expanded.y &&
+            itemPt.y <= expanded.y + expanded.height
           );
         });
       }

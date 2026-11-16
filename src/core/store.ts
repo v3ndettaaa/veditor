@@ -133,6 +133,8 @@ class StateStore {
   // Selection & Clipboard State
   private _selectedAnnotationIds: Set<string> = new Set();
   private _clipboardAnnotations: Annotation[] = [];
+  private _clipboardText: string = '';
+  private _preferInternalClipboard: boolean = false;
   /** Pages highlighted in the thumbnail list; cleared on document switch. */
   private _selectedPageIndices: Set<number> = new Set();
   private _pageClipboard: PageClipboard | null = null;
@@ -291,6 +293,8 @@ class StateStore {
   get appSettings() { return this._appSettings; }
   get selectedAnnotationIds() { return this._selectedAnnotationIds; }
   get clipboardAnnotations() { return this._clipboardAnnotations; }
+  get clipboardText() { return this._clipboardText; }
+  get preferInternalClipboard() { return this._preferInternalClipboard; }
   /**
    * Per-tool drawing option (`snapAngle15` / `connectLines`). Defaults to off
    * for any tool the user has not toggled.
@@ -750,6 +754,25 @@ class StateStore {
 
   public setClipboard(annotations: Annotation[]) {
     this._clipboardAnnotations = [...annotations];
+    if (annotations.length > 0) {
+      this._clipboardText = '';
+      this._preferInternalClipboard = true;
+    } else {
+      this._preferInternalClipboard = false;
+    }
+  }
+
+  public setClipboardText(text: string) {
+    const cleaned = (text || '').replace(/\r\n/g, '\n');
+    this._clipboardText = cleaned;
+    if (cleaned.trim().length > 0) {
+      this._clipboardAnnotations = [];
+      this._preferInternalClipboard = false;
+    }
+  }
+
+  public clearInternalClipboardPreference() {
+    this._preferInternalClipboard = false;
   }
 
   // Page selection & clipboard (thumbnail list)

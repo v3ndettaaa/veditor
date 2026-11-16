@@ -129,9 +129,11 @@ export class HeaderComponent {
           ${getIconSvg('sidebar')}
         </button>
 
-        <div class="header-logo" id="header-logo-btn">
-          <img src="icons/icon-32.png" alt="veditor" class="header-logo-icon">
-          <span>${t('appName')}</span>
+        <div class="header-logo" id="header-logo-btn" role="button" tabindex="0" aria-label="${escapeHtml(t('appName'))}">
+          <span class="header-logo-frame">
+            <img src="icons/icon-32.png" alt="veditor" class="header-logo-icon">
+          </span>
+          <span class="header-logo-wordmark">${t('appName')}</span>
         </div>
 
         <div class="document-tabs-bar header-docs-dropdown-wrap" ${tabs.length === 0 ? 'style="display:none;"' : ''}>
@@ -248,9 +250,17 @@ export class HeaderComponent {
       store.toggleSidebar();
     });
 
-    this._container.querySelector('#header-logo-btn')?.addEventListener('click', () => {
+    const logoBtn = this._container.querySelector<HTMLElement>('#header-logo-btn');
+    logoBtn?.addEventListener('click', () => {
       this._dropdownOpen = false;
       store.setActiveDocument(null);
+    });
+    logoBtn?.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        this._dropdownOpen = false;
+        store.setActiveDocument(null);
+      }
     });
 
     this._container.querySelector('#header-paper-btn')?.addEventListener('click', () => {

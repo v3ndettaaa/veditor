@@ -16,6 +16,9 @@ import {
 import { isPointInBox, traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead } from '../../utils/geometry';
 import { renderSmoothStroke } from '../spline';
 import { textTool } from './text';
+import { stampTool } from './stamp';
+import { signatureTool } from './signature';
+import { measureTool } from './measure';
 import { DEFAULT_APP_FONT, resolveAnnotationFontCss, resolveAnnotationFontFamily } from '../../core/fonts';
 
 export const STICKY_NOTE_DEFAULT_SIZE = 210;
@@ -179,6 +182,77 @@ export function getStickyNoteLayoutMetrics(box: BoundingBox): StickyNoteLayoutMe
     padTop: headerHeight + Math.max(2.5, 8 * uiScale),
     footerReserve: Math.max(3.5, 12 * uiScale)
   };
+}
+
+/**
+ * Returns the usable inner content area of an expanded Sticky Note (below its header,
+ * above its footer margin, inset symmetrically from left/right card borders).
+ */
+export function getStickyNoteContentRect(ann: StickyNoteAnnotation): BoundingBox {
+  const b = ann.box;
+  const m = getStickyNoteLayoutMetrics(b);
+  const padX = Math.max(4, Math.min(m.padX * 0.65, b.width * 0.12));
+  const top = b.y + m.headerHeight + Math.max(3, 6 * m.uiScale);
+  const bottom = b.y + b.height - Math.max(4, m.footerReserve * 0.65);
+  return {
+    x: b.x + padX,
+    y: top,
+    width: Math.max(16, b.width - padX * 2),
+    height: Math.max(16, bottom - top)
+  };
+}
+
+/**
+ * Resolves the topmost expanded, unlocked Sticky Note targeted by a point hover/click,
+ * active inline text edit, or (when `allowSelectedFallback` is true) current selection.
+ */
+export function findExpandedStickyNoteTarget(
+  annotations: Annotation[],
+  options?: {
+    point?: Point | null;
+    selectedIds?: Set<string> | string[] | null;
+    editingNoteId?: string | null;
+    allowSelectedFallback?: boolean;
+  }
+): StickyNoteAnnotation | null {
+  if (!Array.isArray(annotations) || annotations.length === 0) return null;
+
+  const isEligible = (a: Annotation): a is StickyNoteAnnotation =>
+    a.type === 'sticky-note' && !a.collapsed && !a.locked;
+
+  if (options?.editingNoteId) {
+    for (let i = annotations.length - 1; i >= 0; i--) {
+      const cand = annotations[i];
+      if (cand.id === options.editingNoteId && isEligible(cand)) {
+        return cand;
+      }
+    }
+  }
+
+  if (options?.point) {
+    for (let i = annotations.length - 1; i >= 0; i--) {
+      const cand = annotations[i];
+      if (isEligible(cand) && stickyNoteTool.hitTest(cand, options.point)) {
+        return cand;
+      }
+    }
+  }
+
+  if (options?.allowSelectedFallback && options?.selectedIds) {
+    const selSet = options.selectedIds instanceof Set
+      ? options.selectedIds
+      : new Set(options.selectedIds);
+    if (selSet.size > 0) {
+      for (let i = annotations.length - 1; i >= 0; i--) {
+        const cand = annotations[i];
+        if (selSet.has(cand.id) && isEligible(cand)) {
+          return cand;
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1020,13 +1094,41 @@ export class StickyNoteTool {
   }
 
   /**
-   * Renders an embedded Shape or Text annotation inside a Sticky Note card's clipped coordinate space.
+   * Renders an embedded annotation (image/stamp, signature, shape, text, ink, or measurement)
+   * inside a Sticky Note card's clipped coordinate space.
    */
   private renderEmbeddedItem(ctx: CanvasRenderingContext2D, item: Annotation): void {
     ctx.save();
     ctx.globalAlpha = item.opacity ?? 1.0;
+    const itemRot = item.rotation || 0;
+    if (itemRot) {
+      const cx = item.box.x + item.box.width / 2;
+      const cy = item.box.y + item.box.height / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(itemRot);
+      ctx.translate(-cx, -cy);
+    }
     if (item.type === 'text') {
       textTool.renderToCanvas(ctx, item, 1);
+      ctx.restore();
+      return;
+    }
+    if (item.type === 'stamp') {
+      stampTool.renderToCanvas(ctx, item, 1);
+      ctx.restore();
+      return;
+    }
+    if (item.type === 'signature') {
+      signatureTool.renderToCanvas(ctx, item, 1);
+      ctx.restore();
+      return;
+    }
+    if (
+      item.type === 'measure-distance' ||
+      item.type === 'measure-angle' ||
+      item.type === 'measure-area'
+    ) {
+      measureTool.renderToCanvas(ctx, item, 1);
       ctx.restore();
       return;
     }
@@ -1047,17 +1149,35 @@ export class StickyNoteTool {
       return;
     }
     if (item.type === 'highlighter') {
-      renderSmoothStroke(
-        ctx,
-        item.points,
-        item.color,
-        item.strokeWidth,
-        'linear',
-        true,
-        false,
-        'balanced',
-        item.tipShape || 'round'
-      );
+      if (item.quadPoints && item.quadPoints.length > 0) {
+        ctx.fillStyle = item.color;
+        ctx.beginPath();
+        for (const quad of item.quadPoints) {
+          const cx = quad.reduce((sum, p) => sum + p.x, 0) / quad.length;
+          const cy = quad.reduce((sum, p) => sum + p.y, 0) / quad.length;
+          const ordered = [...quad].sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+          ordered.forEach((p, index) => {
+            const x = item.box.x + p.x * item.box.width;
+            const y = item.box.y + p.y * item.box.height;
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          });
+          ctx.closePath();
+        }
+        ctx.fill();
+      } else {
+        renderSmoothStroke(
+          ctx,
+          item.points,
+          item.color,
+          item.strokeWidth,
+          'linear',
+          true,
+          false,
+          'balanced',
+          item.tipShape || 'round'
+        );
+      }
       ctx.restore();
       return;
     }

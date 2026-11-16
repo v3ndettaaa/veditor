@@ -679,9 +679,9 @@
   border: 1px solid var(--border-subtle);
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              border-color 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 200ms var(--ease-spring),
+              border-color 180ms ease,
+              box-shadow 200ms var(--ease-spring);
 }
 
 .recent-card.is-gallery-card:hover {
@@ -713,12 +713,12 @@
   background: #ffffff;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(15, 23, 42, 0.08);
   overflow: hidden;
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 220ms var(--ease-spring-pop);
   flex-shrink: 0;
 }
 
 .recent-card.is-gallery-card:hover .doc-cover-sheet {
-  transform: translateY(-3px) scale(1.02);
+  transform: translateY(-4px) scale(1.025);
 }
 
 .doc-cover-img {
@@ -1173,13 +1173,14 @@
   border-radius: 16px;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 200ms var(--ease-spring), box-shadow 200ms var(--ease-spring);
 }
 
 .feature-box:hover {
   border-color: var(--border-medium);
   background: var(--bg-surface-elevated);
-  transform: translateY(-2px);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.24);
 }
 
 .feature-icon-badge {

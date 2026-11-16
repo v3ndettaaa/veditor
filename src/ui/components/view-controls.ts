@@ -22,6 +22,12 @@ export class ViewControlsComponent {
   private _lastLang: 'en' | 'fa' = store.appSettings.language;
   /** Set while Enter commits, so the ensuing blur doesn't commit twice. */
   private _enterCommitted: boolean = false;
+  /** True while collapse tuck-in animation is running before swapping to pill DOM. */
+  private _isCollapsing: boolean = false;
+  private _collapseTimer: number | null = null;
+  private _animTimer: number | null = null;
+  private _pendingExpandAnim: boolean = false;
+  private _pendingPillSettleAnim: boolean = false;
 
   constructor(container: HTMLElement) {
     this._container = container;
@@ -29,19 +35,55 @@ export class ViewControlsComponent {
     // Collapse on outside tap (toolbar pinned-card pattern): pointerdown so
     // input blur-commits still run first.
     document.addEventListener('pointerdown', (e) => {
-      if (store.viewControlsCollapsed || !store.activeDocument) return;
+      if (store.viewControlsCollapsed || !store.activeDocument || this._isCollapsing) return;
       if (!this._container.contains(e.target as Node)) {
-        store.setViewControlsCollapsed(true);
+        this.triggerCollapse();
       }
     });
     this.render();
   }
 
+  private clearAnimTimers(): void {
+    if (this._collapseTimer !== null) {
+      window.clearTimeout(this._collapseTimer);
+      this._collapseTimer = null;
+    }
+    if (this._animTimer !== null) {
+      window.clearTimeout(this._animTimer);
+      this._animTimer = null;
+    }
+  }
+
+  private triggerCollapse(): void {
+    if (store.viewControlsCollapsed || this._isCollapsing) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) {
+      this._pendingPillSettleAnim = false;
+      store.setViewControlsCollapsed(true);
+      return;
+    }
+    this._isCollapsing = true;
+    this._container.classList.remove('is-expanding', 'is-pill-settling');
+    this._container.classList.add('is-collapsing');
+    this.clearAnimTimers();
+    this._collapseTimer = window.setTimeout(() => {
+      this._collapseTimer = null;
+      this._isCollapsing = false;
+      this._container.classList.remove('is-collapsing');
+      this._pendingPillSettleAnim = true;
+      store.setViewControlsCollapsed(true);
+    }, 150);
+  }
+
   public render(): void {
     const doc = store.activeDocument;
     if (!doc) {
+      this.clearAnimTimers();
+      this._isCollapsing = false;
+      this._pendingExpandAnim = false;
+      this._pendingPillSettleAnim = false;
       this._container.style.display = 'none';
-      this._container.classList.remove('is-collapsed');
+      this._container.classList.remove('is-collapsed', 'is-expanding', 'is-collapsing', 'is-pill-settling');
       this._isInitialized = false;
       this._collapsedRendered = false;
       this._boundDocId = null;
@@ -50,6 +92,9 @@ export class ViewControlsComponent {
 
     // A new / switched document or language change invalidates cached DOM/tooltips
     if ((this._boundDocId !== null && this._boundDocId !== doc.id) || this._lastLang !== store.appSettings.language) {
+      this.clearAnimTimers();
+      this._isCollapsing = false;
+      this._container.classList.remove('is-expanding', 'is-collapsing', 'is-pill-settling');
       this._isInitialized = false;
       this._lastLang = store.appSettings.language;
     }
@@ -74,13 +119,26 @@ export class ViewControlsComponent {
         return;
       }
       this._container.innerHTML = `
-        <button id="view-expand-btn" class="view-btn" title="${tr('Expand zoom & page controls', 'باز کردن کنترل‌های بزرگ‌نمایی و صفحات')}">
+        <button id="view-expand-btn" class="view-btn" aria-expanded="false" title="${tr('Expand zoom & page controls', 'باز کردن کنترل‌های بزرگ‌نمایی و صفحات')}">
           ${getIconSvg('zoomIn', 15)}
           <span id="view-expand-label" style="font-size:11px; font-weight:700;">${zoomPct}%</span>
         </button>
       `;
+      if (this._pendingPillSettleAnim) {
+        this._pendingPillSettleAnim = false;
+        this._container.classList.add('is-pill-settling');
+        this.clearAnimTimers();
+        this._animTimer = window.setTimeout(() => {
+          this._animTimer = null;
+          this._container.classList.remove('is-pill-settling');
+        }, 210);
+      }
       this._container.querySelector('#view-expand-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
+        this.clearAnimTimers();
+        this._isCollapsing = false;
+        this._pendingExpandAnim = true;
+        this._container.classList.remove('is-collapsing', 'is-pill-settling');
         store.setViewControlsCollapsed(false);
       });
       this._isInitialized = true;
@@ -88,7 +146,7 @@ export class ViewControlsComponent {
       this._boundDocId = doc.id;
       return;
     }
-    this._container.classList.remove('is-collapsed');
+    this._container.classList.remove('is-collapsed', 'is-pill-settling');
 
     // If already initialized in DOM, update selectively to avoid interrupting active user typing
     if (this._isInitialized && this._collapsedRendered === false &&
@@ -200,6 +258,18 @@ export class ViewControlsComponent {
     this.bindEvents();
     this._isInitialized = true;
     this._boundDocId = doc.id;
+
+    if (this._pendingExpandAnim) {
+      this._pendingExpandAnim = false;
+      this._container.classList.remove('is-expanding');
+      void this._container.offsetWidth;
+      this._container.classList.add('is-expanding');
+      this.clearAnimTimers();
+      this._animTimer = window.setTimeout(() => {
+        this._animTimer = null;
+        this._container.classList.remove('is-expanding');
+      }, 240);
+    }
   }
 
   private updateState(currentPage: number, totalPages: number, zoomPct: number, currentRot: number): void {
@@ -413,7 +483,7 @@ export class ViewControlsComponent {
 
     this._container.querySelector('#view-collapse-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      store.setViewControlsCollapsed(true);
+      this.triggerCollapse();
     });
   }
 }

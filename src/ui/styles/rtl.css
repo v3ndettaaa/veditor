@@ -57,13 +57,25 @@
   unicode-bidi: isolate;
 }
 
+[dir="rtl"] .header-logo {
+  padding: 4px 4px 4px 10px;
+}
+
+[dir="rtl"] .header-logo-wordmark {
+  letter-spacing: 0;
+}
+
+[dir="rtl"] .header-docs-menu {
+  transform-origin: top right;
+}
+
 [dir="rtl"] .app-sidebar {
   border-right: none;
   border-left: 1px solid var(--border-subtle);
 }
 
 [dir="rtl"] .app-sidebar.collapsed {
-  transform: translateX(100%);
+  transform: translateX(18px);
 }
 
 [dir="rtl"] .app-properties-panel {
@@ -72,12 +84,13 @@
 }
 
 [dir="rtl"] .app-properties-panel.collapsed {
-  transform: translateX(-100%);
+  transform: translateX(-18px);
 }
 
 [dir="rtl"] .floating-view-controls {
   right: auto;
   left: 24px;
+  transform-origin: bottom left;
 }
 
 [dir="rtl"] .header-left {

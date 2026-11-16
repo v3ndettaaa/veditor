@@ -7,17 +7,23 @@ import { buildZipArchive, decryptZipCryptoEntry } from '../../io/zip';
 import {
   moveAnnotationVertex,
   transformAnnotation,
+  offsetAnnotation,
+  embedAnnotationsInStickyNote,
+  appendTextToStickyNote,
+  wrapPlainTextForTextBox,
   computeSelectionBoxTransform,
   computeVertexResizeTransform
 } from '../../annotations/selection';
 import {
   getStickyNoteLayoutMetrics,
+  getStickyNoteContentRect,
+  findExpandedStickyNoteTarget,
   computeViewportStickyNoteBox,
   stickyNoteTool
 } from '../../annotations/tools/sticky-note';
 import { computeScrubSliderValue } from '../../ui/slider-scrub';
 import { detectToolbarSnapEdge, clampToolbarFloatPos } from '../../ui/toolbar-dock';
-import type { MeasurementAnnotation, ShapeAnnotation, StickyNoteAnnotation } from '../types';
+import type { MeasurementAnnotation, ShapeAnnotation, StampAnnotation, StickyNoteAnnotation, TextAnnotation } from '../types';
 
 describe('Pure Logic Verification (node:test)', () => {
   it('computes 3-point angle degrees and area measurements accurately', () => {
@@ -270,6 +276,69 @@ describe('Pure Logic Verification (node:test)', () => {
     const clampedBottomRight = clampToolbarFloatPos(1300, 890, 620, 52, vw, vh, headerH, 12);
     assert.equal(clampedBottomRight.x, vw - 620 - 12);
     assert.equal(clampedBottomRight.y, vh - 52 - 12);
+  });
+
+  it('embeds pasted images and shapes inside expanded sticky notes, clamps to content area, and preserves on collapse/move', () => {
+    const note = stickyNoteTool.createStickyNote(0, 'layer-default', { x: 100, y: 100, width: 220, height: 220 }, '');
+    const contentRect = getStickyNoteContentRect(note);
+
+    const bigStamp: StampAnnotation = {
+      id: 'img_1',
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'stamp',
+      stampType: 'custom',
+      imageUrl: 'data:image/png;base64,AA==',
+      box: { x: 0, y: 0, width: 440, height: 220 },
+      opacity: 1,
+      createdAt: 1,
+      updatedAt: 1
+    };
+
+    const { updatedNote, insertedItems } = embedAnnotationsInStickyNote(note, [bigStamp], { x: 300, y: 305 }, { idFactory: () => 'embedded_1' });
+    assert.equal(insertedItems.length, 1);
+    const emb = insertedItems[0];
+    assert.equal(emb.id, 'embedded_1');
+    assert.ok(emb.box.x >= contentRect.x - 1e-6);
+    assert.ok(emb.box.y >= contentRect.y - 1e-6);
+    assert.ok(emb.box.x + emb.box.width <= contentRect.x + contentRect.width + 1e-6);
+    assert.ok(emb.box.y + emb.box.height <= contentRect.y + contentRect.height + 1e-6);
+    assert.ok(Math.abs((emb.box.width / emb.box.height) - 2) < 1e-3);
+
+    const moved = offsetAnnotation(stickyNoteTool.collapseStickyNote(updatedNote), 30, -20) as StickyNoteAnnotation;
+    assert.equal(moved.collapsed, true);
+    assert.equal(moved.items?.length, 1);
+    assert.ok(Math.abs(moved.items![0].box.x - (emb.box.x + 30)) < 1e-6);
+    assert.ok(Math.abs(moved.items![0].box.y - (emb.box.y - 20)) < 1e-6);
+
+    assert.equal(findExpandedStickyNoteTarget([moved], { point: { x: 140, y: 120 }, allowSelectedFallback: false }), null);
+
+    // Appending copied plain text & scaling embedded TextAnnotation padding inside Sticky Note
+    const appended = appendTextToStickyNote(note, 'یادداشت آزمایشی');
+    assert.equal(appended?.text, 'یادداشت آزمایشی');
+    const appended2 = appendTextToStickyNote(appended!, 'Second line');
+    assert.equal(appended2?.text, 'یادداشت آزمایشی\nSecond line');
+
+    const textBox: TextAnnotation = {
+      id: 'txt_node',
+      pageIndex: 0,
+      layerId: 'layer-default',
+      type: 'text',
+      box: { x: 0, y: 0, width: 400, height: 60 },
+      text: 'Title',
+      fontFamily: 'Manrope',
+      fontSize: 20,
+      color: '#111827',
+      textAlign: 'left',
+      padding: 10,
+      opacity: 1,
+      createdAt: 1,
+      updatedAt: 1
+    };
+    const embeddedTxt = embedAnnotationsInStickyNote(note, [textBox]).insertedItems[0] as TextAnnotation;
+    assert.ok(embeddedTxt.fontSize < 20);
+    assert.ok((embeddedTxt.padding ?? 0) < 10);
+    assert.ok(wrapPlainTextForTextBox('alpha beta gamma delta epsilon', 14).includes('\n'));
   });
 });
 

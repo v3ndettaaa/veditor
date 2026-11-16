@@ -109,22 +109,142 @@ body.focus-mode .header-hover-zone {
 }
 
 .header-logo {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: -0.025em;
+  gap: 9px;
   cursor: pointer;
-  padding-right: var(--space-2);
+  padding: 4px 10px 4px 4px;
+  border-radius: 11px;
+  user-select: none;
+  transition: transform 200ms var(--ease-spring-pop), background-color 180ms ease;
+}
+
+.header-logo:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--bg-surface-hover) 55%, transparent);
+}
+
+.header-logo:active {
+  transform: scale(0.97);
+}
+
+.header-logo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.header-logo-frame {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.14)) 0%,
+    color-mix(in srgb, var(--accent) 8%, rgba(255, 255, 255, 0.03)) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border-medium));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    0 4px 14px -3px var(--accent-glow),
+    0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 220ms var(--ease-spring-pop), border-color 180ms ease, box-shadow 220ms ease;
+}
+
+body.theme-light .header-logo-frame {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.92) 0%,
+    color-mix(in srgb, var(--accent) 12%, #eef2ff) 100%
+  );
+  border-color: color-mix(in srgb, var(--accent) 28%, rgba(15, 23, 42, 0.12));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 rgba(15, 23, 42, 0.06),
+    0 4px 12px -3px var(--accent-glow),
+    0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.header-logo-frame::after {
+  content: '';
+  position: absolute;
+  inset: -40% -70%;
+  background: linear-gradient(
+    115deg,
+    transparent 32%,
+    rgba(255, 255, 255, 0.5) 50%,
+    transparent 68%
+  );
+  transform: translateX(-110%);
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+.header-logo:hover .header-logo-frame {
+  transform: scale(1.05);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 6px 18px -3px var(--accent-glow),
+    0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.header-logo:hover .header-logo-frame::after {
+  transform: translateX(110%);
 }
 
 .header-logo-icon {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 2px 8px var(--accent-glow);
+  position: relative;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  object-fit: contain;
+  transition: transform 220ms var(--ease-spring-pop);
+}
+
+.header-logo:hover .header-logo-icon {
+  transform: scale(1.04);
+}
+
+.header-logo-wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  background: linear-gradient(
+    135deg,
+    #ffffff 0%,
+    #eef0ff 52%,
+    color-mix(in srgb, var(--accent) 78%, #ffffff) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  transition: filter 200ms ease, letter-spacing 200ms var(--ease-spring);
+}
+
+body.theme-light .header-logo-wordmark {
+  background: linear-gradient(
+    135deg,
+    #0f172a 0%,
+    #1e293b 46%,
+    var(--accent) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.header-logo:hover .header-logo-wordmark {
+  filter: brightness(1.08);
 }
 
 /* Open Documents Dropdown Bar */
@@ -193,7 +313,7 @@ body.focus-mode .header-hover-zone {
 .header-docs-chevron {
   display: inline-flex;
   color: var(--text-muted);
-  transition: transform 0.16s ease, color 0.16s ease;
+  transition: transform 200ms var(--ease-spring-pop), color 160ms ease;
 }
 
 .header-docs-trigger.is-open .header-docs-chevron {
@@ -217,7 +337,8 @@ body.focus-mode .header-hover-zone {
   display: none;
   flex-direction: column;
   overflow: hidden;
-  animation: scaleUp 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+  animation: menuPopIn 190ms var(--ease-spring-pop);
 }
 
 .header-docs-menu.is-open {
@@ -500,31 +621,41 @@ body.no-page-shadows .pdf-page-container {
   border: 1px solid var(--border-medium);
 }
 
-/* Left Sidebar */
+/* Left Sidebar — Fixed-width track prevents inner 2-column thumbnail reflow during open/close slide */
 .app-sidebar {
   width: 304px;
+  flex: 0 0 304px;
   height: 100%;
+  margin-inline-start: 0;
   background: var(--bg-surface);
   border-inline-end: 1px solid var(--border-subtle);
   box-shadow: 4px 0 24px -8px rgba(0, 0, 0, 0.18);
   display: flex;
   flex-direction: column;
-  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    margin-inline-start 220ms var(--ease-spring),
+    transform 220ms var(--ease-spring),
+    opacity 180ms var(--ease-spring),
+    box-shadow 220ms ease,
+    border-color 180ms ease;
+  will-change: transform, margin-inline-start, opacity;
   z-index: 30;
 }
 
 .app-sidebar.collapsed {
-  width: 0;
+  margin-inline-start: -304px;
   overflow: hidden;
   border-inline-end-color: transparent;
   box-shadow: none;
-  transform: translateX(-100%);
+  opacity: 0;
+  transform: translateX(-18px);
   pointer-events: none;
 }
 
 [dir="rtl"] .app-sidebar.collapsed {
-  transform: translateX(100%);
+  transform: translateX(18px);
 }
 
 .sidebar-header {
@@ -604,6 +735,7 @@ body.no-page-shadows .pdf-page-container {
   justify-content: center;
   flex-shrink: 0;
   opacity: 0.85;
+  transition: transform 200ms var(--ease-spring-pop), opacity 150ms ease, color 150ms ease;
 }
 
 .sidebar-tab-btn:hover {
@@ -621,6 +753,7 @@ body.no-page-shadows .pdf-page-container {
 .sidebar-tab-btn.active .sidebar-tab-icon {
   opacity: 1;
   color: var(--accent);
+  transform: scale(1.08);
 }
 
 .sidebar-active-tab-bar {
@@ -866,7 +999,7 @@ body.is-toolbar-dragging {
   align-items: center;
   gap: 10px;
   padding: 5px 14px;
-  animation: fadeIn 0.15s ease-out;
+  animation: subRowIn 200ms var(--ease-spring-pop);
   max-width: 90vw;
   overflow-x: auto;
 }
@@ -1219,7 +1352,7 @@ input.prop-num-input::-webkit-inner-spin-button {
   left: 0;
   width: 316px;
   max-width: calc(100vw - 24px);
-  transform: translateY(6px) scale(0.98);
+  transform: translateY(8px) scale(0.95);
   transform-origin: top center;
   background: var(--bg-surface);
   background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
@@ -1236,7 +1369,7 @@ input.prop-num-input::-webkit-inner-spin-button {
   z-index: 100;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 180ms var(--ease-spring), transform 210ms var(--ease-spring-pop);
   white-space: normal;
 }
 
@@ -1910,7 +2043,12 @@ input.prop-num-input::-webkit-inner-spin-button {
   border: 1px solid transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform 190ms var(--ease-spring-pop);
   position: relative;
 }
 
@@ -1929,6 +2067,7 @@ input.prop-num-input::-webkit-inner-spin-button {
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   color: var(--text-primary);
   box-shadow: 0 2px 10px var(--accent-glow);
+  animation: toolSelectPop 200ms var(--ease-spring-pop);
 }
 
 /* Document Scroll Area — the primary reading surface gets a wider,
@@ -2083,7 +2222,12 @@ body.invert-pdf-document .pdf-page-container {
   gap: var(--space-1);
   padding: 4px 8px;
   z-index: 25;
-  transition: opacity var(--transition-normal), transform var(--transition-normal), padding var(--transition-fast);
+  transform-origin: bottom right;
+  transition:
+    opacity var(--transition-normal),
+    transform 210ms var(--ease-spring-pop),
+    box-shadow 180ms ease;
+  will-change: transform, opacity;
 }
 
 .floating-view-controls.is-collapsed {
@@ -2096,6 +2240,23 @@ body.invert-pdf-document .pdf-page-container {
   min-width: calc(var(--control-h) - 2px);
   gap: 6px;
   padding: 0 10px;
+}
+
+.floating-view-controls.is-expanding {
+  animation: viewCapsuleExpand 230ms var(--ease-spring-pop);
+}
+
+.floating-view-controls.is-expanding > * {
+  animation: viewCapsuleItemIn 190ms var(--ease-spring) backwards;
+}
+
+.floating-view-controls.is-collapsing {
+  animation: viewCapsuleCollapse 155ms var(--ease-exit) forwards;
+  pointer-events: none;
+}
+
+.floating-view-controls.is-pill-settling {
+  animation: viewPillSettle 200ms var(--ease-spring-pop);
 }
 
 /* Floating Scratchpad / Draft Overlay */
@@ -2356,23 +2517,33 @@ html, body, .app-container {
   box-sizing: border-box;
 }
 
-/* Properties Panel */
+/* Properties Panel — Fixed-width track prevents abrupt layout snap during open/close */
 .app-properties-panel {
   width: 260px;
+  flex: 0 0 260px;
   height: 100%;
+  margin-inline-end: 0;
   background-color: var(--bg-surface);
-  border-left: 1px solid var(--border-subtle);
+  border-inline-start: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: transform;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    margin-inline-end 220ms var(--ease-spring),
+    transform 220ms var(--ease-spring),
+    opacity 180ms var(--ease-spring),
+    border-color 180ms ease;
+  will-change: transform, margin-inline-end, opacity;
   z-index: 30;
 }
 
 .app-properties-panel.collapsed {
-  width: 0;
+  margin-inline-end: -260px;
   overflow: hidden;
-  transform: translateX(100%);
+  border-inline-start-color: transparent;
+  opacity: 0;
+  transform: translateX(18px);
   pointer-events: none;
 }
 
@@ -2560,7 +2731,7 @@ input.prop-hex-input:focus {
   align-items: center;
   justify-content: center;
   z-index: 100;
-  animation: fadeIn 0.15s ease;
+  animation: fadeIn 180ms var(--ease-spring);
 }
 
 .modal-dialog {
@@ -2574,7 +2745,7 @@ input.prop-hex-input:focus {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: scaleUp 0.15s ease;
+  animation: scaleUp 210ms var(--ease-spring-pop);
 }
 
 /* Wide dialog hosting the full landing page from the tab-strip "+" button. */
@@ -2599,8 +2770,8 @@ input.prop-hex-input:focus {
 }
 
 @keyframes scaleUp {
-  from { transform: scale(0.96); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+  from { transform: scale(0.95) translateY(8px); opacity: 0; }
+  to { transform: scale(1) translateY(0); opacity: 1; }
 }
 
 /* Settings Tab Button */
@@ -2712,7 +2883,7 @@ input.prop-hex-input:focus {
   left: 3px;
   bottom: 3px;
   background-color: white;
-  transition: 0.2s;
+  transition: transform 200ms var(--ease-spring-pop);
   border-radius: 50%;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
@@ -2760,7 +2931,7 @@ input.prop-hex-input:focus {
   font-weight: 500;
   box-shadow: var(--shadow-md);
   pointer-events: auto;
-  animation: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: slideUp 230ms var(--ease-spring-pop);
   transition: opacity var(--transition-normal), transform var(--transition-normal);
 }
 
@@ -3042,6 +3213,19 @@ html.platform-desktop .floating-props-bar,
 html.platform-desktop .tool-popover {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+html.platform-linux .floating-view-controls,
+html.platform-linux .toolbar-main-row,
+html.platform-linux .toolbar-sub-row,
+html.platform-linux .floating-props-bar,
+html.platform-linux .tool-popover,
+html.platform-desktop .floating-view-controls,
+html.platform-desktop .toolbar-main-row,
+html.platform-desktop .toolbar-sub-row,
+html.platform-desktop .floating-props-bar,
+html.platform-desktop .tool-popover {
+  background: var(--bg-surface);
 }
 
 .fp-text-selection-bar {
@@ -3408,7 +3592,88 @@ html.platform-desktop .jump-back-pill {
 .tool-btn:active:not(:disabled),
 .view-btn:active:not(:disabled),
 .icon-btn:active:not(:disabled) {
-  transform: scale(0.93);
+  transform: scale(0.92);
+}
+
+/* 6. Spring Capsule, Menu, & Tool Keyframes */
+@keyframes viewCapsuleExpand {
+  0% {
+    opacity: 0.78;
+    transform: scaleX(0.26) scaleY(0.92) translateY(2px);
+  }
+  72% {
+    opacity: 1;
+    transform: scaleX(1.015) scaleY(1.01) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1) translateY(0);
+  }
+}
+
+@keyframes viewCapsuleCollapse {
+  0% {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1);
+  }
+  100% {
+    opacity: 0.28;
+    transform: scaleX(0.24) scaleY(0.9) translateY(2px);
+  }
+}
+
+@keyframes viewCapsuleItemIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes viewPillSettle {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.86);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes menuPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes subRowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toolSelectPop {
+  0% { transform: scale(0.92); }
+  60% { transform: scale(1.05); }
+  100% { transform: scale(1); }
 }
 
 

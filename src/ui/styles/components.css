@@ -1818,6 +1818,21 @@ input[type="range"] {
   object-fit: contain;
 }
 
+.thumbnail-frame img.thumb-img-enter {
+  animation: thumbFadeIn 150ms var(--ease-spring);
+}
+
+@keyframes thumbFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .thumbnail-frame.is-loading::after {
   content: '';
   position: absolute;
@@ -1867,7 +1882,7 @@ input[type="range"] {
   -webkit-backdrop-filter: blur(4px);
   cursor: pointer;
   opacity: 0.78;
-  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 0.1s ease;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 190ms var(--ease-spring-pop);
 }
 
 .thumbnail-card:hover .thumbnail-bookmark-btn,
@@ -1882,7 +1897,7 @@ input[type="range"] {
 }
 
 .thumbnail-bookmark-btn:active {
-  transform: scale(0.9);
+  transform: scale(0.86);
 }
 
 .thumbnail-bookmark-btn.is-bookmarked {
@@ -1891,6 +1906,7 @@ input[type="range"] {
   color: var(--accent-contrast);
   border-color: transparent;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  animation: thumbBadgePop 210ms var(--ease-spring-pop);
 }
 
 .thumbnail-check-indicator {
@@ -1909,7 +1925,7 @@ input[type="range"] {
   color: transparent;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
   pointer-events: none;
-  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 180ms var(--ease-spring-pop);
 }
 
 .thumbnail-list.is-selection-mode .thumbnail-check-indicator,
@@ -1923,6 +1939,13 @@ input[type="range"] {
   background-color: var(--accent);
   border-color: #ffffff;
   color: var(--accent-contrast);
+  animation: thumbBadgePop 200ms var(--ease-spring-pop);
+}
+
+@keyframes thumbBadgePop {
+  0% { transform: scale(0.76); }
+  65% { transform: scale(1.12); }
+  100% { transform: scale(1); }
 }
 
 .thumbnail-footer {
@@ -2033,6 +2056,18 @@ input[type="range"] {
   border-radius: var(--radius-sm);
   background: var(--accent-subtle);
   border: 1px solid var(--accent-border);
+  animation: selectionBarIn 190ms var(--ease-spring-pop);
+}
+
+@keyframes selectionBarIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .sidebar-selection-bar.is-hidden {
@@ -2125,7 +2160,8 @@ input[type="range"] {
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  animation: scaleUp 0.12s ease;
+  transform-origin: top left;
+  animation: scaleUp 160ms var(--ease-spring-pop);
 }
 
 .annotation-context-item {
@@ -2196,8 +2232,11 @@ input[type="range"] {
 .floating-props-bar {
   position: absolute;
   z-index: 1200;
-  transform: translate(-50%, 0);
-  transition: opacity 0.16s cubic-bezier(0.16, 1, 0.3, 1), transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.16s;
+  transform: translate(-50%, 0) scale(1);
+  transition:
+    opacity 180ms var(--ease-spring),
+    transform 210ms var(--ease-spring-pop),
+    visibility 180ms;
   pointer-events: auto;
   opacity: 1;
 }
@@ -2206,7 +2245,7 @@ input[type="range"] {
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
-  transform: translate(-50%, 4px);
+  transform: translate(-50%, 6px) scale(0.95);
 }
 
 .props-bar-inner {

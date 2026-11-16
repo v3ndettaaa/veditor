@@ -122,6 +122,27 @@ export class PDFExporter {
               fallbackBakedIds.add(a.id);
               return false;
             }
+            if (
+              a.type === 'sticky-note' &&
+              Array.isArray(a.items) &&
+              a.items.some((it: any) =>
+                it?.type === 'stamp' ||
+                it?.type === 'signature' ||
+                it?.type === 'text' ||
+                it?.type === 'ellipse' ||
+                it?.type === 'arrow' ||
+                it?.type === 'measure-distance' ||
+                it?.type === 'measure-angle' ||
+                it?.type === 'measure-area' ||
+                Boolean(it?.rotation) ||
+                it?.strokeStyle === 'dashed' ||
+                it?.strokeStyle === 'dotted' ||
+                (it?.type === 'highlighter' && Array.isArray(it?.quadPoints))
+              )
+            ) {
+              fallbackBakedIds.add(a.id);
+              return false;
+            }
             return true;
           })
           .map((a) => {

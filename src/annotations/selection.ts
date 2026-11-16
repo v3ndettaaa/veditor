@@ -3,9 +3,9 @@
  * Provides 8-handle transform box, rotation handle, marquee selection, and alignment utilities.
  */
 
-import { Point, BoundingBox, Annotation, ShapeAnnotation, MeasurementAnnotation } from '../core/types';
+import { Point, BoundingBox, Annotation, ShapeAnnotation, MeasurementAnnotation, StickyNoteAnnotation } from '../core/types';
 import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect, computePointsBoundingBox } from '../utils/geometry';
-import { stickyNoteTool } from './tools/sticky-note';
+import { stickyNoteTool, getStickyNoteContentRect } from './tools/sticky-note';
 import { computeMeasurementValue } from './tools/measure';
 
 /**
@@ -466,6 +466,9 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
   }
   if (ann.type === 'text' && typeof a.fontSize === 'number') {
     next.fontSize = Math.max(4, a.fontSize * meanScale);
+    if (typeof a.padding === 'number') {
+      next.padding = Math.max(1, a.padding * meanScale);
+    }
   }
   if (ann.type === 'sticky-note') {
     if (ann.collapsed) {
@@ -558,6 +561,182 @@ export function transformAnnotation<T extends Annotation>(ann: T, t: BoxTransfor
     }
   }
   return syncMeasurementMetrics(next as T);
+}
+
+/**
+ * Generates a unique annotation ID for embedded or duplicated annotations.
+ */
+export function makeSelectionAnnotationId(): string {
+  return `ann_${Math.random().toString(36).substring(2, 10)}`;
+}
+
+/**
+ * Fits, positions, and embeds one or more copied/pasted annotations inside an expanded
+ * Sticky Note's content area while preserving aspect ratio and assigning strictly monotonic
+ * timestamps so pasted items render cleanly inside the note card and collapse/move/resize with it.
+ * Pure, unit-tested.
+ */
+export function embedAnnotationsInStickyNote(
+  note: StickyNoteAnnotation,
+  incoming: Annotation[],
+  anchorPoint?: Point | null,
+  options?: {
+    idFactory?: () => string;
+    maxFillRatio?: number;
+  }
+): { updatedNote: StickyNoteAnnotation; insertedItems: Annotation[] } {
+  const embeddables = incoming.filter((a) => a && a.type !== 'sticky-note');
+  if (embeddables.length === 0) {
+    return { updatedNote: note, insertedItems: [] };
+  }
+
+  const contentRect = getStickyNoteContentRect(note);
+  const noteCenter = boxCenter(note.box);
+  const noteRot = note.rotation || 0;
+  const localAnchor = anchorPoint
+    ? (noteRot ? rotatePoint(anchorPoint, noteCenter, -noteRot) : anchorPoint)
+    : null;
+
+  const srcBox = mergeBoundingBoxes(embeddables.map(getAnnotationSelectionBox));
+  const maxFill = Math.max(0.25, Math.min(0.98, options?.maxFillRatio ?? 0.92));
+  const maxW = Math.max(16, contentRect.width * maxFill);
+  const maxH = Math.max(16, contentRect.height * maxFill);
+  const scale = Math.min(
+    1,
+    srcBox.width > 0 ? maxW / srcBox.width : 1,
+    srcBox.height > 0 ? maxH / srcBox.height : 1
+  );
+
+  const scaledW = Math.max(1, srcBox.width * scale);
+  const scaledH = Math.max(1, srcBox.height * scale);
+
+  const anchorInsideNote = Boolean(
+    localAnchor &&
+    localAnchor.x >= note.box.x &&
+    localAnchor.x <= note.box.x + note.box.width &&
+    localAnchor.y >= note.box.y &&
+    localAnchor.y <= note.box.y + note.box.height
+  );
+
+  const desiredX = anchorInsideNote && localAnchor
+    ? localAnchor.x - scaledW / 2
+    : contentRect.x + (contentRect.width - scaledW) / 2;
+  const desiredY = anchorInsideNote && localAnchor
+    ? localAnchor.y - scaledH / 2
+    : contentRect.y + (contentRect.height - scaledH) / 2;
+
+  const minX = contentRect.x;
+  const maxX = Math.max(minX, contentRect.x + contentRect.width - scaledW);
+  const minY = contentRect.y;
+  const maxY = Math.max(minY, contentRect.y + contentRect.height - scaledH);
+
+  const placedX = Math.max(minX, Math.min(maxX, desiredX));
+  const placedY = Math.max(minY, Math.min(maxY, desiredY));
+
+  const dx = placedX - srcBox.x;
+  const dy = placedY - srcBox.y;
+
+  const idFactory = options?.idFactory ?? makeSelectionAnnotationId;
+  const workingNote: StickyNoteAnnotation = {
+    ...note,
+    items: [...(note.items || [])]
+  };
+  const insertedItems: Annotation[] = [];
+  const now = Date.now();
+
+  for (const item of embeddables) {
+    const transformed = transformAnnotation(cloneAnnotation(item), {
+      dx,
+      dy,
+      scaleX: scale,
+      scaleY: scale,
+      originX: srcBox.x,
+      originY: srcBox.y
+    });
+    const ts = stickyNoteTool.nextContentTimestamp(workingNote);
+    transformed.id = idFactory();
+    transformed.pageIndex = note.pageIndex;
+    transformed.layerId = note.layerId;
+    transformed.createdAt = ts;
+    transformed.updatedAt = now;
+    if (noteRot && transformed.rotation !== undefined) {
+      transformed.rotation = transformed.rotation - noteRot;
+    }
+    workingNote.items!.push(transformed);
+    insertedItems.push(transformed);
+  }
+
+  workingNote.updatedAt = now;
+  return { updatedNote: workingNote, insertedItems };
+}
+
+/**
+ * Appends copied plain text cleanly into an expanded Sticky Note's text body.
+ * Returns null if the incoming string is empty/whitespace-only. Pure, unit-tested.
+ */
+export function appendTextToStickyNote(
+  note: StickyNoteAnnotation,
+  rawText: string
+): StickyNoteAnnotation | null {
+  const cleaned = (rawText || '').replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, '');
+  if (!cleaned.trim()) return null;
+  const existing = (note.text || '').replace(/\r\n/g, '\n');
+  const nextText = existing.trim().length > 0
+    ? (existing.endsWith('\n') ? `${existing}${cleaned}` : `${existing}\n${cleaned}`)
+    : cleaned;
+  return {
+    ...note,
+    text: nextText,
+    updatedAt: Date.now()
+  };
+}
+
+/**
+ * Soft-wraps long paragraphs into balanced line lengths for pasted page Text Boxes.
+ * Pure, unit-tested.
+ */
+export function wrapPlainTextForTextBox(rawText: string, maxCharsPerLine: number = 56): string {
+  const normalized = (rawText || '').replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, '');
+  const limit = Math.max(16, maxCharsPerLine);
+  const outLines: string[] = [];
+  for (const para of normalized.split('\n')) {
+    if (para.length <= limit) {
+      outLines.push(para);
+      continue;
+    }
+    const words = para.split(/\s+/);
+    let current = '';
+    for (const word of words) {
+      if (!word) continue;
+      if (!current) {
+        if (word.length <= limit) {
+          current = word;
+        } else {
+          for (let i = 0; i < word.length; i += limit) {
+            const slice = word.slice(i, i + limit);
+            if (i + limit < word.length) outLines.push(slice);
+            else current = slice;
+          }
+        }
+      } else if (current.length + 1 + word.length <= limit) {
+        current = `${current} ${word}`;
+      } else {
+        outLines.push(current);
+        if (word.length <= limit) {
+          current = word;
+        } else {
+          current = '';
+          for (let i = 0; i < word.length; i += limit) {
+            const slice = word.slice(i, i + limit);
+            if (i + limit < word.length) outLines.push(slice);
+            else current = slice;
+          }
+        }
+      }
+    }
+    if (current) outLines.push(current);
+  }
+  return outLines.join('\n');
 }
 
 /**

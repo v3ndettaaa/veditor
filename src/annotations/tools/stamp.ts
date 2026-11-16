@@ -153,6 +153,13 @@ export class StampTool {
 
   /** Cache decoded images so repeated paints don't re-trigger a network load. */
   private _imageCache: Map<string, HTMLImageElement> = new Map();
+  private _onImageLoadCallbacks: Set<() => void> = new Set();
+
+  /** Subscribes to async image decode completions so canvases repaint promptly. */
+  public onImageLoaded(cb: () => void): () => void {
+    this._onImageLoadCallbacks.add(cb);
+    return () => this._onImageLoadCallbacks.delete(cb);
+  }
 
   /**
    * Seeds the render cache with an already-decoded image so the first paint
@@ -166,6 +173,9 @@ export class StampTool {
     let img = this._imageCache.get(src);
     if (!img) {
       img = new Image();
+      img.onload = () => {
+        for (const cb of this._onImageLoadCallbacks) cb();
+      };
       img.src = src;
       this._imageCache.set(src, img);
     }

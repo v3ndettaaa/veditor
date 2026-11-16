@@ -153,6 +153,8 @@ export class SidePanelsComponent {
     // Auto-collapse sidebar whenever sidebarOpen is false OR there is no active PDF document
     if (!isOpen || !doc) {
       this._container.classList.add('collapsed');
+      this._container.setAttribute('aria-hidden', 'true');
+      (this._container as HTMLElement & { inert: boolean }).inert = true;
       if (this._thumbObserver) {
         this._thumbObserver.disconnect();
         this._thumbObserver = null;
@@ -166,6 +168,8 @@ export class SidePanelsComponent {
 
     const wasCollapsed = this._container.classList.contains('collapsed');
     this._container.classList.remove('collapsed');
+    this._container.removeAttribute('aria-hidden');
+    (this._container as HTMLElement & { inert: boolean }).inert = false;
 
     if (renderKey === this._lastRenderKey && this._container.innerHTML !== '') {
       this.syncPageSelection();
@@ -1668,18 +1672,20 @@ export class SidePanelsComponent {
       if (Number.isFinite(idx)) frameByIndex.set(idx, f);
     });
 
-    const fillFrame = async (idx: number): Promise<void> => {
-      if (idx < 0 || idx >= pageCount) return;
+    const fillFrame = async (idx: number): Promise<boolean> => {
+      if (idx < 0 || idx >= pageCount) return false;
       const key = `${docId}:${revision}:${idx}`;
       let src = this._thumbnailCache.get(key);
+      let didRenderAsync = false;
 
       if (!src) {
-        if (inFlight.has(idx)) return;
+        if (inFlight.has(idx)) return false;
         inFlight.add(idx);
         try {
           const fast = pdfEngine.thumbnailFromCache(idx);
           const rendered = fast ?? await pdfEngine.renderThumbnail(idx);
-          if (!rendered) return;
+          didRenderAsync = !fast;
+          if (!rendered) return didRenderAsync;
           src = rendered.toDataURL('image/jpeg', 0.80);
           this._thumbnailCache.set(key, src);
           this._prevThumbnailByPage.set(`${docId}:${idx}`, src);
@@ -1691,17 +1697,18 @@ export class SidePanelsComponent {
       }
 
       const frame = frameByIndex.get(idx) ?? el.querySelector<HTMLElement>(`[data-thumb-frame="${idx}"]`);
-      if (!frame || !frame.isConnected) return;
+      if (!frame || !frame.isConnected) return didRenderAsync;
       const existingImg = frame.querySelector<HTMLImageElement>('img');
       if (existingImg) {
         if (existingImg.hasAttribute('data-stale')) {
           existingImg.src = src;
           existingImg.removeAttribute('data-stale');
+          existingImg.classList.add('thumb-img-enter');
           const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
           existingImg.style.transform = rot ? `rotate(${rot}deg)` : '';
         }
         frame.classList.remove('is-loading');
-        return;
+        return didRenderAsync;
       }
 
       const img = document.createElement('img');
@@ -1709,23 +1716,25 @@ export class SidePanelsComponent {
       img.decoding = 'async';
       img.draggable = false;
       img.alt = `Page ${idx + 1} preview`;
+      img.className = 'thumb-img-enter';
       const rot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
       if (rot) img.style.transform = `rotate(${rot}deg)`;
       frame.classList.remove('is-loading');
       frame.prepend(img);
+      return didRenderAsync;
     };
 
-    // 1. Immediate priority batch around the current page (activePageIndex ± 4)
+    // 1. Immediate priority batch around the current page (activePageIndex ± 6)
     const center = store.activePageIndex;
     const priorityIndices: number[] = [];
-    for (let radius = 0; radius <= 4; radius++) {
+    for (let radius = 0; radius <= 6; radius++) {
       const a = center - radius;
       const b = center + radius;
       if (a >= 0 && a < pageCount) priorityIndices.push(a);
       if (radius > 0 && b >= 0 && b < pageCount) priorityIndices.push(b);
     }
 
-    // 2. Smooth-margin IntersectionObserver for scroll lookahead without flooding open transition
+    // 2. Wide 1200px IntersectionObserver lookahead for instant scroll previews
     this._thumbObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
@@ -1734,7 +1743,7 @@ export class SidePanelsComponent {
         const idx = Number(frame.dataset.thumbFrame);
         if (Number.isFinite(idx)) void fillFrame(idx);
       }
-    }, { rootMargin: '480px' });
+    }, { rootMargin: '1200px' });
 
     for (const [, frame] of frameByIndex) {
       const existingImg = frame.querySelector('img');
@@ -1743,15 +1752,17 @@ export class SidePanelsComponent {
       }
     }
 
-    // 3. Yield one frame so sidebar slide-in animation starts at 60fps, then warm thumbnails in gentle batches
+    // 3. Yield one frame so the sidebar slide starts smoothly, then load in 4-page parallel batches without artificial pauses
     void (async () => {
       await new Promise<void>(r => requestAnimationFrame(() => r()));
-      const batchSize = 2;
+      const batchSize = 4;
       for (let i = 0; i < priorityIndices.length; i += batchSize) {
         if (warmupToken !== this._thumbWarmupToken || store.activeDocument?.id !== docId || !store.sidebarOpen) return;
         const slice = priorityIndices.slice(i, i + batchSize);
-        await Promise.all(slice.map(idx => fillFrame(idx)));
-        await new Promise(r => setTimeout(r, 12));
+        const results = await Promise.all(slice.map(idx => fillFrame(idx)));
+        if (results.some(Boolean)) {
+          await new Promise(r => setTimeout(r, 0));
+        }
       }
 
       const maxWarmup = Math.min(pageCount, 120);
@@ -1764,8 +1775,10 @@ export class SidePanelsComponent {
           }
         }
         if (batch.length > 0) {
-          await Promise.all(batch.map(p => fillFrame(p)));
-          await new Promise(r => setTimeout(r, 16));
+          const results = await Promise.all(batch.map(p => fillFrame(p)));
+          if (results.some(Boolean)) {
+            await new Promise(r => setTimeout(r, 0));
+          }
         }
       }
     })();

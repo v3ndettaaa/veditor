@@ -28,7 +28,18 @@ import { openPrintDialog } from './ui/components/print-dialog';
 import { promptPdfPassword } from './ui/components/password-dialog';
 import { pdfBytesMayBeEncrypted, isPdfPasswordError } from './core/print-utils';
 import { getPageFormFields, mountPageFormFields, clearFormFieldsCache } from './core/pdf-forms';
-import { selectionManager, transformAnnotation, doesAnnotationCoverBox } from './annotations/selection';
+import {
+  selectionManager,
+  transformAnnotation,
+  doesAnnotationCoverBox,
+  cloneAnnotation,
+  offsetAnnotation,
+  getAnnotationSelectionBox,
+  embedAnnotationsInStickyNote,
+  makeSelectionAnnotationId,
+  appendTextToStickyNote,
+  wrapPlainTextForTextBox
+} from './annotations/selection';
 import { mergeBoundingBoxes } from './utils/geometry';
 import { resolveAdaptiveCanvasDpr } from './utils/dpi';
 import { getIconSvg } from './utils/icons';
@@ -36,11 +47,14 @@ import { t, tr } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
 import { drawingCursorValue } from './ui/cursor';
-import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, BulkModifyCommand } from './core/history';
+import { history, AddAnnotationCommand, BulkAddAnnotationsCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, BulkModifyCommand } from './core/history';
 import { stampTool } from './annotations/tools/stamp';
-import { stickyNoteTool } from './annotations/tools/sticky-note';
+import { signatureTool } from './annotations/tools/signature';
+import { textTool } from './annotations/tools/text';
+import { resolveAnnotationFontFamily } from './core/fonts';
+import { stickyNoteTool, findExpandedStickyNoteTarget, getStickyNoteContentRect } from './annotations/tools/sticky-note';
 import { duplicateSelectedAnnotations } from './annotations/duplicate';
-import { DocumentSession, NotebookSpec, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
+import { Annotation, DocumentSession, NotebookSpec, Point, StickyNoteAnnotation, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
 import { onPageStructureChanged } from './core/page-ops';
 import { gestureEngine } from './input/gestures';
@@ -131,6 +145,10 @@ class VeditorApp {
   private _spacePrevTool: ToolType | null = null;
   /** Last hand-tool press, for manual double-press quick-select detection. */
   private _lastHandTap: { time: number; x: number; y: number } | null = null;
+  /** Most recent pointer coordinates over a rendered PDF page canvas. */
+  private _lastCanvasPointer: { pageIndex: number; point: Point; inside: boolean } | null = null;
+  /** Timestamp of an internal Ctrl+C/Ctrl+X triggered right before the browser's copy/cut event. */
+  private _pendingInternalClipboardAt: number = 0;
   private _annotationMenu = new AnnotationContextMenu();
 
   constructor() {
@@ -158,6 +176,11 @@ class VeditorApp {
     //    preventDefault() themselves; this is just the fallback for every
     //    other surface (empty chrome, header, body) that doesn't.
     document.addEventListener('contextmenu', (e) => e.preventDefault());
+    stampTool.onImageLoaded(() => this.repaintAllRenderedAnnotations());
+    signatureTool.onImageLoaded(() => this.repaintAllRenderedAnnotations());
+    window.addEventListener('blur', () => {
+      store.clearInternalClipboardPreference();
+    });
 
     // 1. Reflect saved theme, accent, density, direction & focus mode onto the
     //    document, and keep them in sync for the rest of the session.
@@ -2302,6 +2325,11 @@ class VeditorApp {
         this._scrollContainer.scrollTop = this._handPan.scrollT - (e.clientY - this._handPan.startY);
         return;
       }
+      this._lastCanvasPointer = {
+        pageIndex,
+        point: pointerHandler.pagePointForEvent(e, canvas),
+        inside: true
+      };
       if (!pointerHandler.isPointerDown) {
         pointerHandler.handleHover(e, pageIndex, canvas);
         // Polygon vertices are placed on click, so its elastic edge must also
@@ -2321,6 +2349,9 @@ class VeditorApp {
     });
 
     canvas.addEventListener('pointerleave', () => {
+      if (this._lastCanvasPointer?.pageIndex === pageIndex) {
+        this._lastCanvasPointer.inside = false;
+      }
       floatingPropsBar?.setHoverState(false);
     });
 
@@ -2676,39 +2707,415 @@ class VeditorApp {
   }
 
   /**
-   * System clipboard → page: pasting an image copied anywhere (browser,
-   * screenshot tool, image editor) drops it onto the active page as a
-   * resizable image annotation, one undo step.
+   * Resolves whether a paste or image insertion targets an expanded Sticky Note
+   * (actively inline-edited note, explicitly clicked/hovered note, or selected note).
+   */
+  private resolveStickyNotePasteTarget(
+    targetPageIndex?: number,
+    explicitPoint?: Point | null
+  ): { pageIndex: number; note: StickyNoteAnnotation; anchorPoint?: Point | null } | null {
+    const doc = store.activeDocument;
+    if (!doc) return null;
+
+    const editing = pointerHandler.editingStickyNote;
+    if (editing && (targetPageIndex === undefined || editing.pageIndex === targetPageIndex)) {
+      const editAnns = doc.annotations[editing.pageIndex] || [];
+      const editedNote = findExpandedStickyNoteTarget(editAnns, { editingNoteId: editing.noteId });
+      if (editedNote) {
+        return { pageIndex: editing.pageIndex, note: editedNote, anchorPoint: explicitPoint ?? null };
+      }
+    }
+
+    if (explicitPoint) {
+      const pageIdx = Math.max(0, Math.min(doc.pageCount - 1, targetPageIndex ?? store.activePageIndex));
+      const pageAnns = doc.annotations[pageIdx] || [];
+      const hitNote = findExpandedStickyNoteTarget(pageAnns, {
+        point: explicitPoint,
+        allowSelectedFallback: false
+      });
+      return hitNote ? { pageIndex: pageIdx, note: hitNote, anchorPoint: explicitPoint } : null;
+    }
+
+    const hover = this._lastCanvasPointer;
+    if (hover?.inside && (targetPageIndex === undefined || hover.pageIndex === targetPageIndex)) {
+      const hoverAnns = doc.annotations[hover.pageIndex] || [];
+      const hoveredNote = findExpandedStickyNoteTarget(hoverAnns, {
+        point: hover.point,
+        allowSelectedFallback: false
+      });
+      if (hoveredNote) {
+        return { pageIndex: hover.pageIndex, note: hoveredNote, anchorPoint: hover.point };
+      }
+    }
+
+    const primaryPage = Math.max(0, Math.min(doc.pageCount - 1, targetPageIndex ?? store.activePageIndex));
+    const primaryNote = findExpandedStickyNoteTarget(doc.annotations[primaryPage] || [], {
+      selectedIds: store.selectedAnnotationIds,
+      allowSelectedFallback: true
+    });
+    if (primaryNote) {
+      return { pageIndex: primaryPage, note: primaryNote, anchorPoint: null };
+    }
+
+    if (targetPageIndex === undefined && store.selectedAnnotationIds.size > 0) {
+      for (const [key, list] of Object.entries(doc.annotations)) {
+        const idx = Number(key);
+        if (!Number.isFinite(idx) || idx === primaryPage || !Array.isArray(list)) continue;
+        const selectedNote = findExpandedStickyNoteTarget(list, {
+          selectedIds: store.selectedAnnotationIds,
+          allowSelectedFallback: true
+        });
+        if (selectedNote) {
+          return { pageIndex: idx, note: selectedNote, anchorPoint: null };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private getSelectedAnnotationsForClipboard(): { pageIndex: number; items: Annotation[] } | null {
+    const doc = store.activeDocument;
+    if (!doc || store.selectedAnnotationIds.size === 0) return null;
+    const activePage = store.activePageIndex;
+    const activeItems = (doc.annotations[activePage] || []).filter(a => store.selectedAnnotationIds.has(a.id));
+    if (activeItems.length > 0) {
+      return { pageIndex: activePage, items: activeItems };
+    }
+    for (const [key, list] of Object.entries(doc.annotations)) {
+      const idx = Number(key);
+      if (!Number.isFinite(idx) || !Array.isArray(list)) continue;
+      const items = list.filter(a => store.selectedAnnotationIds.has(a.id));
+      if (items.length > 0) {
+        return { pageIndex: idx, items };
+      }
+    }
+    return null;
+  }
+
+  private copySelectedAnnotationsToClipboard(showFeedback: boolean = true): boolean {
+    const found = this.getSelectedAnnotationsForClipboard();
+    if (!found) return false;
+    store.setClipboard(found.items.map(cloneAnnotation));
+    if (showFeedback) {
+      showToast(
+        found.items.length > 1
+          ? tr(`${found.items.length} annotations copied`, `${found.items.length} مورد کپی شد`)
+          : tr('Annotation copied', 'مورد کپی شد'),
+        'success'
+      );
+    }
+    return true;
+  }
+
+  private cutSelectedAnnotationsToClipboard(showFeedback: boolean = true): boolean {
+    const found = this.getSelectedAnnotationsForClipboard();
+    if (!found) return false;
+    store.setClipboard(found.items.map(cloneAnnotation));
+    history.execute(new DeleteAnnotationsCommand(found.pageIndex, found.items.map(cloneAnnotation)));
+    store.clearSelection();
+    this.repaintAllRenderedAnnotations();
+    triggerAutoSave();
+    if (showFeedback) {
+      showToast(
+        found.items.length > 1
+          ? tr(`${found.items.length} annotations cut`, `${found.items.length} مورد برش داده شد`)
+          : tr('Annotation cut', 'مورد برش داده شد'),
+        'success'
+      );
+    }
+    return true;
+  }
+
+  private pasteAnnotationsFromClipboard(): boolean {
+    const doc = store.activeDocument;
+    const source = store.clipboardAnnotations;
+    if (!doc || source.length === 0) return false;
+
+    const containsStickyNote = source.some(a => a.type === 'sticky-note');
+    const stickyTarget = !containsStickyNote ? this.resolveStickyNotePasteTarget() : null;
+
+    if (stickyTarget) {
+      const { updatedNote, insertedItems } = embedAnnotationsInStickyNote(
+        stickyTarget.note,
+        source,
+        stickyTarget.anchorPoint
+      );
+      if (insertedItems.length > 0) {
+        history.execute(new ModifyAnnotationCommand(stickyTarget.pageIndex, stickyTarget.note, updatedNote));
+        triggerAutoSave();
+        const editingSameNote = pointerHandler.editingStickyNote?.noteId === stickyTarget.note.id;
+        if (!editingSameNote) {
+          store.setActiveTool('select');
+          store.selectAnnotation(stickyTarget.note.id);
+        }
+        this.repaintAllRenderedAnnotations();
+        showToast(
+          insertedItems.length > 1
+            ? tr(`${insertedItems.length} items pasted into sticky note`, `${insertedItems.length} مورد داخل یادداشت چسبان قرار گرفت`)
+            : tr('Pasted into sticky note', 'داخل یادداشت چسبان قرار گرفت'),
+          'success'
+        );
+        return true;
+      }
+    }
+
+    const pageIndex = Math.max(
+      0,
+      Math.min(
+        doc.pageCount - 1,
+        this._lastCanvasPointer?.inside ? this._lastCanvasPointer.pageIndex : store.activePageIndex
+      )
+    );
+    const page = doc.pages?.[pageIndex];
+    const rotSize = page ? rotatedPageSize(page, store.pageRotations[pageIndex] || 0) : { width: 612, height: 792 };
+    const zoom = Math.max(store.zoom || 1, 0.1);
+    let targetCenter: Point = { x: rotSize.width / 2, y: rotSize.height / 2 };
+
+    if (this._lastCanvasPointer?.inside && this._lastCanvasPointer.pageIndex === pageIndex) {
+      targetCenter = this._lastCanvasPointer.point;
+    } else {
+      const rendered = this._renderedPages.get(pageIndex);
+      if (rendered?.container?.isConnected) {
+        const scRect = this._scrollContainer.getBoundingClientRect();
+        const pgRect = rendered.container.getBoundingClientRect();
+        if (scRect.width > 0 && scRect.height > 0 && pgRect.width > 0 && pgRect.height > 0) {
+          const visLeft = Math.max(0, scRect.left - pgRect.left);
+          const visTop = Math.max(0, scRect.top - pgRect.top);
+          const visRight = Math.min(pgRect.width, scRect.right - pgRect.left);
+          const visBottom = Math.min(pgRect.height, scRect.bottom - pgRect.top);
+          if (visRight - visLeft > 20 && visBottom - visTop > 20) {
+            targetCenter = {
+              x: ((visLeft + visRight) / 2) / zoom,
+              y: ((visTop + visBottom) / 2) / zoom
+            };
+          }
+        }
+      }
+    }
+
+    const sourceBox = mergeBoundingBoxes(source.map(getAnnotationSelectionBox));
+    const dx = targetCenter.x - (sourceBox.x + sourceBox.width / 2);
+    const dy = targetCenter.y - (sourceBox.y + sourceBox.height / 2);
+    const now = Date.now();
+    const clones = source.map(item => {
+      const next = offsetAnnotation(item, dx, dy);
+      next.id = makeSelectionAnnotationId();
+      next.pageIndex = pageIndex;
+      next.createdAt = now;
+      next.updatedAt = now;
+      return next;
+    });
+
+    history.execute(new BulkAddAnnotationsCommand(pageIndex, clones));
+    triggerAutoSave();
+    store.setActiveTool('select');
+    store.setSelectedAnnotationIds(clones.map(a => a.id));
+    this.repaintAllRenderedAnnotations();
+    showToast(
+      clones.length > 1
+        ? tr(`${clones.length} annotations pasted`, `${clones.length} مورد قرار گرفت`)
+        : tr('Annotation pasted', 'مورد قرار گرفت'),
+      'success'
+    );
+    return true;
+  }
+
+  private pasteTextToPageOrStickyNote(rawText: string): boolean {
+    const doc = store.activeDocument;
+    if (!doc) return false;
+    const cleaned = (rawText || '').replace(/\r\n/g, '\n');
+    if (!cleaned.trim()) return false;
+
+    const stickyTarget = this.resolveStickyNotePasteTarget();
+    if (stickyTarget) {
+      const updated = appendTextToStickyNote(stickyTarget.note, cleaned);
+      if (updated) {
+        history.execute(new ModifyAnnotationCommand(stickyTarget.pageIndex, stickyTarget.note, updated));
+        triggerAutoSave();
+        const editingSameNote = pointerHandler.editingStickyNote?.noteId === stickyTarget.note.id;
+        if (!editingSameNote) {
+          store.setActiveTool('select');
+          store.selectAnnotation(stickyTarget.note.id);
+        }
+        this.repaintAllRenderedAnnotations();
+        showToast(tr('Text pasted into sticky note', 'متن داخل یادداشت چسبان قرار گرفت'), 'success');
+        return true;
+      }
+    }
+
+    const pageIndex = Math.max(
+      0,
+      Math.min(
+        doc.pageCount - 1,
+        this._lastCanvasPointer?.inside ? this._lastCanvasPointer.pageIndex : store.activePageIndex
+      )
+    );
+    const page = doc.pages?.[pageIndex];
+    const rotSize = page ? rotatedPageSize(page, store.pageRotations[pageIndex] || 0) : { width: 612, height: 792 };
+    const zoom = Math.max(store.zoom || 1, 0.1);
+    let anchor: Point = { x: rotSize.width / 2 - 110, y: rotSize.height / 2 - 24 };
+
+    if (this._lastCanvasPointer?.inside && this._lastCanvasPointer.pageIndex === pageIndex) {
+      anchor = this._lastCanvasPointer.point;
+    } else {
+      const rendered = this._renderedPages.get(pageIndex);
+      if (rendered?.container?.isConnected) {
+        const scRect = this._scrollContainer.getBoundingClientRect();
+        const pgRect = rendered.container.getBoundingClientRect();
+        if (scRect.width > 0 && scRect.height > 0 && pgRect.width > 0 && pgRect.height > 0) {
+          const visLeft = Math.max(0, scRect.left - pgRect.left);
+          const visTop = Math.max(0, scRect.top - pgRect.top);
+          const visRight = Math.min(pgRect.width, scRect.right - pgRect.left);
+          const visBottom = Math.min(pgRect.height, scRect.bottom - pgRect.top);
+          if (visRight - visLeft > 20 && visBottom - visTop > 20) {
+            anchor = {
+              x: ((visLeft + visRight) / 2) / zoom - 90,
+              y: ((visTop + visBottom) / 2) / zoom - 20
+            };
+          }
+        }
+      }
+    }
+
+    const wrapped = wrapPlainTextForTextBox(cleaned);
+    const tSettings = store.toolSettings;
+    const textAnn = textTool.createTextAnnotation(
+      {
+        x: Math.max(12, Math.min(rotSize.width - 80, anchor.x)),
+        y: Math.max(12, Math.min(rotSize.height - 40, anchor.y))
+      },
+      pageIndex,
+      'layer-default',
+      wrapped,
+      tSettings.fontSize || 16,
+      resolveAnnotationFontFamily(tSettings.fontFamily),
+      tSettings.textColor || '#111827',
+      tSettings.textBgColor || 'transparent',
+      tSettings.textAlign || 'left'
+    );
+    history.execute(new AddAnnotationCommand(pageIndex, textAnn));
+    triggerAutoSave();
+    store.setActiveTool('select');
+    store.selectAnnotation(textAnn.id);
+    this.repaintAllRenderedAnnotations();
+    showToast(tr('Text pasted onto page', 'متن روی صفحه قرار گرفت'), 'success');
+    return true;
+  }
+
+  /**
+   * System & internal clipboard → page or expanded Sticky Note:
+   * handles pasting images, plain text, and annotations copied with Ctrl+C/Ctrl+X.
    */
   private setupClipboardImagePaste() {
+    window.addEventListener('copy', (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
+        store.clearInternalClipboardPreference();
+        return;
+      }
+      if (!store.activeDocument) return;
+      if (store.textSelection?.text) {
+        store.setClipboardText(store.textSelection.text);
+        return;
+      }
+      const domSel = window.getSelection()?.toString() || '';
+      if (domSel.trim().length > 0) {
+        store.setClipboardText(domSel);
+        return;
+      }
+      const recentlyHandled = performance.now() - this._pendingInternalClipboardAt < 100;
+      if (recentlyHandled || this.copySelectedAnnotationsToClipboard(false)) {
+        this._pendingInternalClipboardAt = 0;
+        e.clipboardData?.setData('application/x-veditor-clipboard', '1');
+        e.clipboardData?.setData('text/plain', '');
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('cut', (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
+        store.clearInternalClipboardPreference();
+        return;
+      }
+      if (!store.activeDocument || store.textSelection?.text) return;
+      const recentlyHandled = performance.now() - this._pendingInternalClipboardAt < 100;
+      if (recentlyHandled || this.cutSelectedAnnotationsToClipboard(false)) {
+        this._pendingInternalClipboardAt = 0;
+        e.clipboardData?.setData('application/x-veditor-clipboard', '1');
+        e.clipboardData?.setData('text/plain', '');
+        e.preventDefault();
+      }
+    });
+
     window.addEventListener('paste', (e: ClipboardEvent) => {
       const target = e.target as HTMLElement | null;
-      // Text fields keep their native paste behavior.
-      if (target && (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable)) return;
+      const isInTextField = Boolean(
+        target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+      );
       if (!store.activeDocument) return;
+
+      const hasInternalMarker = Boolean(e.clipboardData?.types?.includes('application/x-veditor-clipboard'));
+      const editingSticky = pointerHandler.editingStickyNote;
       const items = e.clipboardData?.items;
-      if (!items) return;
 
-      for (const item of items) {
-        if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
-        const file = item.getAsFile();
-        if (!file) continue;
+      if (hasInternalMarker && (!isInTextField || editingSticky !== null) && store.clipboardAnnotations.length > 0) {
         e.preventDefault();
+        this.pasteAnnotationsFromClipboard();
+        return;
+      }
 
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-          if (!dataUrl) return;
-          const probe = new Image();
-          probe.onload = () => {
-            stampTool.primeImage(dataUrl, probe);
-            this.insertPastedImage(dataUrl, probe.naturalWidth, probe.naturalHeight);
+      if (items && (!isInTextField || editingSticky !== null)) {
+        for (const item of items) {
+          if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+          const file = item.getAsFile();
+          if (!file) continue;
+          e.preventDefault();
+          store.clearInternalClipboardPreference();
+
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+            if (!dataUrl) return;
+            const probe = new Image();
+            probe.onload = () => {
+              stampTool.primeImage(dataUrl, probe);
+              this.insertPastedImage(dataUrl, probe.naturalWidth, probe.naturalHeight);
+            };
+            probe.onerror = () => showToast(tr('Could not read pasted image', 'امکان خواندن تصویر الصاق‌شده نبود'), 'error');
+            probe.src = dataUrl;
           };
-          probe.onerror = () => showToast(tr('Could not read pasted image', 'امکان خواندن تصویر الصاق‌شده نبود'), 'error');
-          probe.src = dataUrl;
-        };
-        reader.readAsDataURL(file);
-        return; // First image wins; ignore other clipboard flavors.
+          reader.readAsDataURL(file);
+          return; // First image wins; ignore other clipboard flavors.
+        }
+      }
+
+      // Text fields (including sticky-note inline editor without an image/internal object) keep native text paste behavior.
+      if (isInTextField) return;
+
+      const plainText = e.clipboardData?.getData('text/plain') || '';
+      if (!hasInternalMarker && plainText.trim().length > 0) {
+        e.preventDefault();
+        this.pasteTextToPageOrStickyNote(plainText);
+        return;
+      }
+
+      if (store.preferInternalClipboard && store.clipboardAnnotations.length > 0) {
+        e.preventDefault();
+        this.pasteAnnotationsFromClipboard();
+        return;
+      }
+
+      if (!store.preferInternalClipboard && store.clipboardText.trim().length > 0) {
+        e.preventDefault();
+        this.pasteTextToPageOrStickyNote(store.clipboardText);
+        return;
+      }
+
+      if (store.clipboardAnnotations.length > 0) {
+        e.preventDefault();
+        this.pasteAnnotationsFromClipboard();
       }
     });
   }
@@ -2735,7 +3142,7 @@ class VeditorApp {
     input.click();
   }
 
-  /** Reads an image File and places it as a resizable image stamp on the target page. */
+  /** Reads an image File and places it as a resizable image stamp on the target page (or inside an expanded Sticky Note). */
   public async insertImageFile(
     file: File,
     pageIndex: number = store.activePageIndex,
@@ -2765,18 +3172,61 @@ class VeditorApp {
     }
   }
 
-  /** Places a pasted or picked image at the user's visible viewport center on the page, scaled to the visible area. */
+  /**
+   * Places a pasted or picked image inside a targeted expanded Sticky Note (if any),
+   * or at the user's visible viewport center on the page, scaled proportionally.
+   */
   private insertPastedImage(
     dataUrl: string,
     pixelWidth: number,
     pixelHeight: number,
-    targetPageIndex: number = store.activePageIndex,
+    targetPageIndex?: number,
     centerPoint?: { x: number; y: number },
     label?: string
   ): void {
     const doc = store.activeDocument;
     if (!doc) return;
-    const pageIndex = Math.max(0, Math.min(doc.pageCount - 1, targetPageIndex));
+
+    const safePixW = Math.max(1, pixelWidth);
+    const safePixH = Math.max(1, pixelHeight);
+
+    const stickyTarget = this.resolveStickyNotePasteTarget(targetPageIndex, centerPoint);
+    if (stickyTarget) {
+      const contentRect = getStickyNoteContentRect(stickyTarget.note);
+      const rawStamp = stampTool.createCustomImageStamp(
+        {
+          x: contentRect.x + contentRect.width / 2,
+          y: contentRect.y + contentRect.height / 2
+        },
+        stickyTarget.pageIndex,
+        stickyTarget.note.layerId,
+        dataUrl,
+        safePixW * 0.75,
+        safePixH * 0.75
+      );
+      if (label) {
+        rawStamp.presetKey = label.replace(/\.[^.]+$/, '');
+      }
+      const { updatedNote, insertedItems } = embedAnnotationsInStickyNote(
+        stickyTarget.note,
+        [rawStamp],
+        stickyTarget.anchorPoint
+      );
+      if (insertedItems.length > 0) {
+        history.execute(new ModifyAnnotationCommand(stickyTarget.pageIndex, stickyTarget.note, updatedNote));
+        triggerAutoSave();
+        const editingSameNote = pointerHandler.editingStickyNote?.noteId === stickyTarget.note.id;
+        if (!editingSameNote) {
+          store.setActiveTool('select');
+          store.selectAnnotation(stickyTarget.note.id);
+        }
+        this.repaintAllRenderedAnnotations();
+        showToast(tr('Image pasted into sticky note', 'تصویر داخل یادداشت چسبان قرار گرفت'), 'success');
+        return;
+      }
+    }
+
+    const pageIndex = Math.max(0, Math.min(doc.pageCount - 1, targetPageIndex ?? store.activePageIndex));
     const page = doc.pages?.[pageIndex];
     const rotSize = page ? rotatedPageSize(page, store.pageRotations[pageIndex] || 0) : { width: 612, height: 792 };
     const pageWidth = rotSize.width;
@@ -2809,8 +3259,6 @@ class VeditorApp {
     }
 
     // Scale image proportionally to fit comfortably (~45%) inside the currently visible viewport region
-    const safePixW = Math.max(1, pixelWidth);
-    const safePixH = Math.max(1, pixelHeight);
     let width = safePixW * 0.75;
     let height = safePixH * 0.75;
     const targetMaxW = Math.max(48, Math.min(pageWidth * 0.85, visAvailW * 0.48));
@@ -2921,12 +3369,26 @@ class VeditorApp {
       // Handle Ctrl / Cmd modifier shortcuts
       if (e.ctrlKey || e.metaKey) {
         const key = e.key.toLowerCase();
-        if (key === 'c' && store.textSelection?.text) {
-          e.preventDefault();
-          void navigator.clipboard?.writeText(store.textSelection.text).then(() => {
-            showToast(tr('Copied text to clipboard', 'متن در کلیپ‌بورد کپی شد'), 'info');
-          }).catch(() => {});
-          return;
+        if (key === 'c') {
+          if (store.textSelection?.text) {
+            e.preventDefault();
+            store.setClipboardText(store.textSelection.text);
+            void navigator.clipboard?.writeText(store.textSelection.text).then(() => {
+              showToast(tr('Copied text to clipboard', 'متن در کلیپ‌بورد کپی شد'), 'info');
+            }).catch(() => {});
+            return;
+          }
+          if (this.copySelectedAnnotationsToClipboard(true)) {
+            this._pendingInternalClipboardAt = performance.now();
+            // Do not preventDefault here so the browser also fires `copy` synchronously,
+            // allowing `e.clipboardData.setData(...)` to replace any stale OS image.
+            return;
+          }
+        } else if (key === 'x') {
+          if (this.cutSelectedAnnotationsToClipboard(true)) {
+            this._pendingInternalClipboardAt = performance.now();
+            return;
+          }
         } else if (key === 'z') {
           e.preventDefault();
           if (e.shiftKey) {

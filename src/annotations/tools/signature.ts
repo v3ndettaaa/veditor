@@ -71,14 +71,34 @@ export class SignatureTool {
       }
       ctx.restore();
     } else if (ann.pngDataUrl) {
-      const img = new Image();
-      img.src = ann.pngDataUrl;
-      if (img.complete) {
+      const img = this.getPngImage(ann.pngDataUrl);
+      if (img.complete && img.naturalWidth > 0) {
         ctx.drawImage(img, b.x, b.y, b.width, b.height);
       }
     }
 
     ctx.restore();
+  }
+
+  private _pngCache: Map<string, HTMLImageElement> = new Map();
+  private _onImageLoadCallbacks: Set<() => void> = new Set();
+
+  public onImageLoaded(cb: () => void): () => void {
+    this._onImageLoadCallbacks.add(cb);
+    return () => this._onImageLoadCallbacks.delete(cb);
+  }
+
+  private getPngImage(src: string): HTMLImageElement {
+    let img = this._pngCache.get(src);
+    if (!img) {
+      img = new Image();
+      img.onload = () => {
+        for (const cb of this._onImageLoadCallbacks) cb();
+      };
+      img.src = src;
+      this._pngCache.set(src, img);
+    }
+    return img;
   }
 }
 
