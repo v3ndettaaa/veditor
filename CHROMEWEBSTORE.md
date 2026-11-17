@@ -1,7 +1,7 @@
 # Chrome Web Store & Firefox Add-on Listing Documentation
 
 **Extension Name**: veditor – World-Class PDF Editor & Annotator  
-**Version**: 1.0.0  
+**Version**: 5.0.0  
 **Category**: Productivity / Tools  
 **Default Language**: English  
 **Supported Languages**: English, Persian (فارسی)  

@@ -1,7 +1,7 @@
 cask "veditor" do
   arch arm: "aarch64", intel: "x64"
 
-  version "4.0.0"
+  version "5.0.0"
   sha256 :no_check
 
   url "https://github.com/v3ndettaaa/veditor/releases/download/v#{version}/veditor_#{version}_#{arch}.dmg"

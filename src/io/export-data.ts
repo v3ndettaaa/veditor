@@ -12,7 +12,7 @@ export class DataExporter {
     if (!doc) throw new Error('No active document');
 
     const payload = {
-      version: '4.0.0',
+      version: '5.0.0',
       generator: 'veditor',
       documentName: doc.name,
       pageCount: doc.pageCount,

@@ -3242,8 +3242,21 @@ input.prop-hex-input:focus {
    Linux / WebKitGTK Compositor Optimizations & Text Selection Bar
    ========================================================================== */
 
-.pdf-page-container {
-  contain: layout style paint;
+html.platform-linux .document-scroll-container {
+  scrollbar-gutter: auto;
+}
+
+html.platform-linux .pdf-page-container {
+  contain: style;
+}
+
+html.platform-linux .pdf-page-canvas,
+html.platform-linux .annotation-canvas,
+html.platform-linux .annot-chunk-canvas,
+html.platform-linux .scratchpad-canvas,
+html.platform-linux .scratch-chunk-canvas {
+  transform: none;
+  backface-visibility: visible;
 }
 
 html.platform-linux .app-header,

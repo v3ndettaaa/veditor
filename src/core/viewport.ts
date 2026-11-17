@@ -30,6 +30,19 @@ export function rotatedPageSize(
     : { width: page.originalWidth, height: page.originalHeight };
 }
 
+/**
+ * Normalizes `WheelEvent.deltaY` across pixel, line (`deltaMode === 1`), and
+ * page (`deltaMode === 2`) modes and clamps extreme trackpad/X11/Wayland
+ * libinput spikes so a single wheel notch cannot jump zoom wildly.
+ */
+export function normalizeWheelDeltaY(deltaY: number, deltaMode: number = 0): number {
+  if (!Number.isFinite(deltaY)) return 0;
+  let px = deltaY;
+  if (deltaMode === 1) px *= 20;
+  else if (deltaMode === 2) px *= 320;
+  return Math.max(-160, Math.min(160, px));
+}
+
 export class ViewportManager {
   private _scrollContainer: HTMLElement | null = null;
   private _pagesWrapper: HTMLElement | null = null;
@@ -56,6 +69,7 @@ export class ViewportManager {
     timestamp: number;
   } | null = null;
   private _ignoreNextScrollAnchorReset: boolean = false;
+  private _programmaticScrollUntil: number = 0;
 
   public setPreviewScale(scale: number): void {
     this._previewScale = scale > 0 && Number.isFinite(scale) ? scale : 1;
@@ -75,7 +89,8 @@ export class ViewportManager {
     this._onVisiblePagesChange = onVisiblePagesChange;
 
     this._scrollContainer.addEventListener('scroll', () => {
-      if (!store.isZoomAdjusting && !this._ignoreNextScrollAnchorReset) {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (!store.isZoomAdjusting && !this._ignoreNextScrollAnchorReset && now >= this._programmaticScrollUntil) {
         this._zoomAnchor = null;
       }
       this._ignoreNextScrollAnchorReset = false;
@@ -644,6 +659,11 @@ export class ViewportManager {
       if (this._pageLayouts === oldLayouts) this.updateLayout();
       const layout = this.getLayout(anchorPageIndex);
       if (layout) {
+        // Flush updated wrapper scroll dimensions so WebKitGTK does not clamp
+        // scrollLeft/scrollTop against the pre-zoom scrollHeight/scrollWidth.
+        void (this._scrollContainer as unknown as { scrollHeight?: number }).scrollHeight;
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        this._programmaticScrollUntil = nowMs + 120;
         this._ignoreNextScrollAnchorReset = true;
         this._scrollContainer.scrollLeft = layout.left + offsetX * layout.width - cx;
         this._scrollContainer.scrollTop = layout.top + offsetY * layout.height - cy;

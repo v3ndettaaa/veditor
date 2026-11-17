@@ -41,6 +41,7 @@ describe('Data Export & Import', () => {
     const parsed = JSON.parse(json);
 
     expect(parsed.generator).toBe('veditor');
+    expect(parsed.version).toBe('5.0.0');
     expect(parsed.documentName).toBe('annual_report.pdf');
     expect(parsed.annotations[0].length).toBe(1);
     expect(parsed.annotations[0][0].type).toBe('pen');
