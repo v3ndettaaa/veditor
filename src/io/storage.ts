@@ -378,16 +378,49 @@ export async function assignDocToFolder(docId: string, folderId: string | null):
   }
 }
 
-// Auto-save debouncer
+// Stroke-aware Auto-save debouncer: never serializes to IndexedDB while the
+// user is actively drawing a stroke (eliminates random mid-stroke GC/IDB stalls).
 let autoSaveTimer: any = null;
+let autoSaveIdleHandle: number | null = null;
+let shouldPauseAutoSave: () => boolean = () => false;
+
+export function setAutoSavePausePredicate(predicate: () => boolean): void {
+  shouldPauseAutoSave = predicate;
+}
 
 export function triggerAutoSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(async () => {
-    const doc = store.activeDocument;
-    if (doc) {
-      doc.lastModifiedAt = Date.now();
-      await saveDocumentSession(doc);
+  if (autoSaveIdleHandle !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+    (window as unknown as { cancelIdleCallback: (id: number) => void }).cancelIdleCallback(autoSaveIdleHandle);
+    autoSaveIdleHandle = null;
+  }
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null;
+    if (shouldPauseAutoSave()) {
+      // Stylus/pointer is currently down — wait until the stroke finishes!
+      triggerAutoSave();
+      return;
+    }
+    const flush = async () => {
+      autoSaveIdleHandle = null;
+      if (shouldPauseAutoSave()) {
+        triggerAutoSave();
+        return;
+      }
+      const doc = store.activeDocument;
+      if (doc) {
+        doc.lastModifiedAt = Date.now();
+        await saveDocumentSession(doc);
+      }
+    };
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      autoSaveIdleHandle = (window as unknown as {
+        requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => number;
+      }).requestIdleCallback(() => {
+        void flush();
+      }, { timeout: 600 });
+    } else {
+      void flush();
     }
   }, 1500);
 }

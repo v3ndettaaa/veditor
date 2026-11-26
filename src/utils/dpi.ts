@@ -73,17 +73,17 @@ export function clampRenderMultiplier(
 
 /**
  * Hardware-friendly backing-store multiplier for live interactive canvases
- * (annotations, scratchpad, and viewport chunks). Uses the same 1.5x–2.5x
- * HiDPI floor/ceiling and 3840px / 9.4MP budget on Linux, Windows, and Web so
- * ink strokes never drop below 1:1 resolution at high zoom on large monitors.
+ * (annotations, scratchpad, and viewport chunks). Uses a 2.5x–3.0x supersampled
+ * HiDPI floor/ceiling bounded by the 3840px / 9.4MP budget on Linux, Windows,
+ * and Web so even the finest 1px pen strokes render razor-sharp at 100% zoom.
  */
 export function resolveAdaptiveCanvasDpr(
   cssWidth: number,
   cssHeight: number,
   targetDPI?: number
 ): number {
-  const maxDpr = 2.5;
-  const minDpr = 1.5;
+  const maxDpr = 3.0;
+  const minDpr = 2.5;
   const rawDpr = Math.min(maxDpr, Math.max(minDpr, getDevicePixelRatio(), resolveRenderDpr(targetDPI)));
   let mult = clampRenderMultiplier(cssWidth, cssHeight, rawDpr, ADAPTIVE_CANVAS_MAX_DIMENSION);
   const area = (cssWidth * mult) * (cssHeight * mult);

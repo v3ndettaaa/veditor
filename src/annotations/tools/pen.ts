@@ -1,10 +1,12 @@
 /**
  * Professional Freehand Pen Tool
- * Ultra-smooth, low-latency, pressure-sensitive drawing.
+ * Ultra-smooth, low-latency, pressure-sensitive drawing powered by
+ * causal One-Euro filtering and zero-blit append-only analytical ink streaming.
  */
 
 import { StrokePoint, PenAnnotation, BoundingBox } from '../../core/types';
-import { renderLiveStroke } from '../spline';
+import { renderLiveStroke, IncrementalLivePen } from '../spline';
+import { OneEuroStrokeFilter } from '../ink-engine';
 import { computePointsBoundingBox } from '../../utils/geometry';
 
 export class PenTool {
@@ -18,11 +20,13 @@ export class PenTool {
   private _strength: 'light' | 'balanced' | 'strong' = 'balanced';
   private _smoothing: 'none' | 'subtle' | 'medium' | 'high' = 'medium';
 
-  // O(1) incremental bounding box for live strokes
+  // O(1) incremental bounding box, causal One-Euro filter, & zero-blit streaming renderer
   private _minX: number = Infinity;
   private _minY: number = Infinity;
   private _maxX: number = -Infinity;
   private _maxY: number = -Infinity;
+  private readonly _filter = new OneEuroStrokeFilter();
+  private readonly _incrementalRenderer = new IncrementalLivePen();
 
   public start(
     point: StrokePoint,
@@ -34,7 +38,17 @@ export class PenTool {
     strength: 'light' | 'balanced' | 'strong' = 'balanced',
     smoothing: 'none' | 'subtle' | 'medium' | 'high' = 'medium'
   ) {
-    this._activePoints = [point];
+    this._filter.reset(smoothing);
+    const first = this._filter.filter(
+      point.x,
+      point.y,
+      point.pressure ?? 0.5,
+      point.time ?? performance.now(),
+      1,
+      point.tiltX,
+      point.tiltY
+    );
+    this._activePoints = [first];
     this._liveTip = null;
     this._pageIndex = pageIndex;
     this._color = color;
@@ -43,49 +57,55 @@ export class PenTool {
     this._pressureEnabled = pressureEnabled;
     this._strength = strength;
     this._smoothing = smoothing;
-    this._minX = point.x;
-    this._minY = point.y;
-    this._maxX = point.x;
-    this._maxY = point.y;
+    this._minX = first.x;
+    this._minY = first.y;
+    this._maxX = first.x;
+    this._maxY = first.y;
+    this._incrementalRenderer.reset();
   }
 
   public move(point: StrokePoint, zoom: number = 1): void {
     const len = this._activePoints.length;
-    if (point.x < this._minX) this._minX = point.x;
-    if (point.y < this._minY) this._minY = point.y;
-    if (point.x > this._maxX) this._maxX = point.x;
-    if (point.y > this._maxY) this._maxY = point.y;
+    if (len === 0) return;
 
-    if (len > 0) {
-      const prev = this._activePoints[len - 1];
-      const dx = point.x - prev.x;
-      const dy = point.y - prev.y;
-      const effZoom = Math.max(1, zoom);
-      // Filter redundant sub-pixel hardware jitter (< 0.24 screen px, capped at 0.18 page pt)
-      // while updating _liveTip so the visible ink tip follows the stylus with zero lag.
-      const minDist = Math.min(0.18, 0.24 / effZoom);
-      const dist = Math.hypot(dx, dy);
-      if (dist < minDist) {
-        prev.pressure = prev.pressure * 0.45 + point.pressure * 0.55;
-        if (dist > 0.01) {
-          this._liveTip = { ...point, pressure: prev.pressure };
-        }
-        return;
+    const prev = this._activePoints[len - 1];
+    const effZoom = Math.max(0.25, zoom);
+    // Filter redundant sub-pixel hardware jitter while updating _liveTip so
+    // the visible ink nib tracks slow micro-movements with zero delay.
+    const minDist = Math.min(0.18, 0.24 / Math.max(1, effZoom));
+    const rawDist = Math.hypot(point.x - prev.x, point.y - prev.y);
+    if (rawDist < minDist) {
+      prev.pressure = prev.pressure * 0.55 + (point.pressure ?? 0.5) * 0.45;
+      if (rawDist > 0.01) {
+        this._liveTip = {
+          x: point.x,
+          y: point.y,
+          pressure: prev.pressure,
+          tiltX: point.tiltX,
+          tiltY: point.tiltY,
+          time: point.time
+        };
       }
-      // Preserve responsive hardware stylus pressure while smoothing single-sample noise
-      const rawBlended = prev.pressure * 0.35 + point.pressure * 0.65;
-      const maxDelta = Math.max(0.08, dist * 0.35);
-      const clampedPressure = Math.max(
-        prev.pressure - maxDelta,
-        Math.min(prev.pressure + maxDelta, rawBlended)
-      );
-      point = {
-        ...point,
-        pressure: clampedPressure
-      };
+      return;
     }
+
+    const filtered = this._filter.filter(
+      point.x,
+      point.y,
+      point.pressure ?? 0.5,
+      point.time ?? performance.now(),
+      effZoom,
+      point.tiltX,
+      point.tiltY
+    );
+
+    if (filtered.x < this._minX) this._minX = filtered.x;
+    if (filtered.y < this._minY) this._minY = filtered.y;
+    if (filtered.x > this._maxX) this._maxX = filtered.x;
+    if (filtered.y > this._maxY) this._maxY = filtered.y;
+
     this._liveTip = null;
-    this._activePoints.push(point);
+    this._activePoints.push(filtered);
   }
 
   /** Live stroke points for draw-and-hold recognition (read-only snapshot). */
@@ -127,10 +147,51 @@ export class PenTool {
     ctx.restore();
   }
 
+  /**
+   * O(1) zero-blit append-only live stroke render directly onto `canvas`,
+   * paired with a tiny floating tip canvas for the unclosed segment and
+   * optional 1-frame hardware stylus prediction.
+   */
+  public renderScratchpadIncremental(
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    scale: number,
+    offsetPxX: number = 0,
+    offsetPxY: number = 0,
+    predictedPoints?: readonly StrokePoint[] | null
+  ): void {
+    if (this._activePoints.length === 0) return;
+    this._incrementalRenderer.render(
+      ctx,
+      canvas,
+      this._activePoints,
+      this._color,
+      this._width,
+      this._pressureCurve,
+      this._pressureEnabled,
+      this._strength,
+      this._smoothing,
+      scale,
+      offsetPxX,
+      offsetPxY,
+      this._liveTip,
+      predictedPoints
+    );
+  }
+
+  public clearLiveSurface(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+    this._incrementalRenderer.clearDirtyOnCanvas(ctx, canvas);
+  }
+
+  public hideTipOverlay(): void {
+    this._incrementalRenderer.hideTipOverlay();
+  }
+
   public finish(layerId: string): PenAnnotation | null {
     if (this._activePoints.length === 0) return null;
 
-    // Preserve exact points and smoothing setting so there is ZERO morphing / snapping on pen release
+    // Points are already causally One-Euro smoothed during live streaming:
+    // setting `preSmoothed: true` guarantees 0.000px visual shift on pen lift.
     const finalizedPoints = [...this._activePoints];
     if (this._liveTip && finalizedPoints.length > 0) {
       const last = finalizedPoints[finalizedPoints.length - 1];
@@ -153,6 +214,7 @@ export class PenTool {
       pressureCurve: this._pressureCurve,
       pressureStrength: this._strength,
       strokeSmoothing: this._smoothing,
+      preSmoothed: true,
       opacity: 1.0,
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -169,6 +231,7 @@ export class PenTool {
     this._minY = Infinity;
     this._maxX = -Infinity;
     this._maxY = -Infinity;
+    this._incrementalRenderer.reset();
   }
 }
 

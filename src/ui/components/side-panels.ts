@@ -127,12 +127,31 @@ export class SidePanelsComponent {
     const activeTab = store.activeSidebarTab;
     const doc = store.activeDocument;
 
-    const userBmSig = (doc?.userBookmarks || [])
+    // Auto-collapse sidebar whenever sidebarOpen is false OR there is no active PDF document.
+    // Checking this FIRST avoids scanning all annotations/bookmarks on every pen stroke when closed!
+    if (!isOpen || !doc) {
+      if (!this._container.classList.contains('collapsed')) {
+        this._container.classList.add('collapsed');
+        this._container.setAttribute('aria-hidden', 'true');
+        (this._container as HTMLElement & { inert: boolean }).inert = true;
+      }
+      if (this._thumbObserver) {
+        this._thumbObserver.disconnect();
+        this._thumbObserver = null;
+      }
+      if (!doc) {
+        this._thumbWarmupToken++;
+        this._lastRenderKey = '';
+      }
+      return;
+    }
+
+    const userBmSig = (doc.userBookmarks || [])
       .map(b => `${b.id}:${b.pageIndex}:${b.title}:${b.note || ''}`)
       .join(',');
-    const outlineSig = doc ? `${doc.bookmarks?.length ?? 0}:${userBmSig}` : '0:';
+    const outlineSig = `${doc.bookmarks?.length ?? 0}:${userBmSig}`;
     const historySig = activeTab === 'history' ? String(history.historyList.length) : '0';
-    const annotSig = activeTab === 'annotations' && doc
+    const annotSig = activeTab === 'annotations'
       ? `${this._annotationFilter}:` + Object.entries(doc.annotations || {})
           .map(([k, list]) => `${k}:${(list || []).map(a => `${a.id}:${a.updatedAt}`).join(',')}`)
           .join(';')
@@ -140,8 +159,8 @@ export class SidePanelsComponent {
 
     const renderKey = [
       activeTab,
-      doc?.id ?? '',
-      doc?.pageCount ?? 0,
+      doc.id,
+      doc.pageCount,
       this._structureRevision,
       outlineSig,
       historySig,
@@ -149,22 +168,6 @@ export class SidePanelsComponent {
       this._selectionMode ? '1' : '0',
       store.appSettings.language
     ].join('|');
-
-    // Auto-collapse sidebar whenever sidebarOpen is false OR there is no active PDF document
-    if (!isOpen || !doc) {
-      this._container.classList.add('collapsed');
-      this._container.setAttribute('aria-hidden', 'true');
-      (this._container as HTMLElement & { inert: boolean }).inert = true;
-      if (this._thumbObserver) {
-        this._thumbObserver.disconnect();
-        this._thumbObserver = null;
-      }
-      this._thumbWarmupToken++;
-      if (!doc) {
-        this._lastRenderKey = '';
-      }
-      return;
-    }
 
     const wasCollapsed = this._container.classList.contains('collapsed');
     this._container.classList.remove('collapsed');

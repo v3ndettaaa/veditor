@@ -43,6 +43,84 @@ export function normalizeWheelDeltaY(deltaY: number, deltaMode: number = 0): num
   return Math.max(-160, Math.min(160, px));
 }
 
+/**
+ * Computes the inclusive page-index range `[start, end]` that should keep
+ * lightweight zero-VRAM placeholder shells mounted in the DOM so even extreme
+ * compositor-thread fast scrolling never outruns the DOM into an empty dark void.
+ */
+export function computePlaceholderShellRange(
+  centerPage: number,
+  pageCount: number,
+  radius: number = 40
+): { start: number; end: number } {
+  if (pageCount <= 0) return { start: 0, end: -1 };
+  if (pageCount <= 120) return { start: 0, end: pageCount - 1 };
+  const clampedCenter = Math.max(0, Math.min(pageCount - 1, Math.floor(centerPage)));
+  const safeRadius = Math.max(8, Math.floor(radius));
+  return {
+    start: Math.max(0, clampedCenter - safeRadius),
+    end: Math.min(pageCount - 1, clampedCenter + safeRadius)
+  };
+}
+
+export interface ZoomGestureTransformState {
+  baseZoom: number;
+  scale: number;
+  panX: number;
+  panY: number;
+}
+
+/**
+ * Advances a GPU-composited affine zoom preview `(scale, panX, panY)` by
+ * multiplicative `factor` around viewport focal point `(focalX, focalY)` while
+ * holding the exact content pixel under the cursor stationary (0.000px drift).
+ */
+export function stepZoomGestureTransform(
+  state: ZoomGestureTransformState,
+  factor: number,
+  focalX: number,
+  focalY: number,
+  scrollLeft: number,
+  scrollTop: number,
+  minZoom: number = MIN_ZOOM,
+  maxZoom: number = MAX_ZOOM
+): ZoomGestureTransformState {
+  if (!Number.isFinite(factor) || factor <= 0 || state.baseZoom <= 0 || state.scale <= 0) {
+    return state;
+  }
+  const targetZoom = Math.max(minZoom, Math.min(maxZoom, state.baseZoom * state.scale * factor));
+  const nextScale = targetZoom / state.baseZoom;
+  const step = nextScale / state.scale;
+  const fx = scrollLeft + focalX;
+  const fy = scrollTop + focalY;
+  return {
+    baseZoom: state.baseZoom,
+    scale: nextScale,
+    panX: fx - (fx - state.panX) * step,
+    panY: fy - (fy - state.panY) * step
+  };
+}
+
+/**
+ * Inverts a GPU-composited zoom gesture state to recover the exact pre-zoom
+ * content-space coordinate currently sitting beneath `(focalX, focalY)`, so
+ * committing the real layout produces a 0.000px seamless handoff.
+ */
+export function computeZoomCommitTarget(
+  state: ZoomGestureTransformState,
+  focalX: number,
+  focalY: number,
+  scrollLeft: number,
+  scrollTop: number
+): { finalZoom: number; baseContentX: number; baseContentY: number } {
+  const s = Math.max(1e-6, state.scale);
+  return {
+    finalZoom: state.baseZoom * s,
+    baseContentX: (scrollLeft + focalX - state.panX) / s,
+    baseContentY: (scrollTop + focalY - state.panY) / s
+  };
+}
+
 export class ViewportManager {
   private _scrollContainer: HTMLElement | null = null;
   private _pagesWrapper: HTMLElement | null = null;
@@ -50,6 +128,7 @@ export class ViewportManager {
   private _onScreenPages: Set<number> = new Set();
   private _pageLayouts: ViewportPageRect[] = [];
   private _onVisiblePagesChange: ((visibleIndices: number[]) => void) | null = null;
+  private _onScrollImmediate: ((scrollTop: number, viewH: number) => void) | null = null;
   private _previewScale: number = 1;
   private _scrollRafId: number | null = null;
   /**
@@ -79,6 +158,16 @@ export class ViewportManager {
     this._zoomAnchor = null;
   }
 
+  /** True right after a focal-anchored zoom updates scrollLeft/scrollTop programmatically. */
+  public isProgrammaticScroll(): boolean {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    return now < this._programmaticScrollUntil;
+  }
+
+  public setImmediateScrollListener(cb: ((scrollTop: number, viewH: number) => void) | null): void {
+    this._onScrollImmediate = cb;
+  }
+
   public init(
     scrollContainer: HTMLElement,
     pagesWrapper: HTMLElement,
@@ -94,6 +183,9 @@ export class ViewportManager {
         this._zoomAnchor = null;
       }
       this._ignoreNextScrollAnchorReset = false;
+      if (this._onScrollImmediate && this._scrollContainer) {
+        this._onScrollImmediate(this._scrollContainer.scrollTop, this._scrollContainer.clientHeight);
+      }
       this.scheduleScrollCheck();
     }, { passive: true });
     window.addEventListener('resize', () => {
@@ -553,6 +645,29 @@ export class ViewportManager {
     return this._pageLayouts.find(p => p.pageIndex === pageIndex);
   }
 
+  public getAllLayouts(): readonly ViewportPageRect[] {
+    return this._pageLayouts;
+  }
+
+  public findCenterPageForScroll(scrollTop: number, viewH: number): number {
+    const layouts = this._pageLayouts;
+    if (layouts.length === 0) return 0;
+    const centerY = scrollTop + viewH * 0.5;
+    // Binary search on monotonic top coordinates for O(log N) lookup on 500+ page PDFs
+    let lo = 0;
+    let hi = layouts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const l = layouts[mid];
+      if (l.top + l.height < centerY) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return layouts[lo]?.pageIndex ?? 0;
+  }
+
   public fitToWidth(focal?: { x: number; y: number }): void {
     const doc = store.activeDocument;
     if (!doc || !this._scrollContainer) return;
@@ -664,6 +779,74 @@ export class ViewportManager {
         void (this._scrollContainer as unknown as { scrollHeight?: number }).scrollHeight;
         const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
         this._programmaticScrollUntil = nowMs + 120;
+        this._ignoreNextScrollAnchorReset = true;
+        this._scrollContainer.scrollLeft = layout.left + offsetX * layout.width - cx;
+        this._scrollContainer.scrollTop = layout.top + offsetY * layout.height - cy;
+      }
+    } finally {
+      store.endZoomAdjust();
+    }
+    this.handleScroll(true);
+  }
+
+  /**
+   * Commits a GPU-composited live zoom gesture in ONE atomic layout + scroll
+   * pass so the exact pre-zoom content coordinate `baseContentPoint` stays
+   * pinned to viewport coordinate `focal` with 0.000px visual jump.
+   */
+  public commitZoomAtContentPoint(
+    targetZoom: number,
+    baseContentPoint: { x: number; y: number },
+    focal: { x: number; y: number }
+  ): void {
+    const doc = store.activeDocument;
+    if (!this._scrollContainer || !doc || !Number.isFinite(targetZoom) || targetZoom <= 0) return;
+    const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, targetZoom));
+    const cx = Number.isFinite(focal.x) ? focal.x : this._scrollContainer.clientWidth / 2;
+    const cy = Number.isFinite(focal.y) ? focal.y : this._scrollContainer.clientHeight / 2;
+
+    let anchor: ViewportPageRect | undefined;
+    let nearestDistance = Infinity;
+    for (const layout of this._pageLayouts) {
+      if (layout.width <= 0 || layout.height <= 0) continue;
+      const dx = Math.max(layout.left - baseContentPoint.x, 0, baseContentPoint.x - layout.left - layout.width);
+      const dy = Math.max(layout.top - baseContentPoint.y, 0, baseContentPoint.y - layout.top - layout.height);
+      const dist = dx * dx + dy * dy;
+      if (dist < nearestDistance) {
+        anchor = layout;
+        nearestDistance = dist;
+      }
+    }
+
+    if (!anchor) {
+      store.setZoom(clampedZoom);
+      return;
+    }
+
+    const anchorPageIndex = anchor.pageIndex;
+    const offsetX = (baseContentPoint.x - anchor.left) / anchor.width;
+    const offsetY = (baseContentPoint.y - anchor.top) / anchor.height;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    this._zoomAnchor = {
+      docId: doc.id,
+      pageIndex: anchorPageIndex,
+      offsetX,
+      offsetY,
+      focalX: cx,
+      focalY: cy,
+      timestamp: now
+    };
+
+    const oldLayouts = this._pageLayouts;
+    store.beginZoomAdjust();
+    try {
+      store.setZoom(clampedZoom);
+      if (this._pageLayouts === oldLayouts) this.updateLayout();
+      const layout = this.getLayout(anchorPageIndex);
+      if (layout) {
+        void (this._scrollContainer as unknown as { scrollHeight?: number }).scrollHeight;
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        this._programmaticScrollUntil = nowMs + 140;
         this._ignoreNextScrollAnchorReset = true;
         this._scrollContainer.scrollLeft = layout.left + offsetX * layout.width - cx;
         this._scrollContainer.scrollTop = layout.top + offsetY * layout.height - cy;

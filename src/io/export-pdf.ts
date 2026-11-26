@@ -3,7 +3,7 @@
  * Supports high-resolution annotation flattening and native vector/composite embedding.
  */
 
-import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, degrees } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFString, degrees } from 'pdf-lib';
 import { store } from '../core/store';
 import { pdfEngine } from '../core/pdf-engine';
 import { annotationEngine } from '../annotations/engine';
@@ -11,9 +11,29 @@ import { syncNativeInkAnnotations, stripNativeInkAnnotations } from '../core/nat
 import { syncNativeAnnotations, stripImportedNativeAnnotations } from '../core/native-annotations';
 import { applyFormValuesToPdfLibDoc } from '../core/pdf-forms';
 import { encryptAndSavePdfDocument } from '../core/pdf-encrypt';
+import {
+  canVectorFlattenAnnotation,
+  computeUnionScreenBounds,
+  flattenVectorAnnotationsToPage,
+  getPageBoxMetrics,
+  isolatePageContentStream,
+  resolveSafeRasterScale,
+  screenRectToPdfRect
+} from '../core/pdf-flatten';
+import type { Annotation } from '../core/types';
 import unicodeFontUrl from '@fontsource/vazirmatn/files/vazirmatn-arabic-400-normal.woff?url';
 
 let cachedUnicodeFontBytes: Uint8Array | null = null;
+
+function computeCompositeHash(annotations: Annotation[], pageRot: number, dpi: number): string {
+  const payload = `${pageRot}|${dpi}|${JSON.stringify(annotations)}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < payload.length; i++) {
+    h ^= payload.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `comp1_${(h >>> 0).toString(36)}_${payload.length}`;
+}
 
 async function loadUnicodeFont(): Promise<Uint8Array> {
   if (cachedUnicodeFontBytes) return cachedUnicodeFontBytes;
@@ -94,8 +114,8 @@ export class PDFExporter {
     }
 
     // Load original PDF using pdf-lib to preserve structure and metadata
-    const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true });
-    applyFormValuesToPdfLibDoc(pdfDoc, doc.formValues, options.flatten);
+    const pdfDoc = await PDFDocument.load(doc.fileData, { ignoreEncryption: true, updateMetadata: false });
+    const formsModified = applyFormValuesToPdfLibDoc(pdfDoc, doc.formValues, options.flatten);
     const fallbackBakedIds = new Set<string>();
 
     // Bake user-applied page rotations into the PDF /Rotate dictionary when exporting to disk
@@ -203,29 +223,19 @@ export class PDFExporter {
     for (const i of selectedIndices) {
       const pdfPage = pages[i];
       const pageAnnotations = doc.annotations[i] || [];
-
-      if (!options.darkMode && pageAnnotations.length === 0) continue;
-
-      const crop = pdfPage.getCropBox();
-      const media = pdfPage.getMediaBox();
-      const boxX = Math.max(crop.x, media.x);
-      const boxY = Math.max(crop.y, media.y);
-      const width = Math.max(1, Math.min(crop.x + crop.width, media.x + media.width) - boxX);
-      const height = Math.max(1, Math.min(crop.y + crop.height, media.y + media.height) - boxY);
-      const pageRot = ((pdfPage.getRotation().angle || 0) % 360 + 360) % 360;
-      const isOddRot = pageRot === 90 || pageRot === 270;
-      const screenWidth = isOddRot ? height : width;
-      const screenHeight = isOddRot ? width : height;
+      const metrics = getPageBoxMetrics(pdfPage);
+      const { boxX, boxY, width, height, pageRot, screenWidth, screenHeight } = metrics;
 
       if (options.darkMode && typeof document !== 'undefined') {
-        // Dark theme baking: renders the page through the same inversion the
-        // viewer applies, then overlays annotations in their original colors.
-        const dpiScale = options.dpi / 72;
+        // Dark theme baking: isolate existing content stream, render with safe clamped
+        // canvas size through the dark inversion filter, and draw onto the page.
+        const desiredScale = (options.dpi || 150) / 72;
+        const safeScale = resolveSafeRasterScale(screenWidth, screenHeight, desiredScale);
         const totalRotation = store.pageRotations[i] || 0;
 
         const rawCanvas = document.createElement('canvas');
-        const rendered = await pdfEngine.renderPageAtScale(i, rawCanvas, dpiScale, totalRotation);
-        if (rendered) {
+        const rendered = await pdfEngine.renderPageAtScale(i, rawCanvas, safeScale, totalRotation);
+        if (rendered && rawCanvas.width > 0 && rawCanvas.height > 0) {
           const darkCanvas = document.createElement('canvas');
           darkCanvas.width = rawCanvas.width;
           darkCanvas.height = rawCanvas.height;
@@ -235,96 +245,160 @@ export class PDFExporter {
             darkCtx.drawImage(rawCanvas, 0, 0);
             darkCtx.filter = 'none';
 
-            if (options.flatten) annotationEngine.renderAnnotationsToCanvas(darkCtx, i, dpiScale);
+            if (options.flatten && pageAnnotations.length > 0) {
+              annotationEngine.renderAnnotationsToCanvas(darkCtx, i, safeScale);
+            }
 
             const orientedCanvas = orientCanvasForPdfPage(darkCanvas, pageRot);
             const jpgBytes = await this.canvasToBytes(orientedCanvas, 'image/jpeg', 0.92);
             const embeddedImg = await pdfDoc.embedJpg(jpgBytes);
+            isolatePageContentStream(pdfDoc, pdfPage);
             pdfPage.drawImage(embeddedImg, { x: boxX, y: boxY, width, height, opacity: 1.0 });
           }
         }
-      } else if (options.flatten && typeof document !== 'undefined') {
-        // High-DPI Flattening onto the page content stream
-        const dpiScale = options.dpi / 72; // e.g. 150 / 72 = 2.08x
+        continue;
+      }
 
-        // Create offscreen canvas in screen-oriented coordinates
+      if (options.flatten) {
+        if (pageAnnotations.length === 0) continue;
+
+        // Isolate existing page `/Contents` inside `q ... Q` so pre-existing CTMs
+        // or clip paths in the source PDF can never corrupt flattened overlays.
+        isolatePageContentStream(pdfDoc, pdfPage);
+
+        // Partition into contiguous Z-order runs of direct-vector vs tight-bbox raster items.
+        // Typical ink/highlight/shape/signature pages execute 100% vector (<1ms, infinite DPI).
+        const runs: Array<{ kind: 'vector' | 'raster'; items: Annotation[] }> = [];
+        for (const ann of pageAnnotations) {
+          const kind = canVectorFlattenAnnotation(ann) ? 'vector' : 'raster';
+          const prev = runs[runs.length - 1];
+          if (prev && prev.kind === kind) {
+            prev.items.push(ann);
+          } else {
+            runs.push({ kind, items: [ann] });
+          }
+        }
+
+        const desiredScale = (options.dpi || 150) / 72;
+        for (const run of runs) {
+          if (run.kind === 'vector') {
+            flattenVectorAnnotationsToPage(pdfDoc, pdfPage, run.items, metrics);
+          } else if (typeof document !== 'undefined') {
+            const cropRect = computeUnionScreenBounds(run.items, screenWidth, screenHeight);
+            if (!cropRect) continue;
+            const safeScale = resolveSafeRasterScale(cropRect.width, cropRect.height, desiredScale);
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = Math.max(1, Math.ceil(cropRect.width * safeScale));
+            offCanvas.height = Math.max(1, Math.ceil(cropRect.height * safeScale));
+            const ctx = offCanvas.getContext('2d');
+            if (!ctx) continue;
+
+            ctx.clearRect(0, 0, offCanvas.width, offCanvas.height);
+            ctx.save();
+            ctx.translate(-cropRect.x * safeScale, -cropRect.y * safeScale);
+            annotationEngine.renderCommittedAnnotations(ctx, run.items, [], safeScale);
+            ctx.restore();
+
+            const orientedCanvas = orientCanvasForPdfPage(offCanvas, pageRot);
+            const pngBytes = await this.canvasToBytes(orientedCanvas, 'image/png');
+            const embeddedPng = await pdfDoc.embedPng(pngBytes);
+            const pdfRect = screenRectToPdfRect(cropRect, metrics);
+            pdfPage.drawImage(embeddedPng, {
+              x: pdfRect.x,
+              y: pdfRect.y,
+              width: pdfRect.width,
+              height: pdfRect.height,
+              opacity: 1.0
+            });
+          }
+        }
+        continue;
+      }
+
+      if (options.embedCompositeAnnotations !== false && typeof document !== 'undefined') {
+        // Embed composite annotations (signatures, measurements, custom image stamps,
+        // and any fallback items) as a removable, tight-bbox /Stamp annotation
+        // (`VEditorComposite = 1`) with hash caching so unchanged pages skip PNG encoding!
+        const compositeAnns = compositeStateByPage[i] || [];
+        const existingAnnots = pdfPage.node.Annots();
+        let existingCompRef: any = null;
+        let existingCompHash: string | undefined;
+        const keptAnnots: any[] = [];
+        let hadExistingComposite = false;
+
+        if (existingAnnots instanceof PDFArray) {
+          for (let k = 0; k < existingAnnots.size(); k++) {
+            const rawItem = existingAnnots.get(k);
+            const d = pdfDoc.context.lookup(rawItem);
+            if (d instanceof PDFDict && d.lookupMaybe(PDFName.of('VEditorComposite'), PDFNumber)?.asNumber() === 1) {
+              hadExistingComposite = true;
+              existingCompRef = rawItem;
+              existingCompHash = d.lookupMaybe(PDFName.of('VEditorCompositeHash'), PDFString)?.decodeText();
+              continue;
+            }
+            keptAnnots.push(rawItem);
+          }
+        }
+
+        if (compositeAnns.length === 0) {
+          if (hadExistingComposite) {
+            pdfPage.node.set(PDFName.of('Annots'), pdfDoc.context.obj(keptAnnots));
+          }
+          continue;
+        }
+
+        const compHash = computeCompositeHash(compositeAnns, pageRot, options.dpi || 150);
+        if (existingCompRef && existingCompHash === compHash) {
+          // Composite stamp is unchanged since last save -> reuse existing ref with 0ms cost!
+          continue;
+        }
+
+        const cropRect = computeUnionScreenBounds(compositeAnns, screenWidth, screenHeight);
+        if (!cropRect) continue;
+
+        const safeScale = resolveSafeRasterScale(cropRect.width, cropRect.height, (options.dpi || 150) / 72);
         const offCanvas = document.createElement('canvas');
-        offCanvas.width = Math.max(1, Math.floor(screenWidth * dpiScale));
-        offCanvas.height = Math.max(1, Math.floor(screenHeight * dpiScale));
-
+        offCanvas.width = Math.max(1, Math.ceil(cropRect.width * safeScale));
+        offCanvas.height = Math.max(1, Math.ceil(cropRect.height * safeScale));
         const ctx = offCanvas.getContext('2d');
         if (ctx) {
           ctx.clearRect(0, 0, offCanvas.width, offCanvas.height);
-          // Render annotations at export scale
-          annotationEngine.renderAnnotationsToCanvas(ctx, i, dpiScale);
+          ctx.save();
+          ctx.translate(-cropRect.x * safeScale, -cropRect.y * safeScale);
+          annotationEngine.renderCommittedAnnotations(ctx, compositeAnns, [], safeScale);
+          ctx.restore();
 
           const orientedCanvas = orientCanvasForPdfPage(offCanvas, pageRot);
           const pngBytes = await this.canvasToBytes(orientedCanvas, 'image/png');
           const embeddedPng = await pdfDoc.embedPng(pngBytes);
-          pdfPage.drawImage(embeddedPng, {
-            x: boxX,
-            y: boxY,
-            width,
-            height,
-            opacity: 1.0
-          });
-        }
-      } else if (options.embedCompositeAnnotations !== false && typeof document !== 'undefined') {
-        // Embed composite annotations (signatures, measurements, custom image stamps,
-        // and any fallback items) as a removable /Stamp annotation (VEditorComposite = 1)
-        // so external PDF viewers display them while VEditor can cleanly strip/update them.
-        const compositeAnns = compositeStateByPage[i] || [];
-        if (compositeAnns.length > 0) {
-          const dpiScale = (options.dpi || 150) / 72;
-          const offCanvas = document.createElement('canvas');
-          offCanvas.width = Math.max(1, Math.floor(screenWidth * dpiScale));
-          offCanvas.height = Math.max(1, Math.floor(screenHeight * dpiScale));
-          const ctx = offCanvas.getContext('2d');
-          if (ctx) {
-            ctx.clearRect(0, 0, offCanvas.width, offCanvas.height);
-            annotationEngine.renderCommittedAnnotations(ctx, compositeAnns, [], dpiScale);
-            const orientedCanvas = orientCanvasForPdfPage(offCanvas, pageRot);
-            const pngBytes = await this.canvasToBytes(orientedCanvas, 'image/png');
-            const embeddedPng = await pdfDoc.embedPng(pngBytes);
+          const pdfRect = screenRectToPdfRect(cropRect, metrics);
 
-            const rect = [boxX, boxY, boxX + width, boxY + height];
-            const streamOps = `q\n${width.toFixed(4)} 0 0 ${height.toFixed(4)} ${boxX.toFixed(4)} ${boxY.toFixed(4)} cm\n/Im0 Do\nQ\n`;
-            const formStream = pdfDoc.context.flateStream(streamOps, {
-              Type: 'XObject',
-              Subtype: 'Form',
-              FormType: 1,
-              BBox: rect,
-              Matrix: [1, 0, 0, 1, 0, 0],
-              Resources: {
-                XObject: { Im0: embeddedPng.ref }
-              }
-            });
-            const formRef = pdfDoc.context.register(formStream);
-            const compDict = pdfDoc.context.obj({
-              Type: 'Annot',
-              Subtype: 'Stamp',
-              NM: PDFHexString.fromText(`veditor-composite-${i}`),
-              VEditorComposite: PDFNumber.of(1),
-              F: PDFNumber.of(4),
-              Rect: rect,
-              AP: { N: formRef }
-            }) as PDFDict;
-            const compRef = pdfDoc.context.register(compDict);
-            const existingAnnots = pdfPage.node.Annots();
-            const keptAnnots: any[] = [];
-            if (existingAnnots instanceof PDFArray) {
-              for (let k = 0; k < existingAnnots.size(); k++) {
-                const rawItem = existingAnnots.get(k);
-                const d = pdfDoc.context.lookup(rawItem);
-                if (d instanceof PDFDict && d.lookupMaybe(PDFName.of('VEditorComposite'), PDFNumber)?.asNumber() === 1) {
-                  continue;
-                }
-                keptAnnots.push(rawItem);
-              }
+          const rect = [pdfRect.x, pdfRect.y, pdfRect.x + pdfRect.width, pdfRect.y + pdfRect.height];
+          const streamOps = `q\n${pdfRect.width.toFixed(4)} 0 0 ${pdfRect.height.toFixed(4)} ${pdfRect.x.toFixed(4)} ${pdfRect.y.toFixed(4)} cm\n/Im0 Do\nQ\n`;
+          const formStream = pdfDoc.context.flateStream(streamOps, {
+            Type: 'XObject',
+            Subtype: 'Form',
+            FormType: 1,
+            BBox: rect,
+            Matrix: [1, 0, 0, 1, 0, 0],
+            Resources: {
+              XObject: { Im0: embeddedPng.ref }
             }
-            keptAnnots.push(compRef);
-            pdfPage.node.set(PDFName.of('Annots'), pdfDoc.context.obj(keptAnnots));
-          }
+          });
+          const formRef = pdfDoc.context.register(formStream);
+          const compDict = pdfDoc.context.obj({
+            Type: 'Annot',
+            Subtype: 'Stamp',
+            NM: PDFHexString.fromText(`veditor-composite-${i}`),
+            VEditorComposite: PDFNumber.of(1),
+            VEditorCompositeHash: PDFString.of(compHash),
+            F: PDFNumber.of(4),
+            Rect: rect,
+            AP: { N: formRef }
+          }) as PDFDict;
+          const compRef = pdfDoc.context.register(compDict);
+          keptAnnots.push(compRef);
+          pdfPage.node.set(PDFName.of('Annots'), pdfDoc.context.obj(keptAnnots));
         }
       }
     }
@@ -376,6 +450,11 @@ export class PDFExporter {
       targetDoc.catalog.set(PDFName.of('VEditorState'), PDFHexString.fromText(statePayload));
     };
 
+    const saveOpts = {
+      useObjectStreams: false,
+      updateFieldAppearances: formsModified && !options.flatten
+    };
+
     // Copy selected pages into a fresh document. This is more reliable than
     // removing pages in-place across Firefox's pdf-lib worker boundary, and
     // it supports non-contiguous sidebar selections.
@@ -387,14 +466,14 @@ export class PDFExporter {
       if (options.password) {
         return encryptAndSavePdfDocument(selectedDocument, options.password);
       }
-      return selectedDocument.save();
+      return selectedDocument.save(saveOpts);
     }
 
     writeVEditorCatalogState(pdfDoc);
     if (options.password) {
       return encryptAndSavePdfDocument(pdfDoc, options.password);
     }
-    return await pdfDoc.save();
+    return await pdfDoc.save(saveOpts);
   }
 
   /**

@@ -85,7 +85,9 @@ function blitPdfBitmap(
     target.width = targetWidth;
     target.height = targetHeight;
   }
-  const ctx = target.getContext('2d', { alpha: false });
+  // Use alpha-enabled 2D context so canvas reallocation initializes to
+  // transparent rather than opaque black (#000000), preventing black flashes.
+  const ctx = target.getContext('2d');
   if (!ctx) return;
   ctx.save();
   ctx.imageSmoothingEnabled = true;
@@ -102,6 +104,8 @@ function blitPdfBitmap(
     applyDarkModeInvertFallback(ctx, targetWidth, targetHeight);
   }
   target.dataset.darkMode = darkMode ? '1' : '0';
+  target.dataset.rendered = '1';
+  target.parentElement?.classList.add('is-page-rendered');
 }
 
 function resolveAssetUrl(path: string): string {
@@ -198,6 +202,8 @@ interface CachedDocSession {
   pageCache: Map<number, pdfjsLib.PDFPageProxy>;
   /** Keyed by page+scale+rotation so zooming back hits cache instantly. */
   renderedBitmaps: Map<string, CachedBitmap>;
+  /** Lightweight ~240px previews kept across long scrolls for <1ms recall. */
+  previewBitmaps: Map<number, CachedBitmap>;
   meta: {
     pageCount: number;
     pages: PageInfo[];
@@ -213,8 +219,11 @@ export class PDFEngine {
   private _pdfDoc: pdfjsLib.PDFDocumentProxy | null = null;
   private _pageCache: Map<number, pdfjsLib.PDFPageProxy> = new Map();
   private _activeRenderTasks: Map<number, any> = new Map();
+  private _activeRenderKeys: Map<number, string> = new Map();
   private _activeChunkTasks: Map<number, any> = new Map();
+  private _activeChunkKeys: Map<number, string> = new Map();
   private _renderedBitmaps = new Map<string, CachedBitmap>();
+  private _previewBitmaps = new Map<number, CachedBitmap>();
   private _textLayoutCache = new Map<string, PageTextLayout>();
   private _textLayoutInFlight = new Map<string, Promise<PageTextLayout | null>>();
   private _docSessions: Map<string, CachedDocSession> = new Map();
@@ -261,6 +270,7 @@ export class PDFEngine {
         const prev = this._docSessions.get(this._currentDocId)!;
         prev.pageCache = this._pageCache;
         prev.renderedBitmaps = this._renderedBitmaps;
+        prev.previewBitmaps = this._previewBitmaps;
       }
 
       // Cancel any ongoing rendering tasks from previous document
@@ -268,12 +278,14 @@ export class PDFEngine {
         try { task.cancel(); } catch (e) {}
       }
       this._activeRenderTasks.clear();
+      this._activeRenderKeys.clear();
 
       // Switch active references
       const cached = this._docSessions.get(docId)!;
       this._pdfDoc = cached.doc;
       this._pageCache = cached.pageCache;
       this._renderedBitmaps = cached.renderedBitmaps;
+      this._previewBitmaps = cached.previewBitmaps;
       this._currentDocId = docId;
 
       return cached.meta;
@@ -284,6 +296,7 @@ export class PDFEngine {
       const prev = this._docSessions.get(this._currentDocId)!;
       prev.pageCache = this._pageCache;
       prev.renderedBitmaps = this._renderedBitmaps;
+      prev.previewBitmaps = this._previewBitmaps;
     }
 
     // Clone bytes and strip native /Ink + VEditor annotations from the render copy
@@ -357,10 +370,12 @@ export class PDFEngine {
       try { task.cancel(); } catch (e) {}
     }
     this._activeRenderTasks.clear();
+    this._activeRenderKeys.clear();
     for (const [, task] of this._activeChunkTasks) {
       try { task.cancel(); } catch (e) {}
     }
     this._activeChunkTasks.clear();
+    this._activeChunkKeys.clear();
 
     if (docId) {
       this.clearLinkCache(docId);
@@ -375,6 +390,13 @@ export class PDFEngine {
             }
           }
           oldSession.renderedBitmaps.clear();
+          for (const [, entry] of oldSession.previewBitmaps) {
+            if (entry.canvas) {
+              entry.canvas.width = 0;
+              entry.canvas.height = 0;
+            }
+          }
+          oldSession.previewBitmaps.clear();
           if (typeof (oldSession.doc as any).cleanup === 'function') {
             (oldSession.doc as any).cleanup();
           }
@@ -385,9 +407,11 @@ export class PDFEngine {
       }
     }
 
+    const newPreviewBitmaps = new Map<number, CachedBitmap>();
     this._pdfDoc = newPdfDoc;
     this._pageCache = newPageCache;
     this._renderedBitmaps = newRenderedBitmaps;
+    this._previewBitmaps = newPreviewBitmaps;
 
     const meta = { pageCount, pages, bookmarks: [] as PDFBookmarkItem[] };
     if (docId) {
@@ -395,6 +419,7 @@ export class PDFEngine {
         doc: this._pdfDoc,
         pageCache: this._pageCache,
         renderedBitmaps: this._renderedBitmaps,
+        previewBitmaps: this._previewBitmaps,
         meta
       });
       this._currentDocId = docId;
@@ -765,7 +790,7 @@ export class PDFEngine {
   /**
    * Renders a specific page onto an HTML5 Canvas with high-DPI scaling.
    */
-  public cancelPageRender(pageIndex: number): void {
+  public cancelPageRender(pageIndex: number, includeChunk: boolean = true): void {
     if (this._activeRenderTasks.has(pageIndex)) {
       try {
         this._activeRenderTasks.get(pageIndex).cancel();
@@ -773,8 +798,11 @@ export class PDFEngine {
         // ignored
       }
       this._activeRenderTasks.delete(pageIndex);
+      this._activeRenderKeys.delete(pageIndex);
     }
-    this.cancelPageChunkRender(pageIndex);
+    if (includeChunk) {
+      this.cancelPageChunkRender(pageIndex);
+    }
   }
 
   public cancelPageChunkRender(pageIndex: number): void {
@@ -785,6 +813,7 @@ export class PDFEngine {
         // ignored
       }
       this._activeChunkTasks.delete(pageIndex);
+      this._activeChunkKeys.delete(pageIndex);
     }
   }
 
@@ -796,19 +825,91 @@ export class PDFEngine {
       }
     }
     this._renderedBitmaps.clear();
+    for (const [, entry] of this._previewBitmaps) {
+      if (entry.canvas) {
+        entry.canvas.width = 0;
+        entry.canvas.height = 0;
+      }
+    }
+    this._previewBitmaps.clear();
   }
 
   public hasCachedBitmap(pageIndex: number): boolean {
     return this.findAnyBitmap(pageIndex) !== undefined;
   }
 
-  /** Any cached scale of a page, for instant stale upscale while re-rendering. */
+  public hasExactCachedBitmap(pageIndex: number, scale: number, rotation: number = 0): boolean {
+    const totalRotation = ((rotation || 0) % 360 + 360) % 360;
+    const entry = this._renderedBitmaps.get(bitmapKey(pageIndex, scale, totalRotation));
+    return Boolean(entry && entry.width > 0 && entry.height > 0);
+  }
+
+  /**
+   * Synchronously paints any cached full-res or lightweight preview bitmap onto
+   * `canvas` so fast-scrolled pages appear instantly without hitting the worker.
+   */
+  public blitCachedPreview(
+    pageIndex: number,
+    canvas: HTMLCanvasElement,
+    scale: number = 1.0,
+    rotation: number = 0
+  ): boolean {
+    const totalRotation = ((rotation || 0) % 360 + 360) % 360;
+    const exact = this._renderedBitmaps.get(bitmapKey(pageIndex, scale, totalRotation));
+    const cached = exact ?? this.findAnyBitmap(pageIndex);
+    if (!cached || cached.rotation !== totalRotation || cached.width <= 0 || cached.height <= 0) return false;
+    blitPdfBitmap(cached.canvas, canvas, cached.width, cached.height, isPdfDarkModeActive(), !exact);
+    return true;
+  }
+
+  private saveLightweightPreview(entry: CachedBitmap): void {
+    if (typeof document === 'undefined' || !entry.canvas || entry.width <= 0 || entry.height <= 0) return;
+    const existing = this._previewBitmaps.get(entry.pageIndex);
+    if (existing && existing.rotation === entry.rotation) return;
+    const maxDim = 260;
+    const ratio = Math.min(1, maxDim / Math.max(entry.width, entry.height));
+    const pw = Math.max(1, Math.round(entry.width * ratio));
+    const ph = Math.max(1, Math.round(entry.height * ratio));
+    const preview = document.createElement('canvas');
+    preview.width = pw;
+    preview.height = ph;
+    const pctx = preview.getContext('2d');
+    if (!pctx) return;
+    pctx.imageSmoothingEnabled = true;
+    pctx.imageSmoothingQuality = 'low';
+    pctx.drawImage(entry.canvas, 0, 0, pw, ph);
+
+    if (existing?.canvas) {
+      existing.canvas.width = 0;
+      existing.canvas.height = 0;
+    }
+    while (this._previewBitmaps.size >= 64) {
+      const oldestKey = this._previewBitmaps.keys().next().value;
+      if (oldestKey === undefined) break;
+      const old = this._previewBitmaps.get(oldestKey);
+      if (old?.canvas) {
+        old.canvas.width = 0;
+        old.canvas.height = 0;
+      }
+      this._previewBitmaps.delete(oldestKey);
+    }
+    this._previewBitmaps.set(entry.pageIndex, {
+      pageIndex: entry.pageIndex,
+      width: pw,
+      height: ph,
+      scale: entry.scale * ratio,
+      rotation: entry.rotation,
+      canvas: preview
+    });
+  }
+
+  /** Any cached scale of a page (full-res first, then lightweight preview) for instant recall. */
   private findAnyBitmap(pageIndex: number): CachedBitmap | undefined {
     const prefix = `${pageIndex}@`;
     for (const [key, entry] of this._renderedBitmaps) {
       if (key.startsWith(prefix)) return entry;
     }
-    return undefined;
+    return this._previewBitmaps.get(pageIndex);
   }
 
   public async renderPageToCanvas(
@@ -916,8 +1017,14 @@ export class PDFEngine {
       }
     }
 
-    // Cancel existing render on this page if running
-    this.cancelPageRender(pageIndex);
+    // If an identical full-page raster is already in flight, let it finish instead of restarting.
+    const renderKey = `${exactKey}|${targetWidth}x${targetHeight}|${isPdfDarkModeActive() ? 1 : 0}`;
+    if (this._activeRenderTasks.has(pageIndex) && this._activeRenderKeys.get(pageIndex) === renderKey) {
+      return;
+    }
+
+    // Cancel only an outdated base-page render; never abort an in-flight High-DPI viewport chunk.
+    this.cancelPageRender(pageIndex, false);
 
     // Double-buffered rendering: render completely to isolated offscreen canvas first
     const offscreen = document.createElement('canvas');
@@ -945,6 +1052,7 @@ export class PDFEngine {
 
     const task = page.render(renderContext);
     this._activeRenderTasks.set(pageIndex, task);
+    this._activeRenderKeys.set(pageIndex, renderKey);
     let storedInCache = false;
 
     try {
@@ -977,14 +1085,17 @@ export class PDFEngine {
       // Scale bitmap cache pool with the user's configured Off-screen Page Preload Buffer
       // so pre-rendered pages stay hot in memory and blit in <1ms when scrolling.
       const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
-      const maxCachedBitmaps = store.zoom > 2.4 ? Math.max(4, bufferPages + 2) : Math.max(6, bufferPages * 2 + 3);
+      const maxCachedBitmaps = store.zoom > 2.4 ? Math.max(6, bufferPages + 3) : Math.max(12, bufferPages * 3 + 6);
       while (this._renderedBitmaps.size >= maxCachedBitmaps && !this._renderedBitmaps.has(exactKey)) {
         const oldestKey = this._renderedBitmaps.keys().next().value;
         if (oldestKey === undefined) break;
         const entry = this._renderedBitmaps.get(oldestKey);
-        if (entry?.canvas) {
-          entry.canvas.width = 0;
-          entry.canvas.height = 0;
+        if (entry) {
+          this.saveLightweightPreview(entry);
+          if (entry.canvas) {
+            entry.canvas.width = 0;
+            entry.canvas.height = 0;
+          }
         }
         this._renderedBitmaps.delete(oldestKey);
       }
@@ -1019,6 +1130,7 @@ export class PDFEngine {
       }
       if (this._activeRenderTasks.get(pageIndex) === task) {
         this._activeRenderTasks.delete(pageIndex);
+        this._activeRenderKeys.delete(pageIndex);
       }
     }
   }
@@ -1093,6 +1205,10 @@ export class PDFEngine {
     if (chunkCanvas.dataset.chunkKey === chunkKey && chunkCanvas.style.display !== 'none') {
       return;
     }
+    // If an identical High-DPI chunk render is already in flight, let it finish instead of cancelling it.
+    if (this._activeChunkTasks.has(pageIndex) && this._activeChunkKeys.get(pageIndex) === chunkKey) {
+      return;
+    }
 
     this.cancelPageChunkRender(pageIndex);
 
@@ -1124,6 +1240,7 @@ export class PDFEngine {
       annotationMode: pdfjsLib.AnnotationMode.ENABLE
     });
     this._activeChunkTasks.set(pageIndex, task);
+    this._activeChunkKeys.set(pageIndex, chunkKey);
 
     try {
       await task.promise;
@@ -1143,9 +1260,9 @@ export class PDFEngine {
       chunkCanvas.dataset.baseTop = String(rect.y);
       chunkCanvas.dataset.baseWidth = String(rect.width);
       chunkCanvas.dataset.baseHeight = String(rect.height);
-      chunkCanvas.style.display = 'block';
 
       blitPdfBitmap(offscreen, chunkCanvas, chunkPixelW, chunkPixelH, darkMode, false);
+      chunkCanvas.style.display = 'block';
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {
         console.error(`Error rendering chunk for page ${pageIndex}:`, err);
@@ -1157,6 +1274,7 @@ export class PDFEngine {
       offscreen.height = 0;
       if (this._activeChunkTasks.get(pageIndex) === task) {
         this._activeChunkTasks.delete(pageIndex);
+        this._activeChunkKeys.delete(pageIndex);
       }
     }
   }
@@ -1193,6 +1311,7 @@ export class PDFEngine {
           task.cancel();
         } catch (_) {}
         this._activeRenderTasks.delete(pageIndex);
+        this._activeRenderKeys.delete(pageIndex);
       }
     }
     for (const [pageIndex, task] of this._activeChunkTasks) {
@@ -1201,6 +1320,7 @@ export class PDFEngine {
           task.cancel();
         } catch (_) {}
         this._activeChunkTasks.delete(pageIndex);
+        this._activeChunkKeys.delete(pageIndex);
       }
     }
   }
@@ -1852,6 +1972,13 @@ export class PDFEngine {
           }
         }
         session.renderedBitmaps.clear();
+        for (const [, entry] of session.previewBitmaps) {
+          if (entry.canvas) {
+            entry.canvas.width = 0;
+            entry.canvas.height = 0;
+          }
+        }
+        session.previewBitmaps.clear();
         if (typeof (session.doc as any).cleanup === 'function') {
           (session.doc as any).cleanup();
         }
@@ -1890,6 +2017,16 @@ export class PDFEngine {
       }
     }
     this._activeRenderTasks.clear();
+    this._activeRenderKeys.clear();
+    for (const [, task] of this._activeChunkTasks) {
+      try {
+        task.cancel();
+      } catch (e) {
+        // ignored
+      }
+    }
+    this._activeChunkTasks.clear();
+    this._activeChunkKeys.clear();
     this._pageCache.clear();
     this._renderedBitmaps.clear();
     if (this._pdfDoc) {

@@ -26,6 +26,9 @@
     "tabs",
     "contextMenus"
   ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "veditor@local.extension",

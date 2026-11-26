@@ -125,7 +125,7 @@ body.focus-mode .header-hover-zone {
 }
 
 .header-logo:active {
-  transform: scale(0.97);
+  opacity: 0.82;
 }
 
 .header-logo:focus-visible {
@@ -187,7 +187,6 @@ body.theme-light .header-logo-frame {
 }
 
 .header-logo:hover .header-logo-frame {
-  transform: scale(1.05);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.45),
@@ -206,11 +205,6 @@ body.theme-light .header-logo-frame {
   height: 20px;
   border-radius: 5px;
   object-fit: contain;
-  transition: transform 220ms var(--ease-spring-pop);
-}
-
-.header-logo:hover .header-logo-icon {
-  transform: scale(1.04);
 }
 
 .header-logo-wordmark {
@@ -602,7 +596,7 @@ body.focus-mode .app-properties-panel {
 }
 
 body.focus-mode .floating-toolbar {
-  transform: translateX(-50%) translateY(-12px);
+  transform: translateY(-12px);
 }
 
 /* The bottom-right view controls stay reachable in focus mode, receding until hovered. */
@@ -640,7 +634,6 @@ body.no-page-shadows .pdf-page-container {
     opacity 180ms var(--ease-spring),
     box-shadow 220ms ease,
     border-color 180ms ease;
-  will-change: transform, margin-inline-start, opacity;
   z-index: 30;
 }
 
@@ -692,7 +685,7 @@ body.no-page-shadows .pdf-page-container {
 }
 
 .sidebar-select-toggle:active {
-  transform: scale(0.93);
+  opacity: 0.78;
 }
 
 .sidebar-select-toggle.is-active {
@@ -753,7 +746,6 @@ body.no-page-shadows .pdf-page-container {
 .sidebar-tab-btn.active .sidebar-tab-icon {
   opacity: 1;
   color: var(--accent);
-  transform: scale(1.08);
 }
 
 .sidebar-active-tab-bar {
@@ -814,11 +806,16 @@ body.no-page-shadows .pdf-page-container {
 }
 
 /* Floating Toolbar & Quick Properties Sub-Bar */
+/* Centered via integer-snapped auto margins instead of translate(-50%) so SVG
+   icons never land on 0.5px subpixel coordinates when toolbar width changes. */
 .floating-toolbar {
   position: absolute;
   top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin-inline: auto;
+  transform: none;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -834,16 +831,25 @@ body.no-page-shadows .pdf-page-container {
 }
 
 .floating-toolbar[data-dock='left'] {
-  top: 50%;
+  top: 0;
+  bottom: 0;
   left: 16px;
-  transform: translateY(-50%);
+  right: auto;
+  height: fit-content;
+  margin-block: auto;
+  margin-inline: 0;
+  transform: none;
 }
 
 .floating-toolbar[data-dock='right'] {
-  top: 50%;
+  top: 0;
+  bottom: 0;
   left: auto;
   right: 16px;
-  transform: translateY(-50%);
+  height: fit-content;
+  margin-block: auto;
+  margin-inline: 0;
+  transform: none;
 }
 
 .floating-toolbar[data-dock='float'] {
@@ -851,10 +857,12 @@ body.no-page-shadows .pdf-page-container {
   transform: none;
   right: auto;
   bottom: auto;
+  margin: 0;
 }
 
 .floating-toolbar.is-dragging {
   position: fixed;
+  margin: 0;
   transition: none !important;
   z-index: 90;
   cursor: grabbing;
@@ -1352,8 +1360,7 @@ input.prop-num-input::-webkit-inner-spin-button {
   left: 0;
   width: 316px;
   max-width: calc(100vw - 24px);
-  transform: translateY(8px) scale(0.95);
-  transform-origin: top center;
+  transform: translateY(6px);
   background: var(--bg-surface);
   background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
   backdrop-filter: blur(24px);
@@ -1369,7 +1376,7 @@ input.prop-num-input::-webkit-inner-spin-button {
   z-index: 100;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 180ms var(--ease-spring), transform 210ms var(--ease-spring-pop);
+  transition: opacity 150ms ease, transform 170ms var(--ease-spring);
   white-space: normal;
 }
 
@@ -1454,15 +1461,14 @@ input.prop-num-input::-webkit-inner-spin-button {
 .tool-btn-wrapper.is-slider-dragging .tool-hover-card.gn-popover {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(0) scale(1);
+  transform: translateY(0);
 }
 
 .floating-toolbar[data-dock='bottom'] .tool-hover-card.gn-popover,
 .floating-toolbar[data-dock='float'] .tool-hover-card.gn-popover[data-popover-side='above'] {
   top: auto;
   bottom: calc(100% + 12px);
-  transform: translateY(-6px) scale(0.98);
-  transform-origin: bottom center;
+  transform: translateY(-6px);
 }
 
 .floating-toolbar[data-dock='bottom'] .gn-popover-arrow,
@@ -1479,7 +1485,7 @@ input.prop-num-input::-webkit-inner-spin-button {
 .floating-toolbar[data-dock='bottom'] .tool-btn-wrapper.is-slider-dragging .tool-hover-card.gn-popover,
 .floating-toolbar[data-dock='float'] .tool-btn-wrapper.is-pinned .tool-hover-card.gn-popover[data-popover-side='above'],
 .floating-toolbar[data-dock='float'] .tool-btn-wrapper.is-slider-dragging .tool-hover-card.gn-popover[data-popover-side='above'] {
-  transform: translateY(0) scale(1);
+  transform: translateY(0);
 }
 
 .floating-toolbar[data-dock='left'] .tool-hover-card.gn-popover,
@@ -1492,8 +1498,7 @@ input.prop-num-input::-webkit-inner-spin-button {
 .floating-toolbar[data-dock='left'] .tool-hover-card.gn-popover {
   left: calc(100% + 12px);
   right: auto;
-  transform: translateX(6px) scale(0.98);
-  transform-origin: left center;
+  transform: translateX(6px);
 }
 
 .floating-toolbar[data-dock='left'] .gn-popover-arrow {
@@ -1510,8 +1515,7 @@ input.prop-num-input::-webkit-inner-spin-button {
 .floating-toolbar[data-dock='right'] .tool-hover-card.gn-popover {
   right: calc(100% + 12px);
   left: auto;
-  transform: translateX(-6px) scale(0.98);
-  transform-origin: right center;
+  transform: translateX(-6px);
 }
 
 .floating-toolbar[data-dock='right'] .gn-popover-arrow {
@@ -1530,7 +1534,7 @@ input.prop-num-input::-webkit-inner-spin-button {
 .floating-toolbar[data-dock='left'] .tool-btn-wrapper.is-slider-dragging .tool-hover-card.gn-popover,
 .floating-toolbar[data-dock='right'] .tool-btn-wrapper.is-pinned .tool-hover-card.gn-popover,
 .floating-toolbar[data-dock='right'] .tool-btn-wrapper.is-slider-dragging .tool-hover-card.gn-popover {
-  transform: translateX(0) scale(1);
+  transform: translateX(0);
 }
 
 /* Goodnotes Popover Header */
@@ -2099,7 +2103,7 @@ input.prop-num-input::-webkit-inner-spin-button {
     border-color var(--transition-fast),
     color var(--transition-fast),
     box-shadow var(--transition-fast),
-    transform 190ms var(--ease-spring-pop);
+    opacity var(--transition-fast);
   position: relative;
 }
 
@@ -2118,7 +2122,7 @@ input.prop-num-input::-webkit-inner-spin-button {
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   color: var(--text-primary);
   box-shadow: 0 2px 10px var(--accent-glow);
-  animation: toolSelectPop 200ms var(--ease-spring-pop);
+  animation: toolSelectPop 160ms ease-out;
 }
 
 /* Document Scroll Area — the primary reading surface gets a wider,
@@ -2177,20 +2181,145 @@ input.prop-num-input::-webkit-inner-spin-button {
 .document-pages-wrapper {
   position: relative;
   margin: 0 auto;
+  min-height: 100%;
+}
+
+.document-pages-wrapper.is-zoom-previewing {
+  overflow: hidden;
 }
 
 /* Page Container */
 .pdf-page-container {
   position: absolute;
-  background-color: #ffffff;
+  background-color: #f8f9fc;
   box-shadow: var(--canvas-page-shadow);
   border-radius: 4px;
   overflow: hidden;
   contain: layout style paint;
 }
 
+.pdf-page-container.is-zoom-target {
+  will-change: transform;
+}
+
 body.invert-pdf-document .pdf-page-container {
-  background-color: #141416;
+  background-color: #18191e;
+}
+
+/* Zero-overhead static editorial loading placeholder kept cleanly underneath
+   pdfCanvas (z-index: 0) so unrendered pages or mid-scroll GPU tile uploads
+   NEVER expose a black flash — opaque pdfCanvas covers it 100% once painted. */
+.pdf-page-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  contain: strict;
+  background-color: #f8f9fc;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.pdf-ph-sheet {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 11% 11% 10%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 5%;
+}
+
+.pdf-ph-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pdf-ph-kicker {
+  width: 24%;
+  height: 8px;
+  border-radius: 999px;
+  background-color: rgba(100, 116, 139, 0.14);
+}
+
+.pdf-ph-title {
+  width: 62%;
+  height: 14px;
+  border-radius: 999px;
+  background-color: rgba(71, 85, 105, 0.16);
+}
+
+.pdf-ph-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pdf-ph-line {
+  width: 100%;
+  height: 9px;
+  border-radius: 999px;
+  background-color: rgba(100, 116, 139, 0.11);
+}
+
+.pdf-ph-line-lg {
+  width: 92%;
+}
+
+.pdf-ph-line-md {
+  width: 84%;
+}
+
+.pdf-ph-line-sm {
+  width: 58%;
+}
+
+.pdf-ph-block {
+  flex: 1 1 auto;
+  min-height: 18%;
+  max-height: 28%;
+  border-radius: 8px;
+  border: 1px solid rgba(100, 116, 139, 0.11);
+  background-color: rgba(100, 116, 139, 0.055);
+}
+
+.pdf-ph-num {
+  position: absolute;
+  right: 7%;
+  bottom: 4.5%;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(100, 116, 139, 0.48);
+  user-select: none;
+}
+
+body.invert-pdf-document .pdf-page-placeholder {
+  background-color: #18191e;
+}
+
+body.invert-pdf-document .pdf-ph-kicker {
+  background-color: rgba(148, 163, 184, 0.12);
+}
+
+body.invert-pdf-document .pdf-ph-title {
+  background-color: rgba(148, 163, 184, 0.16);
+}
+
+body.invert-pdf-document .pdf-ph-line {
+  background-color: rgba(148, 163, 184, 0.09);
+}
+
+body.invert-pdf-document .pdf-ph-block {
+  border-color: rgba(148, 163, 184, 0.1);
+  background-color: rgba(148, 163, 184, 0.045);
+}
+
+body.invert-pdf-document .pdf-ph-num {
+  color: rgba(148, 163, 184, 0.42);
 }
 
 .pdf-page-canvas {
@@ -2199,8 +2328,11 @@ body.invert-pdf-document .pdf-page-container {
   left: 0;
   pointer-events: none;
   z-index: 1;
-  transform: translateZ(0);
-  backface-visibility: hidden;
+}
+
+.pdf-page-container:not(.is-page-rendered) .pdf-page-canvas {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .pdf-chunk-canvas {
@@ -2217,8 +2349,6 @@ body.invert-pdf-document .pdf-page-container {
   left: 0;
   pointer-events: none;
   z-index: 3;
-  transform: translateZ(0);
-  backface-visibility: hidden;
 }
 
 .annot-chunk-canvas {
@@ -2228,8 +2358,6 @@ body.invert-pdf-document .pdf-page-container {
   pointer-events: none;
   z-index: 4;
   display: none;
-  transform: translateZ(0);
-  backface-visibility: hidden;
 }
 
 /* The cursor itself is set inline from src/ui/cursor.ts, which draws the
@@ -2242,8 +2370,6 @@ body.invert-pdf-document .pdf-page-container {
   z-index: 5;
   touch-action: none;
   cursor: crosshair;
-  transform: translateZ(0);
-  backface-visibility: hidden;
 }
 
 .scratch-chunk-canvas {
@@ -2253,8 +2379,26 @@ body.invert-pdf-document .pdf-page-container {
   pointer-events: none;
   z-index: 6;
   display: none;
-  transform: translateZ(0);
-  backface-visibility: hidden;
+}
+
+/* Pooled tiny floating micro-canvas for the transient unclosed ink tail & 1-frame
+   hardware stylus prediction — avoids ever clearing settled live ink underneath. */
+.ink-tip-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 7;
+  display: none;
+}
+
+/* GPU-composited overlay rasterized once on selection move/rotate lift so dragging
+   even full-page shapes or multi-item selections runs at 0ms Canvas2D cost/frame. */
+.select-drag-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 8;
+  will-change: transform;
 }
 
 /* Floating View Controls (Bottom-Right) */
@@ -2273,12 +2417,9 @@ body.invert-pdf-document .pdf-page-container {
   gap: var(--space-1);
   padding: 4px 8px;
   z-index: 25;
-  transform-origin: bottom right;
   transition:
     opacity var(--transition-normal),
-    transform 210ms var(--ease-spring-pop),
     box-shadow 180ms ease;
-  will-change: transform, opacity;
 }
 
 .floating-view-controls.is-collapsed {
@@ -2585,7 +2726,6 @@ html, body, .app-container {
     transform 220ms var(--ease-spring),
     opacity 180ms var(--ease-spring),
     border-color 180ms ease;
-  will-change: transform, margin-inline-end, opacity;
   z-index: 30;
 }
 
@@ -2821,8 +2961,8 @@ input.prop-hex-input:focus {
 }
 
 @keyframes scaleUp {
-  from { transform: scale(0.95) translateY(8px); opacity: 0; }
-  to { transform: scale(1) translateY(0); opacity: 1; }
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 /* Settings Tab Button */
@@ -2956,8 +3096,10 @@ input.prop-hex-input:focus {
 .toast-container {
   position: fixed;
   bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin-inline: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -2988,7 +3130,7 @@ input.prop-hex-input:focus {
 
 .toast.is-leaving {
   opacity: 0;
-  transform: translateY(6px) scale(0.98);
+  transform: translateY(6px);
 }
 
 .toast-icon {
@@ -3081,8 +3223,8 @@ input.prop-hex-input:focus {
 }
 
 @keyframes loadingCardPop {
-  from { transform: scale(0.96) translateY(6px); opacity: 0; }
-  to { transform: scale(1) translateY(0); opacity: 1; }
+  from { transform: translateY(6px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 .pdf-loading-paper-stage {
@@ -3409,7 +3551,7 @@ body:not(.pdf-links-interactive) .pdf-link-hotspot,
   border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border-medium));
   box-shadow: var(--shadow-float), 0 0 18px color-mix(in srgb, var(--accent) 22%, transparent);
   transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms cubic-bezier(0.22, 1, 0.36, 1), visibility 180ms;
-  transform: translateY(0) scale(1);
+  transform: translateY(0);
   opacity: 1;
 }
 
@@ -3423,7 +3565,7 @@ html.platform-desktop .jump-back-pill {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transform: translateY(8px) scale(0.95);
+  transform: translateY(8px);
 }
 
 .jump-back-main-btn {
@@ -3439,7 +3581,7 @@ html.platform-desktop .jump-back-pill {
   font-weight: 600;
   cursor: pointer;
   border-radius: var(--radius-full);
-  transition: color 120ms ease, transform 100ms ease;
+  transition: color 120ms ease, opacity 100ms ease;
 }
 
 .jump-back-main-btn:hover {
@@ -3447,7 +3589,7 @@ html.platform-desktop .jump-back-pill {
 }
 
 .jump-back-main-btn:active {
-  transform: scale(0.96);
+  opacity: 0.78;
 }
 
 .jump-back-icon {
@@ -3599,8 +3741,8 @@ html.platform-desktop .jump-back-pill {
 }
 
 @keyframes scaleDownModal {
-  from { transform: scale(1) translateY(0); opacity: 1; }
-  to { transform: scale(0.96) translateY(4px); opacity: 0; }
+  from { transform: translateY(0); opacity: 1; }
+  to { transform: translateY(4px); opacity: 0; }
 }
 
 /* 2. Tab Content Crossfade + Slide (Sidebar & Settings) */
@@ -3622,17 +3764,15 @@ html.platform-desktop .jump-back-pill {
 
 /* 3. Library <-> Active PDF Viewport Transition */
 .viewport-active-enter {
-  animation: viewportFadeEnter 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: viewportFadeEnter 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes viewportFadeEnter {
   from {
     opacity: 0;
-    transform: scale(0.992);
   }
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -3644,100 +3784,94 @@ html.platform-desktop .jump-back-pill {
 @keyframes pageFlipEnter {
   from {
     opacity: 0.45;
-    transform: translateY(6px) scale(0.99);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
-/* 5. Tactile Press Feedback on Toolbar & View Buttons */
+/* 5. Tactile Press Feedback on Toolbar & View Buttons (Zero-Blur: no scale() GPU resampling) */
 .tool-btn:active:not(:disabled),
 .view-btn:active:not(:disabled),
 .icon-btn:active:not(:disabled) {
-  transform: scale(0.92);
+  opacity: 0.78;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
 }
 
-/* 6. Spring Capsule, Menu, & Tool Keyframes */
+/* 6. Crisp Zero-Blur Capsule, Menu, & Tool Keyframes */
 @keyframes viewCapsuleExpand {
   0% {
-    opacity: 0.78;
-    transform: scaleX(0.26) scaleY(0.92) translateY(2px);
-  }
-  72% {
-    opacity: 1;
-    transform: scaleX(1.015) scaleY(1.01) translateY(0);
+    opacity: 0.72;
+    transform: translateY(2px);
   }
   100% {
     opacity: 1;
-    transform: scaleX(1) scaleY(1) translateY(0);
+    transform: translateY(0);
   }
 }
 
 @keyframes viewCapsuleCollapse {
   0% {
     opacity: 1;
-    transform: scaleX(1) scaleY(1);
+    transform: translateY(0);
   }
   100% {
     opacity: 0.28;
-    transform: scaleX(0.24) scaleY(0.9) translateY(2px);
+    transform: translateY(2px);
   }
 }
 
 @keyframes viewCapsuleItemIn {
   from {
     opacity: 0;
-    transform: translateY(3px) scale(0.92);
+    transform: translateY(3px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
 @keyframes viewPillSettle {
   0% {
-    opacity: 0.7;
-    transform: scale(0.86);
-  }
-  65% {
-    opacity: 1;
-    transform: scale(1.06);
+    opacity: 0.72;
   }
   100% {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
 @keyframes menuPopIn {
   from {
     opacity: 0;
-    transform: scale(0.95) translateY(-4px);
+    transform: translateY(-4px);
   }
   to {
     opacity: 1;
-    transform: scale(1) translateY(0);
+    transform: translateY(0);
   }
 }
 
 @keyframes subRowIn {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.96);
+    transform: translateY(-5px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
 @keyframes toolSelectPop {
-  0% { transform: scale(0.92); }
-  60% { transform: scale(1.05); }
-  100% { transform: scale(1); }
+  0% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 

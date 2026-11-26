@@ -3,7 +3,12 @@
  * Generates organic, fluid, pressure-sensitive strokes using Centripetal Catmull-Rom splines.
  */
 
-import { StrokePoint, Point } from '../core/types';
+import { StrokePoint, Point, BoundingBox } from '../core/types';
+import {
+  buildAnalyticalRibbonPath2D,
+  StreamingInkRenderer,
+  type RibbonSample
+} from './ink-engine';
 
 export interface CurveSegment {
   p0: StrokePoint;
@@ -383,14 +388,15 @@ export function generateSmoothSegments(
 }
 
 /**
- * Width floor for ink strokes so fine lines never drop into sub-pixel scanline dropout.
+ * Width floor for ink strokes so fine hairlines keep delicate tapers without
+ * sub-pixel scanline dropout on 2.5x–3.0x supersampled annotation canvases.
  */
-const MIN_INK_WIDTH = 0.65;
+const MIN_INK_WIDTH = 0.42;
 
 /**
  * Diameter floor for a single point tap or micro-dot so taps always stamp a crisp round dot.
  */
-const MIN_DOT_WIDTH = 0.85;
+const MIN_DOT_WIDTH = 0.65;
 
 export interface SampledSplinePoint {
   x: number;
@@ -438,9 +444,10 @@ export function sampleCentripetalPenSpline(
     }
   ];
 
-  // Target <= 0.18 page pt per step so sagitta error is < 0.001 pt (< 0.015 px at 800% zoom)
-  const targetStepPt = 0.18;
-  const minSubSegmentDist = 0.06;
+  // Target <= 0.12 page pt for fine pens (<= 0.18 pt for wider brushes) so micro-letters
+  // written at 100% zoom have silky curves with zero polygonal facets.
+  const targetStepPt = baseWidth <= 2 ? 0.12 : 0.18;
+  const minSubSegmentDist = baseWidth <= 2 ? 0.04 : 0.06;
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
@@ -591,7 +598,7 @@ function buildVectorPenPlan(
   fillPath.arc(lastSample.x, lastSample.y, rEnd, 0, Math.PI * 2);
 
   // Uniform stroke (e.g. mouse with pressure disabled or constant 0.5 pressure):
-  // render as a single continuous Path2D.
+  // render as a single continuous Path2D (1 GPU draw call).
   const widthBandThreshold = Math.max(0.04, baseWidth * 0.025);
   if (!pressureEnabled || maxW - minW <= widthBandThreshold) {
     const path = new Path2D();
@@ -602,33 +609,19 @@ function buildVectorPenPlan(
     };
   }
 
-  // Variable-width stroke: group spans into smooth variable-width batches
-  const batches: VectorPenBatch[] = [];
-  const stepQuantum = Math.max(0.03, baseWidth * 0.02);
-  const minBatchRunLen = Math.max(0.45, baseWidth * 0.22);
-  let curPath: Path2D | null = null;
-  let curWidth = -1;
-  let curRunLen = 0;
-
-  for (let i = 0; i < m - 1; i++) {
-    const p0 = sampled[i];
-    const p1 = sampled[i + 1];
-    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-    const segW = (p0.w + p1.w) * 0.5;
-    const quantW = Math.round(segW / stepQuantum) * stepQuantum;
-
-    if (!curPath || (Math.abs(quantW - curWidth) > stepQuantum * 1.05 && curRunLen >= minBatchRunLen)) {
-      curPath = new Path2D();
-      curWidth = quantW;
-      curRunLen = 0;
-      batches.push({ width: quantW, path: curPath });
-      curPath.moveTo(p0.x, p0.y);
-    }
-    curPath.lineTo(p1.x, p1.y);
-    curRunLen += segLen;
+  // Variable-width stylus stroke: build ONE single closed analytical Two-Circle
+  // Bitangent Capsule Path2D (1 `ctx.fill('nonzero')` call instead of 30–100+
+  // quantized `ctx.stroke()` batches). Zero width steps, zero beading, zero
+  // self-crossing pinholes, and razor-sharp vector curves at 25%–800%+ zoom.
+  const ribbonSamples: RibbonSample[] = new Array(m);
+  for (let i = 0; i < m; i++) {
+    ribbonSamples[i] = { x: sampled[i].x, y: sampled[i].y, r: sampled[i].w * 0.5 };
   }
-
-  return { fillPath, batches };
+  const analyticalFill = buildAnalyticalRibbonPath2D(ribbonSamples);
+  return {
+    fillPath: analyticalFill ?? fillPath,
+    batches: []
+  };
 }
 
 /**
@@ -942,14 +935,15 @@ export function renderSmoothStroke(
   pressureEnabled = true,
   strength: 'light' | 'balanced' | 'strong' = 'balanced',
   tipShape: 'chisel' | 'round' = 'round',
-  smoothing: 'none' | 'subtle' | 'medium' | 'high' = 'medium'
+  smoothing: 'none' | 'subtle' | 'medium' | 'high' = 'medium',
+  preSmoothed = false
 ): void {
   if (points.length === 0) return;
 
   if (canUsePath2D(ctx) && points.length >= 1) {
     const first = points[0];
     const last = points[points.length - 1];
-    const cacheKey = `${points.length}|${first.x.toFixed(2)},${first.y.toFixed(2)}|${last.x.toFixed(2)},${last.y.toFixed(2)}|${baseWidth}|${pressureCurve}|${isHighlighter ? 1 : 0}|${pressureEnabled ? 1 : 0}|${strength}|${tipShape}|${smoothing}`;
+    const cacheKey = `${points.length}|${first.x.toFixed(2)},${first.y.toFixed(2)}|${last.x.toFixed(2)},${last.y.toFixed(2)}|${baseWidth}|${pressureCurve}|${isHighlighter ? 1 : 0}|${pressureEnabled ? 1 : 0}|${strength}|${tipShape}|${smoothing}|${preSmoothed ? 1 : 0}`;
     let cached = committedStrokePathCache.get(points);
     if (!cached || cached.key !== cacheKey) {
       if (isHighlighter) {
@@ -962,7 +956,7 @@ export function renderSmoothStroke(
         }
         cached = { key: cacheKey, highlighterPath: path };
       } else {
-        const pts = smoothStrokePoints(points, smoothing);
+        const pts = preSmoothed ? points : smoothStrokePoints(points, smoothing);
         const penPlan = buildVectorPenPlan(pts, baseWidth, pressureCurve, pressureEnabled, strength);
         cached = { key: cacheKey, penPlan };
       }
@@ -992,7 +986,7 @@ export function renderSmoothStroke(
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       if (cached.penPlan.fillPath) {
-        ctx.fill(cached.penPlan.fillPath);
+        ctx.fill(cached.penPlan.fillPath, 'nonzero');
       }
       for (let i = 0; i < cached.penPlan.batches.length; i++) {
         ctx.lineWidth = cached.penPlan.batches[i].width;
@@ -1006,7 +1000,7 @@ export function renderSmoothStroke(
   // Fallback for unit-test mock contexts without Path2D
   const pts = isHighlighter
     ? prepareHighlighterPoints(points)
-    : smoothStrokePoints(points, smoothing);
+    : (preSmoothed ? points : smoothStrokePoints(points, smoothing));
 
   ctx.save();
   const isStraightChisel = isHighlighter && tipShape === 'chisel' && pts.length <= 2;
@@ -1037,24 +1031,55 @@ export function renderSmoothStroke(
   renderInkRibbon(ctx, pts, color, baseWidth, pressureCurve, pressureEnabled, strength);
 }
 
-interface LivePrefixCache {
+interface LiveChunkCache {
   firstX: number;
   firstY: number;
-  prefixLen: number;
   baseWidth: number;
   pressureCurve: string;
   pressureEnabled: boolean;
   strength: string;
   smoothing: string;
-  plan: VectorPenRenderPlan;
+  committedEnd: number;
+  chunks: VectorPenRenderPlan[];
 }
 
-let livePrefixCache: LivePrefixCache | null = null;
+let liveChunkCache: LiveChunkCache | null = null;
+
+function findClosestSmoothedIndex(
+  smoothed: StrokePoint[],
+  target: StrokePoint,
+  searchStart: number,
+  searchEnd: number
+): number {
+  let bestIdx = Math.max(0, Math.min(smoothed.length - 1, searchStart));
+  let bestDistSq = Infinity;
+  const lo = Math.max(0, searchStart);
+  const hi = Math.min(smoothed.length - 1, searchEnd);
+  for (let i = lo; i <= hi; i++) {
+    const dx = smoothed[i].x - target.x;
+    const dy = smoothed[i].y - target.y;
+    const dSq = dx * dx + dy * dy;
+    if (dSq < bestDistSq) {
+      bestDistSq = dSq;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+function paintVectorPenPlan(ctx: CanvasRenderingContext2D, plan: VectorPenRenderPlan): void {
+  if (plan.fillPath) ctx.fill(plan.fillPath);
+  for (let i = 0; i < plan.batches.length; i++) {
+    ctx.lineWidth = plan.batches[i].width;
+    ctx.stroke(plan.batches[i].path);
+  }
+}
 
 /**
- * Live stroke renderer for active drawing feedback. Uses O(1) prefix Path2D
- * caching on long strokes and the exact same vector curve renderer on the
- * active tail so drawing has zero lag and nothing shifts on release.
+ * Live stroke renderer for active drawing feedback. Uses a strictly O(1)
+ * incremental chunked Path2D cache on longer strokes (freezing fixed 16-point
+ * windows with 4-point smoothing context so earlier points are NEVER re-smoothed
+ * or re-sampled) and renders only the tiny active tail each frame.
  */
 export function renderLiveStroke(
   ctx: CanvasRenderingContext2D,
@@ -1068,56 +1093,83 @@ export function renderLiveStroke(
 ): void {
   if (points.length === 0) return;
 
-  if (canUsePath2D(ctx) && points.length > 44) {
+  if (canUsePath2D(ctx) && points.length >= 28) {
     const first = points[0];
-    const targetPrefixLen = Math.floor((points.length - 20) / 16) * 16;
     if (
-      targetPrefixLen >= 24 &&
-      (!livePrefixCache ||
-        livePrefixCache.firstX !== first.x ||
-        livePrefixCache.firstY !== first.y ||
-        livePrefixCache.prefixLen !== targetPrefixLen ||
-        livePrefixCache.baseWidth !== baseWidth ||
-        livePrefixCache.pressureCurve !== pressureCurve ||
-        livePrefixCache.pressureEnabled !== pressureEnabled ||
-        livePrefixCache.strength !== strength ||
-        livePrefixCache.smoothing !== smoothing)
+      !liveChunkCache ||
+      liveChunkCache.firstX !== first.x ||
+      liveChunkCache.firstY !== first.y ||
+      liveChunkCache.baseWidth !== baseWidth ||
+      liveChunkCache.pressureCurve !== pressureCurve ||
+      liveChunkCache.pressureEnabled !== pressureEnabled ||
+      liveChunkCache.strength !== strength ||
+      liveChunkCache.smoothing !== smoothing ||
+      points.length < liveChunkCache.committedEnd
     ) {
-      const prefixRaw = points.slice(0, targetPrefixLen + 4);
-      const prefixSmoothed = smoothStrokePoints(prefixRaw, smoothing).slice(0, -3);
-      livePrefixCache = {
+      liveChunkCache = {
         firstX: first.x,
         firstY: first.y,
-        prefixLen: targetPrefixLen,
         baseWidth,
         pressureCurve,
         pressureEnabled,
         strength,
         smoothing,
-        plan: buildVectorPenPlan(prefixSmoothed, baseWidth, pressureCurve, pressureEnabled, strength)
+        committedEnd: 0,
+        chunks: []
       };
     }
 
-    if (livePrefixCache && livePrefixCache.prefixLen === targetPrefixLen) {
-      const tailRaw = points.slice(Math.max(0, targetPrefixLen - 6));
-      const tailSmoothed = smoothStrokePoints(tailRaw, smoothing);
-      const tailPlan = buildVectorPenPlan(tailSmoothed, baseWidth, pressureCurve, pressureEnabled, strength);
+    const CHUNK_STEP = 16;
+    const CONTEXT_PAD = 4;
+    // Freeze at most one small 16-point chunk per advance (strictly O(1) work per frame)
+    while (points.length - liveChunkCache.committedEnd >= CHUNK_STEP + 8) {
+      const chunkStart = liveChunkCache.committedEnd;
+      const chunkEnd = chunkStart + CHUNK_STEP;
+      const ctxStart = Math.max(0, chunkStart - CONTEXT_PAD);
+      const ctxEnd = Math.min(points.length, chunkEnd + CONTEXT_PAD);
+      const localSmoothed = smoothStrokePoints(points.slice(ctxStart, ctxEnd), smoothing);
+      if (localSmoothed.length >= 2) {
+        const startIdx = chunkStart === 0
+          ? 0
+          : findClosestSmoothedIndex(localSmoothed, points[chunkStart], 0, Math.min(localSmoothed.length - 1, CONTEXT_PAD + 2));
+        const endIdx = findClosestSmoothedIndex(
+          localSmoothed,
+          points[chunkEnd],
+          Math.max(startIdx, localSmoothed.length - CONTEXT_PAD - 4),
+          localSmoothed.length - 1
+        );
+        const slice = localSmoothed.slice(Math.max(0, startIdx), Math.min(localSmoothed.length, endIdx + 1));
+        if (slice.length >= 2) {
+          liveChunkCache.chunks.push(
+            buildVectorPenPlan(slice, baseWidth, pressureCurve, pressureEnabled, strength)
+          );
+        }
+      }
+      liveChunkCache.committedEnd = chunkEnd;
+    }
+
+    if (liveChunkCache.chunks.length > 0) {
+      const tailAnchor = liveChunkCache.committedEnd;
+      const tailCtxStart = Math.max(0, tailAnchor - CONTEXT_PAD);
+      const tailSmoothed = smoothStrokePoints(points.slice(tailCtxStart), smoothing);
+      const tailStartIdx = findClosestSmoothedIndex(
+        tailSmoothed,
+        points[tailAnchor],
+        0,
+        Math.min(tailSmoothed.length - 1, CONTEXT_PAD + 2)
+      );
+      const tailSlice = tailSmoothed.slice(Math.max(0, tailStartIdx));
+      const tailPlan = buildVectorPenPlan(tailSlice, baseWidth, pressureCurve, pressureEnabled, strength);
 
       ctx.save();
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
-      if (livePrefixCache.plan.fillPath) ctx.fill(livePrefixCache.plan.fillPath);
-      for (let i = 0; i < livePrefixCache.plan.batches.length; i++) {
-        ctx.lineWidth = livePrefixCache.plan.batches[i].width;
-        ctx.stroke(livePrefixCache.plan.batches[i].path);
+      for (let i = 0; i < liveChunkCache.chunks.length; i++) {
+        paintVectorPenPlan(ctx, liveChunkCache.chunks[i]);
       }
-      if (tailPlan.fillPath) ctx.fill(tailPlan.fillPath);
-      for (let i = 0; i < tailPlan.batches.length; i++) {
-        ctx.lineWidth = tailPlan.batches[i].width;
-        ctx.stroke(tailPlan.batches[i].path);
-      }
+      paintVectorPenPlan(ctx, tailPlan);
       ctx.restore();
       return;
     }
@@ -1132,4 +1184,81 @@ export function renderLiveStroke(
     pressureEnabled,
     strength
   );
+}
+
+/**
+ * Strictly O(1), zero-blit incremental live pen renderer backed by
+ * `StreamingInkRenderer`. Appends settled analytical bitangent capsules ONCE
+ * directly onto the live canvas (eliminating the second 38MB offscreen canvas,
+ * cross-surface `drawImage` flushes, and mid-stroke full-canvas `clearRect`
+ * stalls) while rendering the tiny transient tail + 1-frame stylus prediction
+ * onto a pooled floating micro tip canvas.
+ */
+export class IncrementalLivePen {
+  private readonly _streamer = new StreamingInkRenderer();
+
+  public reset(): void {
+    this._streamer.reset();
+  }
+
+  public hideTipOverlay(): void {
+    this._streamer.hideTipOverlay();
+  }
+
+  public getDirtyRectPx(): BoundingBox | null {
+    return this._streamer.getSettledDirtyRectPx();
+  }
+
+  public clearDirtyOnCanvas(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+    this._streamer.clearSettledDirtyOnCanvas(ctx, canvas);
+  }
+
+  public render(
+    targetCtx: CanvasRenderingContext2D,
+    targetCanvas: HTMLCanvasElement,
+    points: readonly StrokePoint[],
+    color: string,
+    baseWidth: number,
+    pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential' = 'linear',
+    pressureEnabled: boolean = true,
+    strength: 'light' | 'balanced' | 'strong' = 'balanced',
+    _smoothing: 'none' | 'subtle' | 'medium' | 'high' = 'medium',
+    scale: number = 1,
+    offsetPxX: number = 0,
+    offsetPxY: number = 0,
+    liveTip?: StrokePoint | null,
+    predictedPoints?: readonly StrokePoint[] | null,
+    clipCallback?: ((ctx: CanvasRenderingContext2D) => void) | null
+  ): void {
+    if (points.length === 0) return;
+
+    if (!canUsePath2D(targetCtx) || typeof document === 'undefined' || targetCanvas.width <= 1 || targetCanvas.height <= 1) {
+      targetCtx.save();
+      targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+      targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      targetCtx.translate(-offsetPxX, -offsetPxY);
+      targetCtx.scale(scale, scale);
+      renderLiveStroke(targetCtx, [...points], color, baseWidth, pressureCurve, pressureEnabled, strength, _smoothing);
+      targetCtx.restore();
+      return;
+    }
+
+    this._streamer.render(
+      targetCtx,
+      targetCanvas,
+      points,
+      color,
+      baseWidth,
+      pressureCurve,
+      pressureEnabled,
+      strength,
+      scale,
+      offsetPxX,
+      offsetPxY,
+      calculateStrokeWidth,
+      liveTip,
+      predictedPoints,
+      clipCallback
+    );
+  }
 }

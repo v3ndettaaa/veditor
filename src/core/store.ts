@@ -34,6 +34,12 @@ export interface ToolbarLayoutItem {
 
 const TOOLBAR_LAYOUT_KEY = 'veditor_toolbar_layout';
 
+export interface StoreChangeHint {
+  kind: 'incremental-annotation';
+  pageIndex: number;
+  annotation: Annotation;
+}
+
 export type StoreListener = () => void;
 
 class StateStore {
@@ -171,6 +177,7 @@ class StateStore {
 
   // Listeners
   private _listeners: Set<StoreListener> = new Set();
+  private _lastChangeHint: StoreChangeHint | null = null;
 
   constructor() {
     // Detect system dark mode preference
@@ -255,13 +262,23 @@ class StateStore {
    * Callers reached from inside a listener must make sure their own work is
    * idempotent, or the notification loops back on itself.
    */
-  public notify() {
-    for (const listener of this._listeners) {
-      try {
-        listener();
-      } catch (err) {
-        console.error('Error in store listener:', err);
+  public get lastChangeHint(): StoreChangeHint | null {
+    return this._lastChangeHint;
+  }
+
+  public notify(hint?: StoreChangeHint) {
+    const prevHint = this._lastChangeHint;
+    this._lastChangeHint = hint ?? null;
+    try {
+      for (const listener of this._listeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.error('Error in store listener:', err);
+        }
       }
+    } finally {
+      this._lastChangeHint = prevHint;
     }
   }
 

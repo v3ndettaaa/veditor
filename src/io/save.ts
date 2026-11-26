@@ -4,6 +4,7 @@
  * Save As prompts for a new file/location.
  */
 
+import { PDFDocument, degrees } from 'pdf-lib';
 import { store } from '../core/store';
 import { pdfEngine } from '../core/pdf-engine';
 import { viewportManager } from '../core/viewport';
@@ -21,6 +22,24 @@ import { nativeSaveAsDialog, nativeWriteFile } from './native-fs';
 import { tr } from '../ui/i18n';
 
 const fileHandles = new Map<string, any>();
+let pendingSessionPersist: Promise<void> = Promise.resolve();
+
+/**
+ * Waits for any in-flight background IndexedDB session persistence to finish
+ * (called before desktop app close so nothing is ever lost).
+ */
+export function flushPendingSessionSave(): Promise<void> {
+  return pendingSessionPersist;
+}
+
+function persistSessionInBackground(doc: any): void {
+  pendingSessionPersist = pendingSessionPersist
+    .catch(() => {})
+    .then(() => saveDocumentSession(doc, { includeBytes: true }))
+    .catch((err) => {
+      console.warn('Background session persist failed:', err);
+    });
+}
 
 export function rememberFileHandle(docId: string, handle: any): void {
   if (handle) fileHandles.set(docId, handle);
@@ -46,6 +65,26 @@ function hasUserPageRotations(): boolean {
   return false;
 }
 
+/**
+ * Fast metadata-only rotation pass on already-built PDF bytes so rotated saves
+ * never pay for a second full annotation sync + image encode pass.
+ */
+async function bakeRotationsIntoBytes(baseBytes: Uint8Array): Promise<Uint8Array> {
+  const pdfDoc = await PDFDocument.load(baseBytes, { ignoreEncryption: true, updateMetadata: false });
+  const pdfPages = pdfDoc.getPages();
+  let modified = false;
+  for (let idx = 0; idx < pdfPages.length; idx++) {
+    const userRot = ((store.pageRotations[idx] || 0) % 360 + 360) % 360;
+    if (userRot !== 0) {
+      const nativeRot = ((pdfPages[idx].getRotation().angle % 360) + 360) % 360;
+      pdfPages[idx].setRotation(degrees((nativeRot + userRot) % 360));
+      modified = true;
+    }
+  }
+  if (!modified) return baseBytes;
+  return await pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false });
+}
+
 async function buildSavedBytes(opts?: Partial<PDFExportOptions>): Promise<Uint8Array> {
   return pdfExporter.exportPDF({
     flatten: opts?.flatten ?? false,
@@ -68,6 +107,8 @@ async function refreshEngineFromSavedBytes(docId: string, bytes: Uint8Array): Pr
     doc.pages = meta.pages;
     doc.bookmarks = meta.bookmarks;
   }
+  // Ensure rendered page caches are invalidated so pages re-rasterize cleanly
+  (window as any)?.app?.invalidateAfterEngineReload?.(docId, meta.pageCount);
 }
 
 async function writeHandle(handle: any, bytes: Uint8Array): Promise<boolean> {
@@ -137,16 +178,15 @@ export async function saveActiveDocument(): Promise<boolean> {
 
     showToast(tr('Saving…', 'در حال ذخیره…'), 'progress');
 
-    // Keep session bytes un-flattened and un-rotated (since store.pageRotations stays active in memory).
-    // Composite annotations are embedded as removable VEditorComposite /Stamp annotations, so only
-    // user page rotations require a second build pass.
+    // Build session bytes ONCE (un-flattened, un-rotated); if pages are rotated,
+    // apply /Rotate metadata in a fast ~5ms pass instead of rebuilding everything twice.
     const sessionBytes = await buildSavedBytes({
       flatten: false,
       embedCompositeAnnotations: true,
       bakePageRotations: false
     });
     const diskBytes = hasUserPageRotations()
-      ? await buildSavedBytes({ flatten: false, embedCompositeAnnotations: true, bakePageRotations: true })
+      ? await bakeRotationsIntoBytes(sessionBytes)
       : sessionBytes;
 
     doc.fileData = sessionBytes;
@@ -159,10 +199,10 @@ export async function saveActiveDocument(): Promise<boolean> {
         const now = Date.now();
         doc.lastModifiedAt = now;
         doc.lastSavedAt = now;
-        await saveDocumentSession(doc, { includeBytes: true });
         showToast(tr('Saved', 'ذخیره شد'), 'success');
+        persistSessionInBackground(doc);
       } else {
-        await saveDocumentSession(doc, { includeBytes: true });
+        persistSessionInBackground(doc);
         showToast(
           tr('Could not write to the original file (saved in session only)', 'امکان نوشتن در فایل اصلی نبود (فقط در نشست برنامه ذخیره شد)'),
           'error'
@@ -178,19 +218,18 @@ export async function saveActiveDocument(): Promise<boolean> {
       doc.lastModifiedAt = now;
       if (wrote) {
         doc.lastSavedAt = now;
-        await saveDocumentSession(doc, { includeBytes: true });
         showToast(tr('Saved directly to original file', 'مستقیماً در فایل اصلی ذخیره شد'), 'success');
       } else {
-        await saveDocumentSession(doc, { includeBytes: true });
         showToast(tr('Saved in session', 'در نشست برنامه ذخیره شد'), 'success');
       }
+      persistSessionInBackground(doc);
     } else {
       await pdfExporter.saveToFile(diskBytes, doc.name);
       const now = Date.now();
       doc.lastModifiedAt = now;
       doc.lastSavedAt = now;
-      await saveDocumentSession(doc, { includeBytes: true });
       showToast(tr('Saved', 'ذخیره شد'), 'success');
+      persistSessionInBackground(doc);
     }
     store.notify();
     return true;
@@ -398,42 +437,31 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
           const chosenName = result.chosenName;
           const isPartialPageExport = Boolean(opts.pageRange || opts.pageIndices?.length);
 
-          // If exporting only a subset of pages, leave the currently open full document untouched!
-          if (isPartialPageExport) {
-            showToast(tr(`Saved selected pages as ${chosenName}`, `صفحات انتخابی با نام ${chosenName} ذخیره شد`), 'success');
+          // Export-only variants (flattened, dark-mode baked, partial page subset,
+          // or password-encrypted copies) write the new file to disk while keeping
+          // the currently open editable document, pages, and annotations 100% intact!
+          if (isPartialPageExport || opts.flatten || opts.darkMode || opts.password) {
+            const label = isPartialPageExport
+              ? tr(`Saved selected pages as ${chosenName}`, `صفحات انتخابی با نام ${chosenName} ذخیره شد`)
+              : opts.flatten
+                ? tr(`Saved flattened copy as ${chosenName}`, `نسخه Flatten شده با نام ${chosenName} ذخیره شد`)
+                : tr(`Saved copy as ${chosenName}`, `نسخه جدید با نام ${chosenName} ذخیره شد`);
+            showToast(label, 'success');
             resolve(true);
             return;
           }
 
-          if (opts.flatten) {
-            // Flattened export baked all annotations and rotations into the PDF page streams;
-            // keep an unencrypted working session copy so the active tab stays responsive.
-            doc.annotations = {};
-            for (const k of Object.keys(store.pageRotations)) {
-              delete store.pageRotations[Number(k)];
-            }
-            doc.fileData = opts.password
-              ? await buildSavedBytes({
-                  dpi: opts.dpi,
-                  flatten: true,
-                  darkMode: opts.darkMode === true,
-                  embedCompositeAnnotations: true,
-                  bakePageRotations: true
-                })
-              : diskBytes;
-          } else {
-            const sessionBytes = (hasUserPageRotations() || opts.password)
-              ? await buildSavedBytes({
-                  dpi: opts.dpi,
-                  flatten: false,
-                  darkMode: opts.darkMode === true,
-                  embedCompositeAnnotations: true,
-                  bakePageRotations: false
-                })
-              : diskBytes;
-            doc.fileData = sessionBytes;
-          }
-
+          // Standard editable Save As: update active document reference without breaking the live engine
+          const sessionBytes = hasUserPageRotations()
+            ? await buildSavedBytes({
+                dpi: opts.dpi,
+                flatten: false,
+                darkMode: false,
+                embedCompositeAnnotations: true,
+                bakePageRotations: false
+              })
+            : diskBytes;
+          doc.fileData = sessionBytes;
           doc.name = chosenName;
           if (result.nativeFilePath) doc.nativeFilePath = result.nativeFilePath;
           const now = Date.now();
@@ -443,14 +471,8 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
           const tab = tabs?.find(t => t.id === doc.id);
           if (tab) tab.name = chosenName;
           if (result.handle) rememberFileHandle(doc.id, result.handle);
-          await saveDocumentSession(doc, { includeBytes: true });
-          if (opts.flatten || opts.darkMode) {
-            await refreshEngineFromSavedBytes(doc.id, doc.fileData);
-            store.notify();
-            viewportManager.updateLayout(true);
-          } else {
-            store.notify();
-          }
+          persistSessionInBackground(doc);
+          store.notify();
           showToast(tr(`Saved as ${chosenName}`, `با نام ${chosenName} ذخیره شد`), 'success');
           resolve(true);
         } catch (e: any) {
@@ -462,3 +484,6 @@ export async function saveActiveDocumentAs(): Promise<boolean> {
     });
   });
 }
+
+// Keep helper exported/available for any future full-document reload paths
+export { refreshEngineFromSavedBytes, viewportManager };

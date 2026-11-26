@@ -4,8 +4,11 @@
  */
 
 import { store } from '../../core/store';
-import { history, AddAnnotationCommand } from '../../core/history';
+import { history, AddAnnotationCommand, ModifyAnnotationCommand } from '../../core/history';
 import { signatureTool } from '../../annotations/tools/signature';
+import { findExpandedStickyNoteTarget } from '../../annotations/tools/sticky-note';
+import { embedAnnotationsInStickyNote } from '../../annotations/selection';
+import { pointerHandler } from '../../input/pointer-handler';
 import { renderSmoothStroke } from '../../annotations/spline';
 import { StrokePoint } from '../../core/types';
 import { getIconSvg } from '../../utils/icons';
@@ -134,6 +137,23 @@ export class SignatureDialogComponent {
         this._strokes,
         '#0f172a'
       );
+
+      const pageAnns = store.activeDocument?.annotations[pageIndex] || [];
+      const targetNote = findExpandedStickyNoteTarget(pageAnns, {
+        editingNoteId: pointerHandler.editingStickyNote?.noteId,
+        selectedIds: store.selectedAnnotationIds,
+        allowSelectedFallback: true
+      });
+      if (targetNote) {
+        const { updatedNote, insertedItems } = embedAnnotationsInStickyNote(targetNote, [sigAnn]);
+        if (insertedItems.length > 0) {
+          history.execute(new ModifyAnnotationCommand(pageIndex, targetNote, updatedNote));
+          store.selectAnnotation(targetNote.id);
+          store.setSignatureModalOpen(false);
+          store.setActivePageIndex(pageIndex);
+          return;
+        }
+      }
 
       history.execute(new AddAnnotationCommand(pageIndex, sigAnn));
       store.selectAnnotation(sigAnn.id);

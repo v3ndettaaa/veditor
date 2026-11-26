@@ -1,10 +1,11 @@
 /**
  * Professional Highlighter Tool
- * Renders non-destructive translucent highlights with Multiply blend mode.
+ * Renders non-destructive translucent highlights with O(1) append-only live streaming.
  */
 
 import { StrokePoint, HighlighterAnnotation, BoundingBox } from '../../core/types';
 import { renderSmoothStroke, normalizeHighlighterColor } from '../spline';
+import { StreamingHighlighterRenderer } from '../ink-engine';
 import { computePointsBoundingBox } from '../../utils/geometry';
 
 export class HighlighterTool {
@@ -20,8 +21,8 @@ export class HighlighterTool {
   private _minY: number = Infinity;
   private _maxX: number = -Infinity;
   private _maxY: number = -Infinity;
-
-  private _liveTip: StrokePoint | null = null;
+  private _usedIncremental: boolean = false;
+  private readonly _streamingRenderer = new StreamingHighlighterRenderer();
 
   public start(
     point: StrokePoint,
@@ -34,7 +35,6 @@ export class HighlighterTool {
     opacity: number = 0.3
   ) {
     this._activePoints = [point];
-    this._liveTip = null;
     this._pageIndex = pageIndex;
     this._opacity = opacity;
     // Always store a translucent color; toolbar swatches and the native color
@@ -50,6 +50,8 @@ export class HighlighterTool {
     this._minY = point.y;
     this._maxX = point.x;
     this._maxY = point.y;
+    this._usedIncremental = false;
+    this._streamingRenderer.reset();
   }
 
   public move(point: StrokePoint, shiftKey: boolean = false, zoom: number = 1): void {
@@ -61,7 +63,6 @@ export class HighlighterTool {
       const dy = Math.abs(point.y - p0.y);
       const p1 = dx >= dy ? { ...point, y: p0.y } : { ...point, x: p0.x };
       this._activePoints = [p0, p1];
-      this._liveTip = null;
       this._minX = Math.min(p0.x, p1.x);
       this._minY = Math.min(p0.y, p1.y);
       this._maxX = Math.max(p0.x, p1.x);
@@ -83,7 +84,6 @@ export class HighlighterTool {
         }
       }
       this._activePoints.push(point);
-      this._liveTip = null;
     }
   }
 
@@ -122,6 +122,50 @@ export class HighlighterTool {
     ctx.restore();
   }
 
+  /**
+   * O(1) append-only live highlighter render for freehand strokes (solid color
+   * + canvas CSS opacity prevents overlap darkening without full-stroke clears).
+   * Falls back seamlessly for straight-line / Shift-locked 2-point highlights.
+   */
+  public renderScratchpadIncremental(
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    scale: number,
+    offsetPxX: number = 0,
+    offsetPxY: number = 0,
+    isStraightMode: boolean = false
+  ): boolean {
+    if (this._activePoints.length === 0) return false;
+    if (this._straightLine || isStraightMode) {
+      if (this._usedIncremental) {
+        this._streamingRenderer.clearDirtyOnCanvas(ctx, canvas);
+        this._usedIncremental = false;
+      }
+      return false;
+    }
+    this._usedIncremental = true;
+    this._streamingRenderer.render(
+      ctx,
+      canvas,
+      this._activePoints,
+      this._color,
+      this._width,
+      scale,
+      offsetPxX,
+      offsetPxY
+    );
+    return true;
+  }
+
+  public clearLiveSurface(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+    if (this._usedIncremental) {
+      this._streamingRenderer.clearDirtyOnCanvas(ctx, canvas);
+      this._usedIncremental = false;
+    } else {
+      this._streamingRenderer.restoreCanvasOpacity();
+    }
+  }
+
   public finish(layerId: string): HighlighterAnnotation | null {
     const finalPoints = this.getRenderPoints();
     if (finalPoints.length === 0) return null;
@@ -151,11 +195,12 @@ export class HighlighterTool {
 
   public cancel(): void {
     this._activePoints = [];
-    this._liveTip = null;
     this._minX = Infinity;
     this._minY = Infinity;
     this._maxX = -Infinity;
     this._maxY = -Infinity;
+    this._usedIncremental = false;
+    this._streamingRenderer.reset();
   }
 }
 

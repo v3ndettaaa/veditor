@@ -3,7 +3,7 @@
  * Coordinates multi-layer rendering, background paper patterns, and tool dispatching.
  */
 
-import { Annotation, BackgroundPattern, ShapeAnnotation, PenAnnotation } from '../core/types';
+import { Annotation, BackgroundPattern, BoundingBox, ShapeAnnotation, PenAnnotation } from '../core/types';
 
 /**
  * Whether a shape paints its outline stroke. Lines and arrows ARE their
@@ -104,6 +104,28 @@ export class AnnotationEngine {
     return this._editingAnnotationId;
   }
 
+  /**
+   * Stamps a single annotation with its exact opacity and blend mode onto `ctx`
+   * without clearing existing pixels — used by O(1) incremental stroke commits.
+   */
+  public stampSingleAnnotation(
+    ctx: CanvasRenderingContext2D,
+    ann: Annotation,
+    scale: number = 1.0
+  ): void {
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    // Highlighter ink already carries its translucency in the color alpha;
+    // applying `opacity` again would double-fade it (and diverge from the
+    // live preview). Every other type uses opacity as the single source.
+    ctx.globalAlpha = ann.type === 'highlighter' && !ann.quadPoints ? 1.0 : (ann.opacity ?? 1.0);
+    if (ann.blendMode && ann.type !== 'highlighter') {
+      ctx.globalCompositeOperation = ann.blendMode;
+    }
+    this.renderSingleAnnotation(ctx, ann, scale);
+    ctx.restore();
+  }
+
   public renderCommittedAnnotations(
     ctx: CanvasRenderingContext2D,
     annotations: Annotation[],
@@ -112,21 +134,16 @@ export class AnnotationEngine {
   ): void {
     for (const ann of annotations) {
       if (this._editingAnnotationId && ann.id === this._editingAnnotationId && ann.type !== 'sticky-note') continue;
-      ctx.save();
-      // Highlighter ink already carries its translucency in the color alpha;
-      // applying `opacity` again would double-fade it (and diverge from the
-      // live preview). Every other type uses opacity as the single source.
-      ctx.globalAlpha = ann.type === 'highlighter' && !ann.quadPoints ? 1.0 : (ann.opacity ?? 1.0);
-      if (ann.blendMode && ann.type !== 'highlighter') ctx.globalCompositeOperation = ann.blendMode;
-      this.renderSingleAnnotation(ctx, ann, scale);
-      ctx.restore();
+      this.stampSingleAnnotation(ctx, ann, scale);
     }
   }
 
   public renderAnnotationsToCanvas(
     ctx: CanvasRenderingContext2D,
     pageIndex: number,
-    scale: number = 1.0
+    scale: number = 1.0,
+    excludeIds?: Set<string> | null,
+    cullBox?: BoundingBox | null
   ): void {
     const doc = store.activeDocument;
     if (!doc) return;
@@ -137,7 +154,21 @@ export class AnnotationEngine {
     const visibleAnnotations = doc.annotations[pageIndex] || [];
 
     for (const ann of visibleAnnotations) {
+      if (excludeIds && excludeIds.has(ann.id)) continue;
       if (this._editingAnnotationId && ann.id === this._editingAnnotationId && ann.type !== 'sticky-note') continue;
+      if (cullBox && ann.box) {
+        const b = ann.box;
+        const rotPad = ann.rotation ? Math.hypot(b.width, b.height) * 0.5 : 0;
+        const pad = Math.max(24, ((ann as { strokeWidth?: number }).strokeWidth || 4) * 2) + rotPad;
+        if (
+          b.x + b.width + pad < cullBox.x ||
+          b.x - pad > cullBox.x + cullBox.width ||
+          b.y + b.height + pad < cullBox.y ||
+          b.y - pad > cullBox.y + cullBox.height
+        ) {
+          continue;
+        }
+      }
       ctx.save();
       // Highlighter ink already carries its translucency in the color alpha;
       // applying `opacity` again would double-fade it (and diverge from the
@@ -247,7 +278,8 @@ export class AnnotationEngine {
           penAnn.pressureEnabled !== false,
           penAnn.pressureStrength || 'balanced',
           'round',
-          penAnn.strokeSmoothing || 'medium'
+          penAnn.strokeSmoothing || 'medium',
+          penAnn.preSmoothed === true
         );
         ctx.restore();
         break;

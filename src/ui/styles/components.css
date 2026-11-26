@@ -490,7 +490,7 @@ input[type="range"] {
 }
 
 .sidebar-search-nav-btn:active {
-  transform: scale(0.93);
+  opacity: 0.78;
 }
 
 .sidebar-search-nav-btn.is-clear:hover {
@@ -1825,11 +1825,9 @@ input[type="range"] {
 @keyframes thumbFadeIn {
   from {
     opacity: 0;
-    transform: scale(0.985);
   }
   to {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -1897,7 +1895,7 @@ input[type="range"] {
 }
 
 .thumbnail-bookmark-btn:active {
-  transform: scale(0.86);
+  opacity: 0.72;
 }
 
 .thumbnail-bookmark-btn.is-bookmarked {
@@ -1943,9 +1941,8 @@ input[type="range"] {
 }
 
 @keyframes thumbBadgePop {
-  0% { transform: scale(0.76); }
-  65% { transform: scale(1.12); }
-  100% { transform: scale(1); }
+  0% { opacity: 0.65; }
+  100% { opacity: 1; }
 }
 
 .thumbnail-footer {
@@ -2031,7 +2028,7 @@ input[type="range"] {
 }
 
 .thumbnail-add-card:active {
-  transform: scale(0.97);
+  opacity: 0.85;
 }
 
 .thumbnail-add-icon {
@@ -2056,17 +2053,17 @@ input[type="range"] {
   border-radius: var(--radius-sm);
   background: var(--accent-subtle);
   border: 1px solid var(--accent-border);
-  animation: selectionBarIn 190ms var(--ease-spring-pop);
+  animation: selectionBarIn 160ms var(--ease-spring);
 }
 
 @keyframes selectionBarIn {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.97);
+    transform: translateY(-4px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
@@ -2235,11 +2232,11 @@ input[type="range"] {
   width: max-content;
   max-width: calc(100vw - 24px);
   border-radius: var(--radius-full);
-  transform: translate(-50%, 0) scale(1);
+  transform: translate(-50%, 0);
   transition:
-    opacity 180ms var(--ease-spring),
-    transform 210ms var(--ease-spring-pop),
-    visibility 180ms;
+    opacity 160ms ease,
+    transform 180ms var(--ease-spring),
+    visibility 160ms;
   pointer-events: auto;
   opacity: 1;
 }
@@ -2248,7 +2245,7 @@ input[type="range"] {
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
-  transform: translate(-50%, 6px) scale(0.95);
+  transform: translate(-50%, 6px);
 }
 
 .props-bar-inner {
@@ -2568,7 +2565,7 @@ input[type="range"] {
 }
 
 .sidebar-page-action-btn:active {
-  transform: scale(0.95);
+  opacity: 0.78;
 }
 
 .sidebar-page-action-btn svg {
@@ -2651,7 +2648,6 @@ input[type="range"] {
 
 .thumbnail-item.is-dragging {
   opacity: 0.45;
-  transform: scale(0.97);
 }
 
 /* Context Menu & Modal Backdrop Exit Animations */
@@ -2663,11 +2659,11 @@ input[type="range"] {
 @keyframes contextMenuOut {
   from {
     opacity: 1;
-    transform: scale(1) translateY(0);
+    transform: translateY(0);
   }
   to {
     opacity: 0;
-    transform: scale(0.95) translateY(-3px);
+    transform: translateY(-3px);
   }
 }
 

@@ -151,11 +151,62 @@ export function bytesMayContainInkAnnotations(bytes: Uint8Array): boolean {
 const INK_NAME = PDFName.of('Ink').asString();
 
 /**
+ * Fast deterministic FNV-1a fingerprint for an ink stroke + page geometry.
+ * Allows `syncNativeInkAnnotations` to skip rebuilding & flate-compressing
+ * appearance streams for unchanged strokes during incremental Ctrl+S saves.
+ */
+export function computeInkFingerprint(
+  ann: PenAnnotation | HighlighterAnnotation,
+  boxX: number,
+  boxY: number,
+  pageWidth: number,
+  pageHeight: number,
+  rotation: number
+): string {
+  let h = 0x811c9dc5;
+  const mix = (n: number) => {
+    const v = Math.round(n * 100) | 0;
+    h ^= v & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (v >>> 8) & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (v >>> 16) & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (v >>> 24) & 0xff;
+    h = Math.imul(h, 0x01000193);
+  };
+  const mixStr = (s: string) => {
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+  };
+  mixStr(ann.type);
+  mixStr(ann.color || '');
+  mixStr(ann.type === 'highlighter' ? ((ann as HighlighterAnnotation).tipShape || '') : '');
+  mix(ann.strokeWidth || 1.5);
+  mix(ann.opacity ?? -1);
+  mix(boxX);
+  mix(boxY);
+  mix(pageWidth);
+  mix(pageHeight);
+  mix(rotation);
+  const pts = ann.points || [];
+  mix(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    mix(pts[i].x);
+    mix(pts[i].y);
+  }
+  return `v1_${(h >>> 0).toString(36)}_${pts.length}`;
+}
+
+/**
  * Bidirectionally synchronizes Veditor pen/highlighter ink annotations into `pdfDoc`
  * as native ISO 32000-1 `/Subtype /Ink` annotations.
  *
  * Matches existing annotations by `/NM (uuid)`.
- * Removes deleted annotations, updates modified ones, and appends new ones.
+ * Removes deleted annotations, updates modified ones, skips unchanged ones via
+ * `/VEditorInkHash` fingerprint caching, and appends new ones.
  * Generates ISO `/AP /N` FormXObject appearance streams for vector fidelity.
  */
 export function syncNativeInkAnnotations(
@@ -181,35 +232,54 @@ export function syncNativeInkAnnotations(
 
     const annotsArray = page.node.Annots();
     const existingKeep: any[] = [];
-    const existingInkMap = new Map<string, PDFDict>();
+    const existingInkMap = new Map<string, { ref: any; dict: PDFDict }>();
+    const inkIdSet = new Set(veditorInkAnns.map(a => a.id));
 
     if (annotsArray) {
       for (let i = 0; i < annotsArray.size(); i++) {
+        const rawItem = annotsArray.get(i);
         const dict = annotsArray.lookupMaybe(i, PDFDict);
         const subtype = dict?.lookupMaybe(PDFName.of('Subtype'), PDFName);
         if (subtype?.asString() === INK_NAME && dict) {
           const nmObj = dict.lookupMaybe(PDFName.of('NM'), PDFString);
           const nmStr = nmObj?.asString();
           const managed = dict.lookupMaybe(PDFName.of('VEditorManaged'), PDFNumber)?.asNumber() === 1;
-          if (nmStr && (managed || veditorInkAnns.some(annotation => annotation.id === nmStr))) {
-            existingInkMap.set(nmStr, dict);
+          if (nmStr && (managed || inkIdSet.has(nmStr))) {
+            existingInkMap.set(nmStr, { ref: rawItem, dict });
           } else {
-            existingKeep.push(annotsArray.get(i));
+            existingKeep.push(rawItem);
           }
         } else {
-          existingKeep.push(annotsArray.get(i));
+          existingKeep.push(rawItem);
         }
       }
     }
 
     const updatedInkRefs: any[] = [];
+    let pageChanged = false;
 
     for (const ann of veditorInkAnns) {
       const annotId = ann.id;
-      const strokeWidth = ann.strokeWidth || 1.5;
-      const [r, g, b] = parseColorRgb(ann.color || '#000000');
       const filteredPoints = ann.points;
       if (filteredPoints.length < 2) continue;
+
+      const fingerprint = computeInkFingerprint(ann, boxX, boxY, pageWidth, pageHeight, rotation);
+      const existingEntry = existingInkMap.get(annotId);
+
+      // Fast incremental path: if the stroke's fingerprint and /AP stream match, reuse its ref untouched!
+      if (existingEntry) {
+        const prevHash = existingEntry.dict.lookupMaybe(PDFName.of('VEditorInkHash'), PDFString)?.decodeText();
+        if (prevHash === fingerprint && existingEntry.dict.has(PDFName.of('AP'))) {
+          existingInkMap.delete(annotId);
+          updatedInkRefs.push(existingEntry.ref);
+          continue;
+        }
+      }
+
+      pageChanged = true;
+      changed = true;
+      const strokeWidth = ann.strokeWidth || 1.5;
+      const [r, g, b] = parseColorRgb(ann.color || '#000000');
 
       // Coordinate conversion: screen (0 top) -> PDF (boxX/boxY bottom-left) with rotation handling
       const inkListCoords: number[] = [];
@@ -233,20 +303,20 @@ export function syncNativeInkAnnotations(
       const rectUry = maxY + pad;
 
       // Check if existing dict can be updated
-      let annotDict = existingInkMap.get(annotId);
+      let annotDict = existingEntry?.dict;
       if (!annotDict) {
         annotDict = pdfDoc.context.obj({
           Type: 'Annot',
           Subtype: 'Ink',
           NM: PDFString.of(annotId)
         }) as PDFDict;
-        changed = true;
       } else {
         existingInkMap.delete(annotId);
       }
 
       // Update Dictionary attributes per ISO 32000-1
       annotDict.set(PDFName.of('VEditorManaged'), PDFNumber.of(1));
+      annotDict.set(PDFName.of('VEditorInkHash'), PDFString.of(fingerprint));
       annotDict.set(PDFName.of('VEditorTool'), PDFString.of(ann.type));
       if (ann.type === 'highlighter' && (ann as HighlighterAnnotation).tipShape) {
         annotDict.set(PDFName.of('VEditorTipShape'), PDFString.of((ann as HighlighterAnnotation).tipShape!));
@@ -302,17 +372,20 @@ export function syncNativeInkAnnotations(
       });
       annotDict.set(PDFName.of('AP'), apDict);
 
-      const ref = pdfDoc.context.register(annotDict);
+      const ref = existingEntry?.ref ?? pdfDoc.context.register(annotDict);
       updatedInkRefs.push(ref);
     }
 
     // Any remaining items in existingInkMap were deleted in Veditor -> prune them
     if (existingInkMap.size > 0) {
       changed = true;
+      pageChanged = true;
     }
 
-    const finalAnnots = [...existingKeep, ...updatedInkRefs];
-    page.node.set(PDFName.of('Annots'), pdfDoc.context.obj(finalAnnots));
+    if (pageChanged || (updatedInkRefs.length > 0 && !annotsArray)) {
+      const finalAnnots = [...existingKeep, ...updatedInkRefs];
+      page.node.set(PDFName.of('Annots'), pdfDoc.context.obj(finalAnnots));
+    }
   }
 
   return changed;

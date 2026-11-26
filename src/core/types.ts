@@ -96,6 +96,8 @@ export interface PenAnnotation extends BaseAnnotation {
   pressureEnabled?: boolean;
   pressureCurve?: 'linear' | 'soft' | 'firm' | 'exponential';
   pressureStrength?: 'light' | 'balanced' | 'strong';
+  /** True when points were causally filtered during live streaming (skip double-smoothing on commit). */
+  preSmoothed?: boolean;
 }
 
 export interface HighlighterAnnotation extends BaseAnnotation {
@@ -185,6 +187,8 @@ export interface StickyNoteStroke {
   straightLine?: boolean;
   /** Creation timestamp so strokes and embedded items render in chronological order. */
   createdAt?: number;
+  /** True when points were causally filtered during live streaming. */
+  preSmoothed?: boolean;
 }
 
 export interface StickyNoteAnnotation extends BaseAnnotation {

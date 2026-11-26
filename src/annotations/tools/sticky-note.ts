@@ -13,8 +13,8 @@ import {
   StickyNoteAnnotation,
   StickyNoteStroke
 } from '../../core/types';
-import { isPointInBox, traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead } from '../../utils/geometry';
-import { renderSmoothStroke } from '../spline';
+import { isPointInBox, traceRoundedPolygon, fillLineRibbon, computeArrowHeadGeometry, drawArrowHead, distance, distanceToSegment } from '../../utils/geometry';
+import { renderSmoothStroke, renderLiveStroke } from '../spline';
 import { textTool } from './text';
 import { stampTool } from './stamp';
 import { signatureTool } from './signature';
@@ -256,6 +256,305 @@ export function findExpandedStickyNoteTarget(
 }
 
 /**
+ * Pure helper: erases freehand strokes and embedded items inside an expanded Sticky Note
+ * with O(1) AABB early-out and full support for 'stroke', 'object', and 'pixel' modes.
+ * Returns `{ modified, strokes, items }` so callers only repaint when something actually changed.
+ */
+export function eraseStickyNoteContent(
+  note: StickyNoteAnnotation,
+  points: Point[],
+  radius: number,
+  mode: 'stroke' | 'pixel' | 'object' = 'stroke'
+): { modified: boolean; strokes: StickyNoteStroke[]; items: Annotation[] } {
+  const origStrokes = note.strokes || [];
+  const origItems = note.items || [];
+  if (points.length === 0 || (origStrokes.length === 0 && origItems.length === 0)) {
+    return { modified: false, strokes: origStrokes, items: origItems };
+  }
+
+  const center = { x: note.box.x + note.box.width / 2, y: note.box.y + note.box.height / 2 };
+  const rot = note.rotation || 0;
+  const localPts = rot ? points.map(p => rotatePointAround(p, center, -rot)) : points;
+
+  // Quick union AABB of all incoming eraser points to skip distant strokes/items in O(1)
+  let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
+  for (const lp of localPts) {
+    if (lp.x < pMinX) pMinX = lp.x;
+    if (lp.y < pMinY) pMinY = lp.y;
+    if (lp.x > pMaxX) pMaxX = lp.x;
+    if (lp.y > pMaxY) pMaxY = lp.y;
+  }
+
+  let modified = false;
+  let remainingStrokes: StickyNoteStroke[] = origStrokes;
+
+  if (origStrokes.length > 0) {
+    const nextStrokes: StickyNoteStroke[] = [];
+    for (const stroke of origStrokes) {
+      const sPts = stroke.points;
+      if (!sPts || sPts.length === 0) continue;
+      const pad = (stroke.strokeWidth || 2) / 2;
+      const hitRadius = radius + pad;
+
+      // Compute stroke AABB for fast O(1) rejection before checking individual segments
+      let sMinX = Infinity, sMinY = Infinity, sMaxX = -Infinity, sMaxY = -Infinity;
+      for (let i = 0; i < sPts.length; i++) {
+        const x = sPts[i].x;
+        const y = sPts[i].y;
+        if (x < sMinX) sMinX = x;
+        if (y < sMinY) sMinY = y;
+        if (x > sMaxX) sMaxX = x;
+        if (y > sMaxY) sMaxY = y;
+      }
+      if (
+        pMaxX + hitRadius < sMinX ||
+        pMinX - hitRadius > sMaxX ||
+        pMaxY + hitRadius < sMinY ||
+        pMinY - hitRadius > sMaxY
+      ) {
+        nextStrokes.push(stroke);
+        continue;
+      }
+
+      if (mode === 'pixel') {
+        let hitAny = false;
+        const fragments: StrokePoint[][] = [];
+        let currentFrag: StrokePoint[] = [];
+
+        for (let i = 0; i < sPts.length; i++) {
+          const sp = sPts[i];
+          let pointErased = false;
+          for (let j = 0; j < localPts.length; j++) {
+            if (distance(localPts[j], sp) <= hitRadius) {
+              pointErased = true;
+              break;
+            }
+          }
+          if (pointErased) {
+            hitAny = true;
+            if (currentFrag.length >= 2) {
+              fragments.push(currentFrag);
+            }
+            currentFrag = [];
+            continue;
+          }
+
+          // Only check segment crossing when the previous point survived (avoids
+          // falsely erasing the first surviving point after an already-erased vertex).
+          if (currentFrag.length > 0 && i > 0) {
+            const prev = sPts[i - 1];
+            let crossedBy: Point | null = null;
+            for (let j = 0; j < localPts.length; j++) {
+              if (distanceToSegment(localPts[j], prev, sp) <= hitRadius) {
+                crossedBy = localPts[j];
+                break;
+              }
+            }
+            if (crossedBy) {
+              hitAny = true;
+              const dx = sp.x - prev.x;
+              const dy = sp.y - prev.y;
+              const segLenSq = dx * dx + dy * dy;
+              if (segLenSq > 1e-4) {
+                // Project eraser center onto segment to split cleanly on both sides of the gap
+                const tMid = Math.max(0, Math.min(1, ((crossedBy.x - prev.x) * dx + (crossedBy.y - prev.y) * dy) / segLenSq));
+                const segLen = Math.sqrt(segLenSq);
+                const dt = hitRadius / segLen;
+                const tEnter = tMid - dt;
+                const tExit = tMid + dt;
+                if (tEnter > 0.02) {
+                  currentFrag.push({
+                    x: prev.x + dx * tEnter,
+                    y: prev.y + dy * tEnter,
+                    pressure: prev.pressure + (sp.pressure - prev.pressure) * tEnter
+                  });
+                }
+                if (currentFrag.length >= 2) {
+                  fragments.push(currentFrag);
+                }
+                currentFrag = [];
+                if (tExit < 0.98) {
+                  currentFrag.push({
+                    x: prev.x + dx * tExit,
+                    y: prev.y + dy * tExit,
+                    pressure: prev.pressure + (sp.pressure - prev.pressure) * tExit
+                  });
+                }
+              } else {
+                if (currentFrag.length >= 2) {
+                  fragments.push(currentFrag);
+                }
+                currentFrag = [];
+              }
+            }
+          }
+
+          currentFrag.push(sp);
+        }
+        if (currentFrag.length >= 2) {
+          fragments.push(currentFrag);
+        }
+
+        if (hitAny) {
+          modified = true;
+          for (let f = 0; f < fragments.length; f++) {
+            nextStrokes.push({
+              ...stroke,
+              id: f === 0 ? stroke.id : `${stroke.id}_s${Math.random().toString(36).substring(2, 6)}`,
+              points: fragments[f]
+            });
+          }
+        } else {
+          nextStrokes.push(stroke);
+        }
+      } else {
+        let hit = false;
+        outer: for (let j = 0; j < localPts.length; j++) {
+          const lp = localPts[j];
+          for (let i = 0; i < sPts.length; i++) {
+            if (distance(lp, sPts[i]) <= hitRadius) {
+              hit = true;
+              break outer;
+            }
+            if (i > 0 && distanceToSegment(lp, sPts[i - 1], sPts[i]) <= hitRadius) {
+              hit = true;
+              break outer;
+            }
+          }
+        }
+        if (hit) {
+          modified = true;
+        } else {
+          nextStrokes.push(stroke);
+        }
+      }
+    }
+    remainingStrokes = nextStrokes;
+  }
+
+  let remainingItems: Annotation[] = origItems;
+  if (origItems.length > 0) {
+    const nextItems: Annotation[] = [];
+    for (const item of origItems) {
+      const b = item.box;
+      const strokePad = Math.max(2, ((item as any).strokeWidth || 2) / 2);
+      const margin = radius + strokePad + 4;
+      // Fast AABB rejection (skip when item is rotated so rotation math stays exact)
+      if (
+        !item.rotation &&
+        (pMaxX + margin < b.x ||
+          pMinX - margin > b.x + b.width ||
+          pMaxY + margin < b.y ||
+          pMinY - margin > b.y + b.height)
+      ) {
+        nextItems.push(item);
+        continue;
+      }
+
+      let hit = false;
+      for (let j = 0; j < localPts.length; j++) {
+        const lp = localPts[j];
+        if (
+          item.type === 'line' ||
+          item.type === 'arrow' ||
+          item.type === 'polygon' ||
+          item.type === 'freeform-shape' ||
+          item.type === 'measure-distance' ||
+          item.type === 'measure-angle' ||
+          item.type === 'measure-area'
+        ) {
+          const pts = (item as any).points && (item as any).points.length >= 2
+            ? ((item as any).points as Point[])
+            : [{ x: b.x, y: b.y }, { x: b.x + b.width, y: b.y + b.height }];
+          for (let i = 0; i < pts.length; i++) {
+            if (distance(lp, pts[i]) <= radius + strokePad) {
+              hit = true;
+              break;
+            }
+            if (i > 0 && distanceToSegment(lp, pts[i - 1], pts[i]) <= radius + strokePad) {
+              hit = true;
+              break;
+            }
+          }
+          if (!hit && (item.type === 'polygon' || item.type === 'measure-area') && pts.length >= 3) {
+            if (distanceToSegment(lp, pts[pts.length - 1], pts[0]) <= radius + strokePad) {
+              hit = true;
+            }
+          }
+        } else {
+          const itemPt = item.rotation
+            ? rotatePointAround(lp, { x: b.x + b.width / 2, y: b.y + b.height / 2 }, -item.rotation)
+            : lp;
+          if (
+            itemPt.x >= b.x - radius &&
+            itemPt.x <= b.x + b.width + radius &&
+            itemPt.y >= b.y - radius &&
+            itemPt.y <= b.y + b.height + radius
+          ) {
+            hit = true;
+          }
+        }
+        if (hit) break;
+      }
+
+      if (hit) {
+        modified = true;
+      } else {
+        nextItems.push(item);
+      }
+    }
+    remainingItems = nextItems;
+  }
+
+  return { modified, strokes: remainingStrokes, items: remainingItems };
+}
+
+/**
+ * Hit-tests embedded items (`note.items`) inside an expanded Sticky Note in reverse z-order.
+ */
+export function hitTestStickyNoteEmbeddedItem(
+  note: StickyNoteAnnotation,
+  point: Point,
+  tolerance: number = 6
+): Annotation | null {
+  if (note.collapsed || !Array.isArray(note.items) || note.items.length === 0) return null;
+  const center = { x: note.box.x + note.box.width / 2, y: note.box.y + note.box.height / 2 };
+  const localPt = note.rotation ? rotatePointAround(point, center, -note.rotation) : point;
+
+  for (let i = note.items.length - 1; i >= 0; i--) {
+    const item = note.items[i];
+    const b = item.box;
+    if (
+      item.type === 'line' ||
+      item.type === 'arrow' ||
+      item.type === 'measure-distance' ||
+      item.type === 'measure-angle'
+    ) {
+      const pts = (item as any).points as Point[] | undefined;
+      const pad = Math.max(tolerance, ((item as any).strokeWidth || 2) / 2 + 4);
+      if (pts && pts.length >= 2) {
+        for (let k = 1; k < pts.length; k++) {
+          if (distanceToSegment(localPt, pts[k - 1], pts[k]) <= pad) return item;
+        }
+      }
+      continue;
+    }
+    const itemPt = item.rotation
+      ? rotatePointAround(localPt, { x: b.x + b.width / 2, y: b.y + b.height / 2 }, -item.rotation)
+      : localPt;
+    if (
+      itemPt.x >= b.x - tolerance &&
+      itemPt.x <= b.x + b.width + tolerance &&
+      itemPt.y >= b.y - tolerance &&
+      itemPt.y <= b.y + b.height + tolerance
+    ) {
+      return item;
+    }
+  }
+  return null;
+}
+
+/**
  * Computes a zoom-aware Sticky Note bounding box placed cleanly inside the user's
  * visible page region (so zoomed-in views never spawn oversized or off-screen notes).
  */
@@ -338,6 +637,11 @@ export class StickyNoteTool {
   private _fontSize: number = 15;
   private _fontFamily: string = DEFAULT_APP_FONT;
   private _author: string = '';
+  private _editingEmbeddedItemId: string | null = null;
+
+  public setEditingEmbeddedItemId(id: string | null): void {
+    this._editingEmbeddedItemId = id;
+  }
 
   /**
    * Factory helper for creating a StickyNoteAnnotation with guaranteed minimum card dimensions.
@@ -774,18 +1078,31 @@ export class StickyNoteTool {
     ctx.globalAlpha = isHighlighter ? 1.0 : opacity;
     const mappedSmoothing: 'none' | 'subtle' | 'medium' | 'high' =
       smoothing === 'light' ? 'subtle' : smoothing === 'heavy' ? 'high' : smoothing;
-    renderSmoothStroke(
-      ctx,
-      points,
-      color || ann.textColor || '#3b2f1e',
-      strokeWidth || 2,
-      pressureCurve,
-      isHighlighter,
-      pressureEnabled,
-      pressureStrength,
-      tipShape,
-      mappedSmoothing
-    );
+    if (!isHighlighter) {
+      renderLiveStroke(
+        ctx,
+        points,
+        color || ann.textColor || '#3b2f1e',
+        strokeWidth || 2,
+        pressureCurve,
+        pressureEnabled,
+        pressureStrength,
+        mappedSmoothing
+      );
+    } else {
+      renderSmoothStroke(
+        ctx,
+        points,
+        color || ann.textColor || '#3b2f1e',
+        strokeWidth || 2,
+        pressureCurve,
+        true,
+        false,
+        pressureStrength,
+        tipShape,
+        mappedSmoothing
+      );
+    }
     ctx.restore();
   }
 
@@ -1047,11 +1364,15 @@ export class StickyNoteTool {
               isHl ? false : (stroke.pressureEnabled !== false),
               stroke.pressureStrength || 'balanced',
               stroke.tipShape || 'round',
-              mappedSm
+              mappedSm,
+              !isHl && stroke.preSmoothed === true
             );
             ctx.restore();
           }
         } else {
+          if (this._editingEmbeddedItemId && entry.item.id === this._editingEmbeddedItemId) {
+            continue;
+          }
           this.renderEmbeddedItem(ctx, entry.item);
         }
       }
@@ -1143,7 +1464,8 @@ export class StickyNoteTool {
         item.pressureEnabled !== false,
         item.pressureStrength || 'balanced',
         'round',
-        item.strokeSmoothing || 'medium'
+        item.strokeSmoothing || 'medium',
+        item.preSmoothed === true
       );
       ctx.restore();
       return;

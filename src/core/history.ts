@@ -4,7 +4,7 @@
  */
 
 import { Annotation } from './types';
-import { store } from './store';
+import { store, type StoreChangeHint } from './store';
 import { PageSnapshot, applyPageSnapshot, notifyPageStructureChanged } from './page-ops';
 
 export interface Command {
@@ -55,9 +55,9 @@ class HistoryManager {
     }
   }
 
-  public execute(command: Command) {
+  public execute(command: Command, hint?: StoreChangeHint) {
     command.execute();
-    this.pushCommitted(command);
+    this.pushCommitted(command, hint);
   }
 
   /**
@@ -67,7 +67,7 @@ class HistoryManager {
    * once — instead of one history entry + full app re-render per pointermove
    * frame, which piled up hundreds of entries and lagged the whole extension.
    */
-  public pushCommitted(command: Command) {
+  public pushCommitted(command: Command, hint?: StoreChangeHint) {
     this._undoStack.push(command);
     this._redoStack = []; // Clear redo stack on new action
     if (this._undoStack.length > this._maxStackSize) {
@@ -79,7 +79,7 @@ class HistoryManager {
         redoStack: [...this._redoStack]
       });
     }
-    store.notify();
+    store.notify(hint);
   }
 
   public undo(): boolean {

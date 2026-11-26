@@ -6,7 +6,15 @@
 import { store } from './core/store';
 import { pdfEngine } from './core/pdf-engine';
 import { getWordOrMathRangeAtPoint } from './core/pdf-text-layout';
-import { viewportManager, rotatedPageSize, normalizeWheelDeltaY } from './core/viewport';
+import {
+  viewportManager,
+  rotatedPageSize,
+  normalizeWheelDeltaY,
+  computePlaceholderShellRange,
+  stepZoomGestureTransform,
+  computeZoomCommitTarget,
+  ZoomGestureTransformState
+} from './core/viewport';
 import { annotationEngine } from './annotations/engine';
 import { pointerHandler } from './input/pointer-handler';
 import { HeaderComponent } from './ui/components/header';
@@ -22,8 +30,9 @@ import { SignatureDialogComponent } from './ui/components/signature-dialog';
 import { FloatingPropsBarComponent, floatingPropsBar } from './ui/components/floating-props';
 import { AnnotationContextMenu } from './ui/components/context-menu';
 import { showToast } from './ui/components/toast';
-import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail, deleteRecentDocument, getDocumentSessionByPath, flushDocPosition, triggerAutoSave } from './io/storage';
-import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty } from './io/save';
+import { openDocumentSession, getDocumentSession, createDocumentId, saveDocumentSession, updateRecentThumbnail, deleteRecentDocument, getDocumentSessionByPath, flushDocPosition, triggerAutoSave, setAutoSavePausePredicate } from './io/storage';
+import { saveActiveDocument, saveActiveDocumentAs, forgetFileHandle, rememberFileHandle, isDocumentDirty, flushPendingSessionSave } from './io/save';
+import { resolveWebPdfUrl, extractCleanPdfFilename, normalizePdfBytes, base64ToUint8Array } from './utils/pdf-url';
 import { openPrintDialog } from './ui/components/print-dialog';
 import { promptPdfPassword } from './ui/components/password-dialog';
 import { pdfBytesMayBeEncrypted, isPdfPasswordError } from './core/print-utils';
@@ -52,7 +61,7 @@ import { stampTool } from './annotations/tools/stamp';
 import { signatureTool } from './annotations/tools/signature';
 import { textTool } from './annotations/tools/text';
 import { resolveAnnotationFontFamily } from './core/fonts';
-import { stickyNoteTool, findExpandedStickyNoteTarget, getStickyNoteContentRect } from './annotations/tools/sticky-note';
+import { stickyNoteTool, findExpandedStickyNoteTarget, getStickyNoteContentRect, hitTestStickyNoteEmbeddedItem } from './annotations/tools/sticky-note';
 import { duplicateSelectedAnnotations } from './annotations/duplicate';
 import { Annotation, DocumentSession, NotebookSpec, Point, StickyNoteAnnotation, ToolType, MIN_ZOOM, MAX_ZOOM } from './core/types';
 import { notebookController } from './core/notebook';
@@ -102,6 +111,8 @@ class VeditorApp {
     /** Annotation/pattern layers were blanked by a resize and need a repaint. */
     needsRepaint?: boolean;
   }> = new Map();
+  /** Lightweight zero-VRAM placeholder page shells kept mounted ahead of fast scrolls. */
+  private _pageShells: Map<number, HTMLElement> = new Map();
 
   private _lastZoom: number = 1.0;
   private _lastDocId: string | null = null;
@@ -128,8 +139,18 @@ class VeditorApp {
   private _previewPendingFactor: number = 1;
   private _previewPendingCenter: { x: number; y: number } | null = null;
   private _isZoomGestureActive: boolean = false;
+  private _zoomGestureState: ZoomGestureTransformState | null = null;
+  private _zoomGestureScrollLeft: number = 0;
+  private _zoomGestureScrollTop: number = 0;
+  private _zoomGestureRect: { left: number; top: number; width: number; height: number } | null = null;
+  private _zoomGestureLastFocal: { x: number; y: number } | null = null;
+  private _zoomGestureTargets: Array<{ container: HTMLElement; left: number; top: number; promoted: boolean }> = [];
   /** Most recently drawn page whose scratchpad backing store stays pooled to avoid per-stroke Cairo allocations. */
   private _warmScratchPageIndex: number = -1;
+  private _scratchPrewarmTimer: number | null = null;
+  /** Memoized cursor signature & string to avoid regenerating SVG data-URI cursors on unrelated store.notify() calls. */
+  private _lastCursorSig: string = '';
+  private _lastCursorValue: string = '';
 
   /**
    * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
@@ -242,6 +263,17 @@ class VeditorApp {
       this._pagesWrapper,
       (visibleIndices) => this.renderVisiblePages(visibleIndices)
     );
+    viewportManager.setImmediateScrollListener((scrollTop, viewH) => {
+      if (this._isZoomGestureActive || store.isDocSwitching || store.isZoomAdjusting) return;
+      const doc = store.activeDocument;
+      if (!doc) return;
+      // For <=120-page docs all shells are already mounted on layout; only
+      // slide the shell pool on scroll for huge PDFs or incomplete pools.
+      if (doc.pageCount > 120 || this._pageShells.size < doc.pageCount) {
+        const centerPage = viewportManager.findCenterPageForScroll(scrollTop, viewH);
+        this.syncPlaceholderShells(centerPage);
+      }
+    });
 
     // Clear active PDF text selection when clicking on the outer viewport background outside pages
     this._scrollContainer.addEventListener('pointerdown', (e) => {
@@ -333,7 +365,10 @@ class VeditorApp {
       }
     });
 
-    // 9. Subscribe to document/page changes
+    // 9. Pause background IndexedDB auto-saves while a stroke is in progress
+    setAutoSavePausePredicate(() => pointerHandler.isPointerDown);
+
+    // 10. Subscribe to document/page changes
     store.subscribe(() => {
       this.handleStoreUpdate();
       this.syncJumpBackPill();
@@ -702,20 +737,7 @@ class VeditorApp {
    * within the first 1024 bytes (ISO 32000-1 Annex H.3.1).
    */
   private hasValidPdfHeader(bytes: Uint8Array): boolean {
-    if (!bytes || bytes.byteLength < 8) return false;
-    const limit = Math.min(bytes.byteLength - 5, 1024);
-    for (let i = 0; i <= limit; i++) {
-      if (
-        bytes[i] === 0x25 &&     // '%'
-        bytes[i + 1] === 0x50 && // 'P'
-        bytes[i + 2] === 0x44 && // 'D'
-        bytes[i + 3] === 0x46 && // 'F'
-        bytes[i + 4] === 0x2D    // '-'
-      ) {
-        return true;
-      }
-    }
-    return false;
+    return normalizePdfBytes(bytes) !== null;
   }
 
   public async loadPDF(
@@ -940,6 +962,110 @@ class VeditorApp {
     }
   }
 
+  private createPlaceholderShell(pageIndex: number, docId: string): HTMLElement {
+    const container = document.createElement('div');
+    container.className = 'pdf-page-container';
+    container.dataset.pageIndex = String(pageIndex);
+    container.dataset.docId = docId;
+
+    const placeholder = document.createElement('div');
+    placeholder.className = 'pdf-page-placeholder';
+    placeholder.setAttribute('aria-hidden', 'true');
+    placeholder.innerHTML =
+      '<div class="pdf-ph-sheet">' +
+        '<div class="pdf-ph-header">' +
+          '<div class="pdf-ph-kicker"></div>' +
+          '<div class="pdf-ph-title"></div>' +
+        '</div>' +
+        '<div class="pdf-ph-lines">' +
+          '<div class="pdf-ph-line"></div>' +
+          '<div class="pdf-ph-line pdf-ph-line-md"></div>' +
+          '<div class="pdf-ph-line pdf-ph-line-lg"></div>' +
+          '<div class="pdf-ph-line pdf-ph-line-sm"></div>' +
+        '</div>' +
+        '<div class="pdf-ph-block"></div>' +
+        '<div class="pdf-ph-lines">' +
+          '<div class="pdf-ph-line pdf-ph-line-lg"></div>' +
+          '<div class="pdf-ph-line"></div>' +
+          '<div class="pdf-ph-line pdf-ph-line-sm"></div>' +
+        '</div>' +
+        `<span class="pdf-ph-num">${pageIndex + 1}</span>` +
+      '</div>';
+
+    container.appendChild(placeholder);
+    return container;
+  }
+
+  /**
+   * Keeps lightweight zero-VRAM `.pdf-page-placeholder` shells pre-mounted and
+   * positioned ahead of the viewport so fast scrolling glides over designed
+   * loading pages instead of exposing empty dark backdrop / black blinks.
+   */
+  private syncPlaceholderShells(centerPage: number): void {
+    const doc = store.activeDocument;
+    if (!doc || store.isDocSwitching || this._isZoomGestureActive) return;
+    const docId = doc.id;
+
+    let targetIndices: number[];
+    let keepSet: Set<number> | null = null;
+    if (store.viewMode === 'single') {
+      const layouts = viewportManager.getAllLayouts();
+      targetIndices = layouts.map(l => l.pageIndex);
+      keepSet = new Set(targetIndices);
+    } else {
+      const { start, end } = computePlaceholderShellRange(centerPage, doc.pageCount, 40);
+      targetIndices = [];
+      for (let i = start; i <= end; i++) targetIndices.push(i);
+      keepSet = null;
+      // Prune shells outside [start, end] unless actively rendered
+      for (const [pageIndex, shell] of Array.from(this._pageShells.entries())) {
+        if ((pageIndex < start || pageIndex > end || shell.dataset.docId !== docId) && !this._renderedPages.has(pageIndex)) {
+          if (shell.parentNode === this._pagesWrapper) {
+            this._pagesWrapper.removeChild(shell);
+          }
+          this._pageShells.delete(pageIndex);
+        }
+      }
+    }
+
+    if (keepSet) {
+      for (const [pageIndex, shell] of Array.from(this._pageShells.entries())) {
+        if ((!keepSet.has(pageIndex) || shell.dataset.docId !== docId) && !this._renderedPages.has(pageIndex)) {
+          if (shell.parentNode === this._pagesWrapper) {
+            this._pagesWrapper.removeChild(shell);
+          }
+          this._pageShells.delete(pageIndex);
+        }
+      }
+    }
+
+    for (const pageIndex of targetIndices) {
+      const layout = viewportManager.getLayout(pageIndex);
+      if (!layout) continue;
+      let shell = this._pageShells.get(pageIndex);
+      if (shell && shell.dataset.docId !== docId && !this._renderedPages.has(pageIndex)) {
+        if (shell.parentNode === this._pagesWrapper) {
+          this._pagesWrapper.removeChild(shell);
+        }
+        this._pageShells.delete(pageIndex);
+        shell = undefined;
+      }
+      if (!shell) {
+        shell = this.createPlaceholderShell(pageIndex, docId);
+        this._pagesWrapper.appendChild(shell);
+        this._pageShells.set(pageIndex, shell);
+      }
+      const topPx = `${layout.top}px`;
+      const leftPx = `${layout.left}px`;
+      const widthPx = `${layout.width}px`;
+      const heightPx = `${layout.height}px`;
+      if (shell.style.top !== topPx) shell.style.top = topPx;
+      if (shell.style.left !== leftPx) shell.style.left = leftPx;
+      if (shell.style.width !== widthPx) shell.style.width = widthPx;
+      if (shell.style.height !== heightPx) shell.style.height = heightPx;
+    }
+  }
+
   private clearRenderedPages() {
     for (const [pageIndex, p] of this._renderedPages) {
       pdfEngine.cancelPageRender(pageIndex);
@@ -960,6 +1086,12 @@ class VeditorApp {
       }
     }
     this._renderedPages.clear();
+    for (const shell of this._pageShells.values()) {
+      if (shell.parentNode === this._pagesWrapper) {
+        this._pagesWrapper.removeChild(shell);
+      }
+    }
+    this._pageShells.clear();
     this._warmScratchPageIndex = -1;
   }
 
@@ -984,6 +1116,7 @@ class VeditorApp {
           this._pagesWrapper.removeChild(p.container);
         }
         this._renderedPages.delete(pageIndex);
+        this._pageShells.delete(pageIndex);
       } else {
         p.geomKey = undefined;
         p.linksLoadedKey = undefined;
@@ -991,9 +1124,26 @@ class VeditorApp {
         p.needsRepaint = true;
       }
     }
+    for (const [pageIndex, shell] of Array.from(this._pageShells.entries())) {
+      if (pageIndex >= newPageCount) {
+        if (shell.parentNode === this._pagesWrapper) {
+          this._pagesWrapper.removeChild(shell);
+        }
+        this._pageShells.delete(pageIndex);
+      }
+    }
     if (this._warmScratchPageIndex >= newPageCount) {
       this._warmScratchPageIndex = -1;
     }
+  }
+
+  /**
+   * Public hook invoked by save/reload helpers when `pdfEngine` swaps in fresh bytes
+   * for the active document so stale canvas caches and links re-rasterize cleanly.
+   */
+  public invalidateAfterEngineReload(docId: string, pageCount: number): void {
+    if (store.activeDocument?.id !== docId) return;
+    this.invalidateRenderedPagesInPlace(pageCount);
   }
 
   /**
@@ -1179,6 +1329,17 @@ class VeditorApp {
     }
     this._lastRotationSig = rotationSig;
 
+    // O(1) incremental ink/highlighter commit fast path: stamp ONLY the newly added
+    // stroke onto the target page's active annotation canvas without clearing or
+    // repainting any other annotations or mounted pages!
+    const changeHint = store.lastChangeHint;
+    if (changeHint?.kind === 'incremental-annotation') {
+      if (this.stampAnnotationIncremental(changeHint.pageIndex, changeHint.annotation)) {
+        this.scheduleCoveredLinksUpdate(changeHint.pageIndex);
+        return;
+      }
+    }
+
     // Update drawing cursors
     this.updateCanvasCursors();
 
@@ -1201,11 +1362,53 @@ class VeditorApp {
   }
 
   /**
-   * Phase 1 of Two-Phase Live Zoom: updates page container CSS sizes and
-   * focal-anchored scroll offsets once per animation frame while keeping
-   * existing canvas bitmaps stretched via CSS (`_isZoomGestureActive = true`).
-   * Zero canvas buffer reallocations, zero blanking of annotations/PDF, and
-   * zero oversized wrapper texture layers.
+   * Applies the active GPU-composited affine zoom transform to nearby page
+   * containers with ZERO layout reflows, ZERO store notifications, and ZERO
+   * canvas backing-store reallocations.
+   */
+  private applyZoomGestureTransforms(): void {
+    const state = this._zoomGestureState;
+    if (!state) return;
+    const s = state.scale;
+    const px = state.panX;
+    const py = state.panY;
+    const sm1 = s - 1;
+    for (let i = 0; i < this._zoomGestureTargets.length; i++) {
+      const target = this._zoomGestureTargets[i];
+      const tx = sm1 * target.left + px;
+      const ty = sm1 * target.top + py;
+      target.container.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${s})`;
+    }
+    const zoomInput = document.getElementById('view-zoom-input') as HTMLInputElement | null;
+    if (zoomInput && document.activeElement !== zoomInput) {
+      zoomInput.value = `${Math.round(state.baseZoom * s * 100)}%`;
+    }
+  }
+
+  private clearZoomGestureTargetTransforms(): void {
+    for (let i = 0; i < this._zoomGestureTargets.length; i++) {
+      const target = this._zoomGestureTargets[i];
+      target.container.style.transform = '';
+      target.container.style.transformOrigin = '';
+      if (target.promoted) {
+        target.container.classList.remove('is-zoom-target');
+      }
+    }
+    this._zoomGestureTargets = [];
+    this._zoomGestureState = null;
+    this._zoomGestureRect = null;
+    this._zoomGestureLastFocal = null;
+    if (this._pagesWrapper) {
+      this._pagesWrapper.classList.remove('is-zoom-previewing');
+      this._pagesWrapper.style.transform = '';
+      this._pagesWrapper.style.transformOrigin = '';
+    }
+  }
+
+  /**
+   * Phase 1 of Two-Phase Live Zoom: pure GPU-composited `translate3d + scale`
+   * directly on mounted page containers (zero `store.setZoom`, zero
+   * `updateLayout`, zero `scrollHeight` forced reflow, zero canvas resizing).
    */
   private flushPreviewZoom(): void {
     this._previewRafId = null;
@@ -1215,18 +1418,73 @@ class VeditorApp {
     this._previewPendingCenter = null;
     if (!store.activeDocument || !center || pointerHandler.isPointerDown || this._handPan) return;
 
-    this._isZoomGestureActive = true;
-    const rect = this._scrollContainer.getBoundingClientRect();
-    const cx = center.x - rect.left;
-    const cy = center.y - rect.top;
-    viewportManager.zoomByFactor(factor, { x: cx, y: cy });
+    if (!this._isZoomGestureActive || !this._zoomGestureState || !this._zoomGestureRect) {
+      const rect = this._scrollContainer.getBoundingClientRect();
+      this._isZoomGestureActive = true;
+      this._zoomGestureScrollLeft = this._scrollContainer.scrollLeft;
+      this._zoomGestureScrollTop = this._scrollContainer.scrollTop;
+      this._zoomGestureRect = {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height
+      };
+      this._zoomGestureState = {
+        baseZoom: store.zoom,
+        scale: 1,
+        panX: 0,
+        panY: 0
+      };
+      this._pagesWrapper.classList.add('is-zoom-previewing');
+
+      // Snapshot nearby mounted containers (rendered pages + nearby shells)
+      // so zooming out reveals neighboring pages cleanly in lockstep.
+      const centerPage = viewportManager.findCenterPageForScroll(
+        this._zoomGestureScrollTop,
+        this._scrollContainer.clientHeight
+      );
+      const targets: Array<{ container: HTMLElement; left: number; top: number; promoted: boolean }> = [];
+      const seen = new Set<number>();
+
+      for (const [pageIndex, p] of this._renderedPages) {
+        const layout = viewportManager.getLayout(pageIndex);
+        if (!layout) continue;
+        seen.add(pageIndex);
+        p.container.style.transformOrigin = '0 0';
+        p.container.classList.add('is-zoom-target');
+        targets.push({ container: p.container, left: layout.left, top: layout.top, promoted: true });
+      }
+      for (const [pageIndex, shell] of this._pageShells) {
+        if (seen.has(pageIndex) || Math.abs(pageIndex - centerPage) > 16) continue;
+        const layout = viewportManager.getLayout(pageIndex);
+        if (!layout) continue;
+        shell.style.transformOrigin = '0 0';
+        targets.push({ container: shell, left: layout.left, top: layout.top, promoted: false });
+      }
+      this._zoomGestureTargets = targets;
+    }
+
+    const fx = center.x - this._zoomGestureRect.left;
+    const fy = center.y - this._zoomGestureRect.top;
+    this._zoomGestureLastFocal = { x: fx, y: fy };
+    this._zoomGestureState = stepZoomGestureTransform(
+      this._zoomGestureState,
+      factor,
+      fx,
+      fy,
+      this._zoomGestureScrollLeft,
+      this._zoomGestureScrollTop,
+      MIN_ZOOM,
+      MAX_ZOOM
+    );
+    this.applyZoomGestureTransforms();
   }
 
   private scheduleZoomCommit(): void {
     if (this._zoomCommitTimer !== null) window.clearTimeout(this._zoomCommitTimer);
-    // Commit shortly after the last tick/finger move: resizes backing stores
-    // once and renders crisp PDF + High-DPI Viewport Chunk.
-    this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), 150);
+    // Commit right after the last tick/finger move so zoom snaps immediately
+    // back to full native resolution with zero lingering blur.
+    this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), 65);
   }
 
   /** Drops any in-flight pinch/trackpad preview so a tab switch starts 1:1. */
@@ -1251,17 +1509,13 @@ class VeditorApp {
     this._previewPendingFactor = 1;
     this._previewPendingCenter = null;
     this._isZoomGestureActive = false;
-    if (this._pagesWrapper) {
-      this._pagesWrapper.style.transform = '';
-      this._pagesWrapper.style.transformOrigin = '';
-    }
+    this.clearZoomGestureTargetTransforms();
     viewportManager.setPreviewScale(1);
   }
 
   /**
-   * Phase 2 of Two-Phase Live Zoom: exits gesture-stretch mode and executes a
-   * single crisp backing-store resize + synchronous annotation repaint +
-   * double-buffered PDF & High-DPI Viewport Chunk render.
+   * Phase 2 of Two-Phase Live Zoom: exits GPU preview mode and executes ONE
+   * atomic layout + focal-locked scroll commit + crisp PDF & High-DPI chunk render.
    */
   private commitZoomPreview(): void {
     if (this._zoomCommitTimer !== null) {
@@ -1276,9 +1530,53 @@ class VeditorApp {
     if (!this._isZoomGestureActive) {
       return;
     }
+    if (this._fastScrollTimer !== null) {
+      window.clearTimeout(this._fastScrollTimer);
+      this._fastScrollTimer = null;
+    }
+    if (this._chunkUpdateTimer !== null) {
+      window.clearTimeout(this._chunkUpdateTimer);
+      this._chunkUpdateTimer = null;
+    }
+    this._isFastScrolling = false;
+
+    const gestureState = this._zoomGestureState;
+    const gestureScrollLeft = this._zoomGestureScrollLeft;
+    const gestureScrollTop = this._zoomGestureScrollTop;
+    const lastFocal = this._zoomGestureLastFocal || {
+      x: (this._zoomGestureRect?.width ?? this._scrollContainer.clientWidth) / 2,
+      y: (this._zoomGestureRect?.height ?? this._scrollContainer.clientHeight) / 2
+    };
+
     this._isZoomGestureActive = false;
+    this.clearZoomGestureTargetTransforms();
+
+    if (gestureState && store.activeDocument) {
+      const target = computeZoomCommitTarget(
+        gestureState,
+        lastFocal.x,
+        lastFocal.y,
+        gestureScrollLeft,
+        gestureScrollTop
+      );
+      viewportManager.commitZoomAtContentPoint(
+        target.finalZoom,
+        { x: target.baseContentX, y: target.baseContentY },
+        lastFocal
+      );
+    } else {
+      viewportManager.handleScroll(true);
+    }
+
+    // Sync scroll tracking baseline so the zoom's own focal scroll jump never
+    // trips fast-scroll deferral when async scroll events arrive after commit.
+    if (this._scrollContainer) {
+      this._lastScrollTop = this._scrollContainer.scrollTop;
+      this._lastScrollLeft = this._scrollContainer.scrollLeft;
+      this._lastScrollTime = performance.now();
+    }
     this.updateCanvasCursors();
-    viewportManager.handleScroll(true);
+    this.updateVisiblePageChunks(true, true);
   }
 
   private scheduleChunkUpdate(delayMs: number = 85): void {
@@ -1393,6 +1691,7 @@ class VeditorApp {
    */
   private updateVisiblePageChunks(renderPdfRaster: boolean = true, forceUpdate: boolean = false): void {
     if (this._isZoomGestureActive || store.isDocSwitching || store.isZoomAdjusting) return;
+    if (this._isFastScrolling && !forceUpdate) return;
     const doc = store.activeDocument;
     if (!doc || !this._scrollContainer) return;
 
@@ -1606,6 +1905,59 @@ class VeditorApp {
   }
 
   /**
+   * Lazily pre-warms the active visible page's scratchpad canvas on idle after
+   * scroll/layout settles so the very first `pointerdown` has 0ms allocation lag.
+   */
+  private scheduleScratchpadPrewarm(pageIndex: number): void {
+    if (this._scratchPrewarmTimer !== null) {
+      window.clearTimeout(this._scratchPrewarmTimer);
+      this._scratchPrewarmTimer = null;
+    }
+    if (pageIndex < 0 || this._warmScratchPageIndex === pageIndex) return;
+    this._scratchPrewarmTimer = window.setTimeout(() => {
+      this._scratchPrewarmTimer = null;
+      if (this._isZoomGestureActive || this._isFastScrolling || pointerHandler.isPointerDown) return;
+      const p = this._renderedPages.get(pageIndex);
+      const layout = viewportManager.getLayout(pageIndex);
+      if (!p || !layout) return;
+      const rot = store.pageRotations[pageIndex] || 0;
+      const prevWarm = this._warmScratchPageIndex;
+      this._warmScratchPageIndex = pageIndex;
+      if (prevWarm !== -1 && prevWarm !== pageIndex && !pointerHandler.isPolygonActiveOnPage(prevWarm)) {
+        const prevPage = this._renderedPages.get(prevWarm);
+        if (prevPage) {
+          if (prevPage.scratchCanvas.width > 1 || prevPage.scratchCanvas.height > 1) {
+            prevPage.scratchCanvas.width = 1;
+            prevPage.scratchCanvas.height = 1;
+          }
+          if (prevPage.scratchChunkCanvas && (prevPage.scratchChunkCanvas.width > 1 || prevPage.scratchChunkCanvas.height > 1)) {
+            prevPage.scratchChunkCanvas.width = 1;
+            prevPage.scratchChunkCanvas.height = 1;
+          }
+        }
+      }
+      if (pdfEngine.needsViewportChunk(pageIndex, store.zoom, rot)) {
+        const chunkRect = this.computePageViewportChunkRect(p.container, layout);
+        if (chunkRect) {
+          const expectedKey = `${store.zoom.toFixed(4)}|${chunkRect.x},${chunkRect.y},${chunkRect.width},${chunkRect.height}`;
+          this.updateAnnotationChunkGeometry(pageIndex, p, chunkRect, true);
+          if (p.scratchChunkCanvas) {
+            p.scratchChunkCanvas.dataset.chunkKey = expectedKey;
+          }
+        }
+        return;
+      }
+      const dpr = resolveAdaptiveCanvasDpr(layout.width, layout.height, store.appSettings.targetDPI);
+      const w = Math.max(1, Math.round(layout.width * dpr));
+      const h = Math.max(1, Math.round(layout.height * dpr));
+      if (p.scratchCanvas.width !== w || p.scratchCanvas.height !== h) {
+        p.scratchCanvas.width = w;
+        p.scratchCanvas.height = h;
+      }
+    }, 120);
+  }
+
+  /**
    * Synchronously prepares the active page's scratchpad backing store and
    * High-DPI Viewport Chunk right on `pointerdown` before `pointerHandler`
    * starts a stroke. Guarantees 0ms chunk lag and 100% coordinate lock.
@@ -1614,6 +1966,10 @@ class VeditorApp {
     if (this._chunkUpdateTimer !== null) {
       window.clearTimeout(this._chunkUpdateTimer);
       this._chunkUpdateTimer = null;
+    }
+    if (this._scratchPrewarmTimer !== null) {
+      window.clearTimeout(this._scratchPrewarmTimer);
+      this._scratchPrewarmTimer = null;
     }
     const prevWarm = this._warmScratchPageIndex;
     this._warmScratchPageIndex = pageIndex;
@@ -1638,9 +1994,20 @@ class VeditorApp {
     if (pdfEngine.needsViewportChunk(pageIndex, store.zoom, rot)) {
       const chunkRect = this.computePageViewportChunkRect(p.container, layout);
       if (chunkRect) {
-        this.updateAnnotationChunkGeometry(pageIndex, p, chunkRect, true);
-        if (p.chunkCanvas) {
-          void pdfEngine.renderPageChunkToCanvas(pageIndex, p.chunkCanvas, store.zoom, rot, chunkRect);
+        const expectedKey = `${store.zoom.toFixed(4)}|${chunkRect.x},${chunkRect.y},${chunkRect.width},${chunkRect.height}`;
+        const chunkReady =
+          p.scratchChunkCanvas &&
+          p.scratchChunkCanvas.style.display === 'block' &&
+          p.scratchChunkCanvas.width > 1 &&
+          p.scratchChunkCanvas.dataset.chunkKey === expectedKey;
+        if (!chunkReady) {
+          this.updateAnnotationChunkGeometry(pageIndex, p, chunkRect, true);
+          if (p.scratchChunkCanvas) {
+            p.scratchChunkCanvas.dataset.chunkKey = expectedKey;
+          }
+          if (p.chunkCanvas) {
+            void pdfEngine.renderPageChunkToCanvas(pageIndex, p.chunkCanvas, store.zoom, rot, chunkRect);
+          }
         }
         return;
       }
@@ -1658,8 +2025,8 @@ class VeditorApp {
       p.scratchCanvas.width = w;
       p.scratchCanvas.height = h;
     }
-    delete p.scratchCanvas.dataset.offsetX;
-    delete p.scratchCanvas.dataset.offsetY;
+    if (p.scratchCanvas.dataset.offsetX) delete p.scratchCanvas.dataset.offsetX;
+    if (p.scratchCanvas.dataset.offsetY) delete p.scratchCanvas.dataset.offsetY;
   }
 
   /**
@@ -1698,13 +2065,18 @@ class VeditorApp {
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, chunk.width, chunk.height);
+    // Commit a 1x1 imperceptible pixel so Blink/Skia's deferred Canvas2D swapchain
+    // never discards an empty full-canvas clearRect and recycles a stale ghost frame.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.004)';
+    ctx.fillRect(0, 0, 1, 1);
 
-    ctx.save();
-    ctx.translate(-ox * dpr, -oy * dpr);
-
+    const dragIds = pointerHandler.getSelectDragExcludedIds(pageIndex);
     const layout = viewportManager.getLayout(pageIndex);
     const fullW = layout ? Math.round((layout.width / Math.max(store.zoom, 0.0001)) * scale) : chunk.width;
     const fullH = layout ? Math.round((layout.height / Math.max(store.zoom, 0.0001)) * scale) : chunk.height;
+
+    ctx.save();
+    ctx.translate(-ox * dpr, -oy * dpr);
 
     annotationEngine.renderBackgroundPattern(
       ctx,
@@ -1714,19 +2086,24 @@ class VeditorApp {
       scale
     );
 
-    annotationEngine.renderAnnotationsToCanvas(ctx, pageIndex, scale);
+    annotationEngine.renderAnnotationsToCanvas(ctx, pageIndex, scale, dragIds);
 
-    const doc = store.activeDocument;
-    if (doc) {
-      const pageAnns = doc.annotations[pageIndex] || [];
-      const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
-      if (selected.length > 0) {
-        selectionManager.render(ctx, selected, scale);
+    // During a lifted drag, the scratchpad canvas paints the dragged items & selection handles on top.
+    if (!dragIds || dragIds.size === 0) {
+      const doc = store.activeDocument;
+      if (doc) {
+        const pageAnns = doc.annotations[pageIndex] || [];
+        const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+        if (selected.length > 0) {
+          selectionManager.render(ctx, selected, scale);
+        }
       }
     }
 
     ctx.restore();
-    this.updateCoveredLinksOnPage(pageIndex);
+    if (!pointerHandler.isPointerDown) {
+      this.updateCoveredLinksOnPage(pageIndex);
+    }
   }
 
   /** Applies Settings → default zoom for brand-new documents. */
@@ -1763,13 +2140,30 @@ class VeditorApp {
         const normDeltaY = normalizeWheelDeltaY(e.deltaY, e.deltaMode);
         const factor = Math.exp(-normDeltaY * 0.0035);
         this.previewZoomBy(factor, { x: e.clientX, y: e.clientY });
+      } else if (this._isZoomGestureActive) {
+        this.commitZoomPreview();
       }
     }, { passive: false });
 
+    // Instant finger-lift commit for Safari/macOS/WebKitGTK trackpad pinch gestures
+    this._scrollContainer.addEventListener('gestureend', () => {
+      if (this._isZoomGestureActive) {
+        this.commitZoomPreview();
+      }
+    });
+
+    // Instant commit when releasing Ctrl/Meta after a Ctrl+Wheel zoom gesture
+    window.addEventListener('keyup', (e) => {
+      if ((e.key === 'Control' || e.key === 'Meta') && this._isZoomGestureActive) {
+        this.commitZoomPreview();
+      }
+    });
+
     // Refresh High-DPI Viewport Chunk when panning/scrolling at high zoom:
     // deadzone hysteresis avoids reallocating or repainting chunks while the
-    // visible screen stays inside the padded chunk window, and extreme fast-scroll
-    // detection pauses off-screen chunk rasterization only during rapid scrollbar drags.
+    // visible screen stays inside the padded chunk window, and fast-scroll
+    // detection pauses heavy canvas allocations so lightweight placeholder
+    // pages glide by smoothly with zero black GPU tile flashes.
     this._scrollContainer.addEventListener('scroll', () => {
       if (!this._isZoomGestureActive && store.activeDocument) {
         const now = performance.now();
@@ -1781,8 +2175,16 @@ class VeditorApp {
         this._lastScrollLeft = sl;
         this._lastScrollTime = now;
 
-        // Only flag extreme velocity (e.g. dragging the scrollbar thumb across many pages)
-        if (dist > 650 || (dt < 50 && dist / dt > 8.5)) {
+        // Ignore focal-anchored programmatic scroll jumps triggered by zoom itself
+        if (viewportManager.isProgrammaticScroll()) {
+          this.updateVisiblePageChunks(false, false);
+          this.scheduleChunkUpdate(50);
+          return;
+        }
+
+        // Fast-scroll detection: engage on brisk wheel flicks / scrollbar drags
+        // (>220px/event or >2200px/s) so GPU textures aren't thrashed mid-flight.
+        if (dist > 220 || (dt < 60 && dist / dt > 2.2)) {
           this._isFastScrolling = true;
           if (this._fastScrollTimer !== null) {
             window.clearTimeout(this._fastScrollTimer);
@@ -1794,7 +2196,7 @@ class VeditorApp {
               viewportManager.handleScroll(true);
               this.updateVisiblePageChunks(true, false);
             }
-          }, 90);
+          }, 70);
         } else if (!this._isFastScrolling) {
           this.updateVisiblePageChunks(false, false);
           this.scheduleChunkUpdate(75);
@@ -1861,10 +2263,16 @@ class VeditorApp {
     if (!doc) return;
     const docId = doc.id;
 
+    // Keep lightweight zero-VRAM placeholder shells mounted and positioned
+    // ahead of the viewport so fast scrolls always glide over designed pages.
+    this.syncPlaceholderShells(store.activePageIndex);
+
     // PIPE_4: Cancel in-flight render tasks for pages outside the visible + preload window
     pdfEngine.cancelOutdatedRenderTasks(new Set(visibleIndices));
 
-    // PIPE_3: VRAM Pool Guard - Retain pages within the preload window + 1 warm margin
+    // PIPE_3: VRAM Pool Guard - Retain pages within the preload window + 1 warm margin.
+    // Evicted pages downgrade cleanly back to their lightweight placeholder shell
+    // (0 canvases, 0 VRAM) instead of removing the page container from the DOM.
     const bufferPages = Math.max(1, Math.min(8, store.appSettings.maxRenderBufferPages || 3));
     const maxKeepDistance = store.zoom > 2.4 ? 1 : Math.max(1, Math.min(3, Math.ceil(bufferPages / 2)));
     for (const [pageIndex, p] of this._renderedPages) {
@@ -1892,18 +2300,32 @@ class VeditorApp {
           p.scratchChunkCanvas.width = 0; p.scratchChunkCanvas.height = 0;
         }
 
-        if (p.container.parentNode === this._pagesWrapper) {
+        // Strip canvas/link layers and revert container to its placeholder shell
+        p.container.classList.remove('is-page-rendered');
+        for (const el of [p.pdfCanvas, p.chunkCanvas, p.annotCanvas, p.annotChunkCanvas, p.scratchCanvas, p.scratchChunkCanvas, p.linkLayer]) {
+          if (el && el.parentNode === p.container) {
+            p.container.removeChild(el);
+          }
+        }
+        if (!this._pageShells.has(pageIndex) && p.container.parentNode === this._pagesWrapper) {
           this._pagesWrapper.removeChild(p.container);
         }
         this._renderedPages.delete(pageIndex);
       }
     }
 
+    // During fast scrolling, skip allocating new <canvas> stacks and PDF renders
+    // altogether so Chromium's compositor glides over the pre-mounted designed
+    // placeholder pages at 120fps with zero GPU texture upload stalls / black blinks.
+    if (this._isFastScrolling) {
+      return;
+    }
+
     const docStillCurrent = () => store.activeDocument?.id === docId && !store.isDocSwitching;
     const visibleSet = new Set(visibleIndices);
     const onScreenSet = viewportManager.getOnScreenPages();
 
-    // 2. Mount: create the DOM for visible + preload pages that have no element yet.
+    // 2. Mount: upgrade placeholder shells for visible + preload pages with canvas stacks.
     for (const pageIndex of visibleIndices) {
       if (!docStillCurrent()) return;
       if (!viewportManager.getLayout(pageIndex)) continue;
@@ -1917,32 +2339,46 @@ class VeditorApp {
           this._pagesWrapper.removeChild(pageElements.container);
         }
         this._renderedPages.delete(pageIndex);
+        this._pageShells.delete(pageIndex);
         pageElements = undefined;
       }
 
       if (!pageElements) {
-        const container = document.createElement('div');
-        container.className = 'pdf-page-container';
-        container.dataset.pageIndex = String(pageIndex);
-        container.dataset.docId = docId;
+        let container = this._pageShells.get(pageIndex);
+        if (container && container.dataset.docId !== docId) {
+          if (container.parentNode === this._pagesWrapper) {
+            this._pagesWrapper.removeChild(container);
+          }
+          container = undefined;
+        }
+        if (!container) {
+          container = this.createPlaceholderShell(pageIndex, docId);
+          this._pagesWrapper.appendChild(container);
+          this._pageShells.set(pageIndex, container);
+        }
 
         const pdfCanvas = document.createElement('canvas');
+        pdfCanvas.width = 0; pdfCanvas.height = 0;
         pdfCanvas.className = 'pdf-page-canvas';
         pdfCanvas.dataset.pageIndex = String(pageIndex);
         pdfCanvas.dataset.docId = docId;
 
         const chunkCanvas = document.createElement('canvas');
+        chunkCanvas.width = 0; chunkCanvas.height = 0;
         chunkCanvas.className = 'pdf-page-canvas pdf-chunk-canvas';
         chunkCanvas.dataset.pageIndex = String(pageIndex);
         chunkCanvas.dataset.docId = docId;
 
         const annotCanvas = document.createElement('canvas');
+        annotCanvas.width = 0; annotCanvas.height = 0;
         annotCanvas.className = 'annotation-canvas';
 
         const annotChunkCanvas = document.createElement('canvas');
+        annotChunkCanvas.width = 0; annotChunkCanvas.height = 0;
         annotChunkCanvas.className = 'annotation-canvas annot-chunk-canvas';
 
         const scratchCanvas = document.createElement('canvas');
+        scratchCanvas.width = 0; scratchCanvas.height = 0;
         scratchCanvas.className = 'scratchpad-canvas';
         scratchCanvas.style.cursor = drawingCursorValue(
           store.activeTool,
@@ -1951,6 +2387,7 @@ class VeditorApp {
         );
 
         const scratchChunkCanvas = document.createElement('canvas');
+        scratchChunkCanvas.width = 0; scratchChunkCanvas.height = 0;
         scratchChunkCanvas.className = 'scratch-chunk-canvas';
         (scratchCanvas as HTMLCanvasElement & { _chunkCanvas?: HTMLCanvasElement })._chunkCanvas = scratchChunkCanvas;
 
@@ -1964,8 +2401,6 @@ class VeditorApp {
         container.appendChild(scratchCanvas);
         container.appendChild(scratchChunkCanvas);
         container.appendChild(linkLayer);
-
-        this._pagesWrapper.appendChild(container);
 
         pageElements = {
           container,
@@ -1994,37 +2429,25 @@ class VeditorApp {
           this._pagesWrapper.removeChild(p.container);
         }
         this._renderedPages.delete(pageIndex);
+        this._pageShells.delete(pageIndex);
         continue;
       }
       this.applyPageGeometry(pageIndex, p, layout, docId);
     }
 
     // While an interactive wheel/pinch zoom gesture is in flight, existing
-    // canvas bitmaps are stretched via CSS width/height with zero re-raster
-    // or canvas clearing; commitZoomPreview() runs the crisp pass once settled.
+    // canvas bitmaps are GPU-transformed with zero re-raster or canvas clearing;
+    // commitZoomPreview() runs the crisp pass once settled.
     if (this._isZoomGestureActive) {
-      for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
-        if (!docStillCurrent()) return;
-        if (p.needsRepaint) {
-          p.needsRepaint = false;
-          this.repaintPageAnnotations(pageIndex, p);
-        }
-        if (p.needsRaster && p.pdfCanvas.width <= 300) {
-          p.needsRaster = false;
-          const rot = store.pageRotations[pageIndex] || 0;
-          void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
-        }
-      }
       return;
     }
 
     // Update High-DPI Viewport Chunks synchronously right in the layout/render pass
-    if (!this._isFastScrolling) {
-      this.updateVisiblePageChunks(true, false);
-    }
+    this.updateVisiblePageChunks(true, false);
 
-    // 4a. Tier 1 Priority Render: Pages currently on-screen ALWAYS rasterize and
-    // repaint immediately on every scroll frame (never blocked by _isFastScrolling).
+    // 4a. Tier 1 Priority Render: Pages currently on-screen get 100% PDF.js worker
+    // bandwidth before any off-screen preload pages start.
+    const onScreenRenderPromises: Promise<void>[] = [];
     for (const pageIndex of visibleIndices) {
       if (!docStillCurrent()) return;
       if (!onScreenSet.has(pageIndex)) continue;
@@ -2032,9 +2455,21 @@ class VeditorApp {
       if (!p) continue;
 
       if (p.needsRaster) {
-        p.needsRaster = false;
         const rot = store.pageRotations[pageIndex] || 0;
-        void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+        p.needsRaster = false;
+        const useChunk = pdfEngine.needsViewportChunk(pageIndex, store.zoom, rot);
+        // When zoomed into High-DPI chunk mode and a base bitmap is already cached,
+        // skip the redundant low-res full-page raster so the PDF.js worker finishes
+        // the crisp visible viewport chunk with zero worker contention.
+        if (!useChunk || !pdfEngine.hasCachedBitmap(pageIndex) || p.pdfCanvas.width <= 300) {
+          if (pdfEngine.hasExactCachedBitmap(pageIndex, store.zoom, rot)) {
+            pdfEngine.blitCachedPreview(pageIndex, p.pdfCanvas, store.zoom, rot);
+          } else {
+            onScreenRenderPromises.push(
+              pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot)
+            );
+          }
+        }
       }
       // Pre-warm PDF text layout and interactive links for on-screen pages
       void pdfEngine.getPageTextLayout(pageIndex);
@@ -2045,24 +2480,47 @@ class VeditorApp {
       }
     }
 
-    // 4b. Tier 2 Preload Buffer Render: Pages in the preload window (1, 3, or 5 pages
-    // ahead/behind) render right after on-screen pages so they are already painted
-    // before the user scrolls to them.
+    // 4b. Tier 2 Preload Buffer Render: Cached preload pages blit synchronously in <1ms;
+    // uncached preload pages wait until all Tier 1 on-screen renders finish so the visible
+    // page NEVER competes with off-screen buffer pages on the single PDF.js worker.
+    const deferredTier2: number[] = [];
     for (const pageIndex of visibleIndices) {
       if (!docStillCurrent()) return;
       if (onScreenSet.has(pageIndex)) continue;
       const p = this._renderedPages.get(pageIndex);
       if (!p) continue;
 
-      if (p.needsRaster && (!this._isFastScrolling || pdfEngine.hasCachedBitmap(pageIndex))) {
-        p.needsRaster = false;
+      if (p.needsRaster) {
         const rot = store.pageRotations[pageIndex] || 0;
-        void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+        if (pdfEngine.hasExactCachedBitmap(pageIndex, store.zoom, rot)) {
+          pdfEngine.blitCachedPreview(pageIndex, p.pdfCanvas, store.zoom, rot);
+          p.needsRaster = false;
+        } else {
+          deferredTier2.push(pageIndex);
+        }
       }
       void this.populatePageLinks(pageIndex, p, docId);
-      if (p.needsRepaint && !this._isFastScrolling) {
+      if (p.needsRepaint) {
         p.needsRepaint = false;
         this.repaintPageAnnotations(pageIndex, p);
+      }
+    }
+
+    if (deferredTier2.length > 0) {
+      const renderTier2 = () => {
+        if (!docStillCurrent() || this._isFastScrolling || this._isZoomGestureActive) return;
+        for (const pageIndex of deferredTier2) {
+          const p = this._renderedPages.get(pageIndex);
+          if (!p || !p.needsRaster) continue;
+          p.needsRaster = false;
+          const rot = store.pageRotations[pageIndex] || 0;
+          void pdfEngine.renderPageToCanvas(pageIndex, p.pdfCanvas, store.zoom, rot);
+        }
+      };
+      if (onScreenRenderPromises.length === 0) {
+        renderTier2();
+      } else {
+        void Promise.allSettled(onScreenRenderPromises).then(renderTier2);
       }
     }
 
@@ -2070,10 +2528,18 @@ class VeditorApp {
     for (const [pageIndex, p] of Array.from(this._renderedPages.entries())) {
       if (!docStillCurrent()) return;
       if (visibleSet.has(pageIndex)) continue;
-      if (p.needsRepaint && !this._isFastScrolling) {
+      if (p.needsRepaint) {
         p.needsRepaint = false;
         this.repaintPageAnnotations(pageIndex, p);
       }
+    }
+
+    // Lazily pre-warm the active visible page's scratchpad so first pen stroke has 0ms stall
+    const prewarmTarget = onScreenSet.has(store.activePageIndex)
+      ? store.activePageIndex
+      : (visibleIndices.find(idx => onScreenSet.has(idx)) ?? -1);
+    if (prewarmTarget >= 0) {
+      this.scheduleScratchpadPrewarm(prewarmTarget);
     }
   }
 
@@ -2183,6 +2649,71 @@ class VeditorApp {
     }
   }
 
+  private _coveredLinksTimers = new Map<number, number>();
+
+  /** Debounces link-occlusion DOM checks after rapid strokes so pointerup stays sub-millisecond. */
+  private scheduleCoveredLinksUpdate(pageIndex: number): void {
+    const existing = this._coveredLinksTimers.get(pageIndex);
+    if (existing !== undefined) {
+      window.clearTimeout(existing);
+    }
+    const id = window.setTimeout(() => {
+      this._coveredLinksTimers.delete(pageIndex);
+      if (pointerHandler.isPointerDown) {
+        this.scheduleCoveredLinksUpdate(pageIndex);
+        return;
+      }
+      this.updateCoveredLinksOnPage(pageIndex);
+    }, 260);
+    this._coveredLinksTimers.set(pageIndex, id);
+  }
+
+  /**
+   * O(1) incremental stroke commit: stamps a single newly committed pen or
+   * highlighter annotation directly onto the target page's active annotation
+   * canvas (full-page or High-DPI viewport chunk) without clearing or
+   * redrawing existing annotations.
+   */
+  private stampAnnotationIncremental(pageIndex: number, ann: Annotation): boolean {
+    if (store.selectedAnnotationIds.size > 0) return false;
+    const p = this._renderedPages.get(pageIndex);
+    if (!p) return false;
+
+    const chunk = p.annotChunkCanvas;
+    if (chunk && chunk.style.display === 'block' && chunk.width > 1 && chunk.height > 1) {
+      const baseW = parseFloat(chunk.dataset.baseWidth || '') || parseFloat(chunk.style.width) || chunk.width;
+      const baseZoom = parseFloat(chunk.dataset.baseZoom || '') || store.zoom;
+      const dpr = baseW > 0 ? chunk.width / baseW : 1;
+      const scale = baseZoom * dpr;
+      const ox = parseFloat(chunk.dataset.offsetX || '0');
+      const oy = parseFloat(chunk.dataset.offsetY || '0');
+      const ctx = chunk.getContext('2d');
+      if (!ctx) return false;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.translate(-ox * dpr, -oy * dpr);
+      annotationEngine.stampSingleAnnotation(ctx, ann, scale);
+      ctx.restore();
+      return true;
+    }
+
+    if (p.annotCanvas.width <= 1 || p.annotCanvas.height <= 1) return false;
+    const layout = viewportManager.getLayout(pageIndex);
+    const cssW = layout ? layout.width : (parseFloat(p.annotCanvas.style.width) || p.annotCanvas.width);
+    const baseW = cssW / Math.max(store.zoom, 0.0001);
+    const scale = baseW > 0 && p.annotCanvas.width > 1
+      ? p.annotCanvas.width / baseW
+      : store.zoom * resolveAdaptiveCanvasDpr(cssW, layout ? layout.height : p.annotCanvas.height, store.appSettings.targetDPI);
+
+    const annCtx = p.annotCanvas.getContext('2d');
+    if (!annCtx) return false;
+    annCtx.save();
+    annCtx.setTransform(1, 0, 0, 1, 0, 0);
+    annotationEngine.stampSingleAnnotation(annCtx, ann, scale);
+    annCtx.restore();
+    return true;
+  }
+
   private repaintPageAnnotations(
     pageIndex: number,
     p: {
@@ -2207,7 +2738,10 @@ class VeditorApp {
 
     const annCtx = p.annotCanvas.getContext('2d');
     if (annCtx && p.annotCanvas.width > 1 && p.annotCanvas.height > 1) {
+      const dragIds = pointerHandler.getSelectDragExcludedIds(pageIndex);
       annCtx.clearRect(0, 0, p.annotCanvas.width, p.annotCanvas.height);
+      annCtx.fillStyle = 'rgba(0, 0, 0, 0.004)';
+      annCtx.fillRect(0, 0, 1, 1);
 
       // 1. Background paper pattern (consolidated onto the single overlay canvas)
       annotationEngine.renderBackgroundPattern(
@@ -2218,20 +2752,24 @@ class VeditorApp {
         scale
       );
 
-      // 2. Committed Annotations & Selection Box
-      annotationEngine.renderAnnotationsToCanvas(annCtx, pageIndex, scale);
+      // 2. Committed Annotations (excluding items temporarily lifted onto scratchCanvas during drag)
+      annotationEngine.renderAnnotationsToCanvas(annCtx, pageIndex, scale, dragIds);
 
-      // Render selection handles if active on this page
-      const doc = store.activeDocument;
-      if (doc) {
-        const pageAnns = doc.annotations[pageIndex] || [];
-        const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
-        if (selected.length > 0) {
-          selectionManager.render(annCtx, selected, scale);
+      // Render selection handles when not lifted onto scratchCanvas
+      if (!dragIds || dragIds.size === 0) {
+        const doc = store.activeDocument;
+        if (doc) {
+          const pageAnns = doc.annotations[pageIndex] || [];
+          const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
+          if (selected.length > 0) {
+            selectionManager.render(annCtx, selected, scale);
+          }
         }
       }
     }
-    this.updateCoveredLinksOnPage(pageIndex);
+    if (!pointerHandler.isPointerDown) {
+      this.updateCoveredLinksOnPage(pageIndex);
+    }
   }
 
   private gestureCallbacks() {
@@ -2239,6 +2777,16 @@ class VeditorApp {
       onPinchZoom: (scaleDelta: number, center: { x: number; y: number }) =>
         this.previewZoomBy(scaleDelta, center),
       onPan: (dx: number, dy: number) => {
+        if (this._isZoomGestureActive && this._zoomGestureState) {
+          this._zoomGestureState = {
+            ...this._zoomGestureState,
+            panX: this._zoomGestureState.panX + dx,
+            panY: this._zoomGestureState.panY + dy
+          };
+          this.applyZoomGestureTransforms();
+          this.scheduleZoomCommit();
+          return;
+        }
         this._scrollContainer.scrollLeft -= dx;
         this._scrollContainer.scrollTop -= dy;
       }
@@ -2269,7 +2817,9 @@ class VeditorApp {
       if (e.pointerType === 'touch') {
         const gestureStarted = gestureEngine.handlePointerDown(e);
         if (gestureStarted) {
+          const hadLiftedDrag = Boolean(pointerHandler.getSelectDragExcludedIds(pageIndex));
           pointerHandler.cancelActiveStroke();
+          if (hadLiftedDrag) onRepaint();
           this.endHandPan();
           e.preventDefault();
           return;
@@ -2364,12 +2914,13 @@ class VeditorApp {
         return;
       }
       if (!pointerHandler.isPointerDown) {
+        const hoverPt = pointerHandler.pagePointForEvent(e, canvas);
         this._lastCanvasPointer = {
           pageIndex,
-          point: pointerHandler.pagePointForEvent(e, canvas),
+          point: hoverPt,
           inside: true
         };
-        pointerHandler.handleHover(e, pageIndex, canvas);
+        pointerHandler.handleHover(e, pageIndex, canvas, hoverPt);
         // Polygon vertices are placed on click, so its elastic edge must also
         // receive unpressed moves. `handlePointerMove` returns immediately for
         // every other inactive tool.
@@ -2399,9 +2950,9 @@ class VeditorApp {
         const wasGesture = gestureEngine.isGestureActive;
         gestureEngine.handlePointerUp(e);
         if (wasGesture) {
-          // Last finger lifted: let the debounced single commit fire.
+          // Last finger lifted: commit crisp resolution immediately (0ms delay).
           e.preventDefault();
-          this.scheduleZoomCommit();
+          this.commitZoomPreview();
           return;
         }
       }
@@ -2419,6 +2970,7 @@ class VeditorApp {
       } catch (_) {}
       pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint);
       this.releasePageScratchpad(pageIndex);
+      this.scheduleCoveredLinksUpdate(pageIndex);
       // A notebook grows once the stroke is committed, so there is always
       // blank paper below what you just wrote.
       void notebookController.autoExtend(pageIndex);
@@ -2430,7 +2982,7 @@ class VeditorApp {
         gestureEngine.handlePointerUp(e);
         if (wasGesture) {
           e.preventDefault();
-          this.scheduleZoomCommit();
+          this.commitZoomPreview();
           return;
         }
       }
@@ -2483,13 +3035,18 @@ class VeditorApp {
             history.execute(new ModifyAnnotationCommand(pageIndex, hit, expanded));
             onRepaint();
           } else {
-            const localY = point.y - hit.box.y;
-            if (localY <= 40 || localY >= hit.box.height - 34) {
-              const collapsed = stickyNoteTool.collapseStickyNote(hit);
-              history.execute(new ModifyAnnotationCommand(pageIndex, hit, collapsed));
-              onRepaint();
+            const embeddedHit = hitTestStickyNoteEmbeddedItem(hit, point);
+            if (embeddedHit && embeddedHit.type === 'text') {
+              pointerHandler.editEmbeddedTextInStickyNote(hit, embeddedHit, pageIndex, canvas, onRepaint);
             } else {
-              pointerHandler.editExistingStickyNote(hit, pageIndex, canvas, onRepaint);
+              const localY = point.y - hit.box.y;
+              if (localY <= 40 || localY >= hit.box.height - 34) {
+                const collapsed = stickyNoteTool.collapseStickyNote(hit);
+                history.execute(new ModifyAnnotationCommand(pageIndex, hit, collapsed));
+                onRepaint();
+              } else {
+                pointerHandler.editExistingStickyNote(hit, pageIndex, canvas, onRepaint);
+              }
             }
           }
           return;
@@ -2718,17 +3275,26 @@ class VeditorApp {
     });
   }
 
-  public updateCanvasCursors(): void {
+  public updateCanvasCursors(force: boolean = false): void {
     const linksInteractive = store.activeTool === 'select' || store.activeTool === 'hand';
     document.body.classList.toggle('pdf-links-interactive', linksInteractive);
 
-    const cursor = drawingCursorValue(
-      store.activeTool,
-      store.toolSettings.drawingCursor || 'pen',
-      store.zoom
-    );
+    const ts = store.toolSettings;
+    const cursorStyle = ts.drawingCursor || 'pen';
+    const sig = `${store.activeTool}|${cursorStyle}|${store.zoom.toFixed(3)}|${ts.penWidth}|${ts.eraserWidth}|${ts.highlighterWidth}`;
+    if (force || sig !== this._lastCursorSig || !this._lastCursorValue) {
+      this._lastCursorSig = sig;
+      this._lastCursorValue = drawingCursorValue(
+        store.activeTool,
+        cursorStyle,
+        store.zoom
+      );
+    }
+    const cursor = this._lastCursorValue;
     for (const [, p] of this._renderedPages) {
-      p.scratchCanvas.style.cursor = cursor;
+      if (p.scratchCanvas.style.cursor !== cursor) {
+        p.scratchCanvas.style.cursor = cursor;
+      }
     }
   }
 
@@ -3570,6 +4136,7 @@ class VeditorApp {
    * false cancels the OS close request.
    */
   private async confirmAppClose(): Promise<boolean> {
+    await flushPendingSessionSave();
     for (const doc of store.openDocuments.values()) {
       await flushDocPosition(doc);
     }
@@ -3589,31 +4156,93 @@ class VeditorApp {
   }
 
   private resolveWebPdfUrl(rawUrl: string): string {
-    const trimmed = rawUrl.trim();
-    try {
-      const parsed = new URL(trimmed, window.location.href);
-      // Unwrap browser PDF viewer wrapper URLs (e.g. ?src=... or ?file=...)
-      const embedded = parsed.searchParams.get('src') || parsed.searchParams.get('file');
-      if (embedded && /^https?:\/\/|^file:\/\/|^blob:/i.test(embedded)) {
-        return embedded;
-      }
-      return parsed.href;
-    } catch {
-      return trimmed;
-    }
+    return resolveWebPdfUrl(rawUrl, window.location.href);
   }
 
   private extractCleanPdfFilename(urlStr: string): string {
+    return extractCleanPdfFilename(urlStr, window.location.href);
+  }
+
+  /**
+   * Fetches raw PDF bytes from a web URL, trying direct fetch first and
+   * seamlessly falling back to the extension MV3 background service worker
+   * (`FETCH_PDF_BYTES`) when CORS or host restrictions block direct access.
+   */
+  private async fetchWebPdfBytes(resolvedUrl: string): Promise<Uint8Array> {
+    const isFa = store.appSettings.language === 'fa';
+    let lastError = '';
+
+    // 1. Direct fetch (works when same-origin, CORS-enabled, or extension host_permissions granted)
     try {
-      const u = new URL(urlStr, window.location.href);
-      const rawSeg = u.pathname.split('/').filter(Boolean).pop() || 'document.pdf';
-      const decoded = decodeURIComponent(rawSeg).replace(/[?#].*$/, '').trim();
-      if (!decoded) return 'document.pdf';
-      return decoded.toLowerCase().endsWith('.pdf') ? decoded : `${decoded}.pdf`;
-    } catch {
-      const fallback = urlStr.split(/[?#]/)[0].split('/').filter(Boolean).pop() || 'document.pdf';
-      return fallback.toLowerCase().endsWith('.pdf') ? fallback : `${fallback}.pdf`;
+      let res: Response;
+      try {
+        res = await fetch(resolvedUrl, { credentials: 'include', redirect: 'follow' });
+        if (!res.ok) {
+          const retry = await fetch(resolvedUrl, { credentials: 'omit', redirect: 'follow' });
+          if (retry.ok) res = retry;
+        }
+      } catch {
+        res = await fetch(resolvedUrl, { credentials: 'omit', redirect: 'follow' });
+      }
+      if (res.ok) {
+        const rawBytes = new Uint8Array(await res.arrayBuffer());
+        const normalized = normalizePdfBytes(rawBytes);
+        if (normalized) return normalized;
+        lastError = isFa
+          ? 'این لینک مستقیم به فایل PDF نیست یا نیاز به دانلود مستقیم از مرورگر دارد.'
+          : 'URL did not return a valid PDF binary (it may require authentication or direct download).';
+      } else {
+        lastError = `HTTP ${res.status} ${res.statusText || ''}`.trim();
+      }
+    } catch (err: any) {
+      lastError = err?.message || String(err);
     }
+
+    // 2. Extension Service Worker fetch proxy fallback (bypasses CORS via host_permissions)
+    const chromeApi = typeof chrome !== 'undefined' ? chrome : undefined;
+    if (chromeApi?.runtime?.sendMessage) {
+      try {
+        const bgResult: any = await new Promise((resolve) => {
+          chromeApi.runtime.sendMessage(
+            { type: 'FETCH_PDF_BYTES', url: resolvedUrl },
+            (resp: any) => {
+              if (chromeApi.runtime?.lastError) {
+                resolve({ ok: false, error: chromeApi.runtime.lastError.message });
+              } else {
+                resolve(resp);
+              }
+            }
+          );
+        });
+        if (bgResult?.ok && typeof bgResult.base64 === 'string') {
+          const decoded = base64ToUint8Array(bgResult.base64);
+          const normalized = normalizePdfBytes(decoded);
+          if (normalized) return normalized;
+          lastError = isFa
+            ? 'سرور به جای PDF یک صفحه وب برگرداند (احتمالاً نیاز به ورود به حساب کاربری دارد).'
+            : 'The server returned a web page instead of a PDF (login or direct download may be required).';
+        } else if (bgResult?.error) {
+          lastError = bgResult.error;
+        }
+      } catch (err: any) {
+        lastError = err?.message || lastError;
+      }
+    }
+
+    if (/^file:\/\//i.test(resolvedUrl)) {
+      throw new Error(
+        isFa
+          ? 'برای باز کردن فایل‌های محلی، گزینه «Allow access to file URLs» را در تنظیمات افزونه فعال کنید.'
+          : 'Enable "Allow access to file URLs" in extension settings to open local file:// PDFs.'
+      );
+    }
+
+    throw new Error(
+      lastError ||
+        (isFa
+          ? 'امکان دریافت فایل پی‌دی‌اف از این آدرس وجود نداشت.'
+          : 'Could not fetch PDF from this URL.')
+    );
   }
 
   private async checkUrlParams() {
@@ -3653,24 +4282,16 @@ class VeditorApp {
           15,
           '1 / 3'
         );
-        showToast(`Fetching ${filename}…`, 'progress');
-        const res = await fetch(resolvedUrl, { credentials: 'include' }).catch(() => fetch(resolvedUrl));
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} ${res.statusText || ''}`.trim());
-        }
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        if (!this.hasValidPdfHeader(bytes)) {
-          throw new Error(
-            isFa
-              ? 'این لینک مستقیم به فایل PDF نیست یا نیاز به دانلود مستقیم از مرورگر دارد.'
-              : 'URL did not return a valid PDF binary (it may require authentication or direct download).'
-          );
-        }
+        showToast(isFa ? `در حال دریافت ${filename}…` : `Fetching ${filename}…`, 'progress');
+        const bytes = await this.fetchWebPdfBytes(resolvedUrl);
         const loadedId = await this.loadPDF(filename, bytes);
         if (loadedId) return;
       } catch (err: any) {
         this.hidePdfLoading();
-        showToast(`Failed to load PDF from URL: ${err.message}`, 'error');
+        showToast(
+          tr(`Failed to load PDF from URL: ${err.message}`, `باز کردن PDF از لینک ناموفق بود: ${err.message}`),
+          'error'
+        );
       }
     }
 
