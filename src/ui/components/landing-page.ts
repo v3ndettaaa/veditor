@@ -18,12 +18,20 @@ import {
 } from '../../io/storage';
 import { generateSamplePDF } from '../../io/sample-pdf';
 import { buildNotebookPdf, PAPER_PRESETS } from '../../io/notebook';
+import {
+  hasNotebookCover,
+  renderNotebookCoverSvg,
+  getDefaultNotebookCover,
+  NO_COVER_SPEC
+} from '../../io/notebook-covers';
+import { notebookController } from '../../core/notebook';
 import { getIconSvg } from '../../utils/icons';
 import { escapeHtml } from '../../utils/html';
 import { PDFFolder, RecentDocItem, NotebookSpec } from '../../core/types';
 import { NotebookDialogComponent } from './notebook-dialog';
 import { store } from '../../core/store';
 import { tr } from '../i18n';
+import { showToast } from './toast';
 
 export interface LandingPageCallbacks {
   onOpenFile: () => void;
@@ -540,6 +548,21 @@ export class LandingPageComponent {
       ? `<span class="cover-page-count">${tr(`${doc.pageCount} ${doc.pageCount === 1 ? 'p' : 'pp'}`, `${doc.pageCount} ص`)}</span>`
       : '';
 
+    // 1. Notebook with an active hardcover: render razor-sharp proportional book cover SVG
+    if (doc.notebook && hasNotebookCover(doc.notebook.cover) && doc.notebook.cover) {
+      const isLand = doc.notebook.orientation === 'landscape';
+      return `
+        <div class="doc-cover-sheet is-book-cover ${isLand ? 'is-landscape' : ''}">
+          ${renderNotebookCoverSvg(doc.notebook.cover, {
+            landscape: isLand,
+            compact: true
+          })}
+          ${pageBadge}
+        </div>
+      `;
+    }
+
+    // 2. Real first-page PDF thumbnail (non-cover PDFs or notebooks without a cover)
     if (doc.thumbnailDataUrl) {
       return `
         <div class="doc-cover-sheet has-thumb">
@@ -549,6 +572,7 @@ export class LandingPageComponent {
       `;
     }
 
+    // 3. Notebook without cover (or before thumbnail): authentic paper miniature
     const nbPaper = doc.notebook?.paper;
     const isNotebookByName = /notebook/i.test(doc.name);
     if (nbPaper || isNotebookByName) {
@@ -695,6 +719,11 @@ export class LandingPageComponent {
                       <option value="${escapeHtml(f.id)}" ${doc.folderId === f.id ? 'selected' : ''}>${escapeHtml(f.name)}</option>
                     `).join('')}
                   </select>
+                  ${doc.notebook ? `
+                    <button type="button" class="recent-action-btn" data-edit-notebook="${escapeHtml(doc.id)}" title="${tr('Edit cover & paper', 'ویرایش جلد و کاغذ')}" aria-label="${tr(`Edit cover for ${cleanDisplayName}`, `ویرایش جلد ${cleanDisplayName}`)}">
+                      ${getIconSvg('notebook', 13)}
+                    </button>
+                  ` : ''}
                   <button type="button" class="recent-action-btn" data-rename-doc="${escapeHtml(doc.id)}" title="${tr('Rename document', 'تغییر نام سند')}" aria-label="${tr('Rename document', 'تغییر نام سند')}">
                     ${getIconSvg('edit', 13)}
                   </button>
@@ -720,6 +749,11 @@ export class LandingPageComponent {
                 <div class="recent-card-cover">
                   ${this.renderDocumentCover(doc, docFolder)}
                   <div class="recent-card-floating-actions">
+                    ${doc.notebook ? `
+                      <button type="button" class="recent-floating-btn" data-edit-notebook="${escapeHtml(doc.id)}" title="${tr('Edit cover & paper', 'ویرایش جلد و کاغذ')}" aria-label="${tr(`Edit cover for ${cleanDisplayName}`, `ویرایش جلد ${cleanDisplayName}`)}">
+                        ${getIconSvg('notebook', 13)}
+                      </button>
+                    ` : ''}
                     <button type="button" class="recent-floating-btn" data-rename-doc="${escapeHtml(doc.id)}" title="${tr('Rename document', 'تغییر نام سند')}" aria-label="${tr('Rename document', 'تغییر نام سند')}">
                       ${getIconSvg('edit', 13)}
                     </button>
@@ -896,6 +930,18 @@ export class LandingPageComponent {
         input.select();
       }
     };
+
+    // Edit Notebook Cover & Paper right from the Library card
+    resultsEl.querySelectorAll<HTMLElement>('[data-edit-notebook]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const docId = btn.getAttribute('data-edit-notebook');
+        const target = docId ? this._recentDocs.find(d => d.id === docId) : undefined;
+        if (target?.notebook) {
+          this.openEditNotebookDialog(target, libraryBody);
+        }
+      });
+    });
 
     resultsEl.querySelectorAll<HTMLElement>('[data-rename-doc]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -1075,14 +1121,67 @@ export class LandingPageComponent {
 
     const dialog = new NotebookDialogComponent(host, {
       mode: 'create',
+      cover: getDefaultNotebookCover(),
       paper: preset ? { ...preset.paper } : undefined,
+      initialTab: 'cover',
       onClose: () => host.remove(),
-      onSubmit: async ({ paper, pageSize, pageCount }) => {
+      onSubmit: async ({ title, cover, paper, pageSize, orientation, pageCount }) => {
         try {
-          const bytes = await buildNotebookPdf(paper, pageSize, pageCount);
-          await this._callbacks.onOpenBytes('Notebook.pdf', bytes, { paper, pageSize });
+          const baseName = title || tr('Untitled Notebook', 'دفتر بدون عنوان');
+          const fileName = baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
+          const activeCover = cover.category === 'none' ? NO_COVER_SPEC : cover;
+          const bytes = await buildNotebookPdf(paper, pageSize, pageCount, {
+            cover: activeCover,
+            orientation
+          });
+          await this._callbacks.onOpenBytes(fileName, bytes, {
+            paper,
+            pageSize,
+            orientation,
+            cover: activeCover
+          });
         } catch (err) {
           console.error('Error generating notebook:', err);
+        } finally {
+          host.remove();
+        }
+      }
+    });
+    dialog.render();
+  }
+
+  private openEditNotebookDialog(doc: RecentDocItem, libraryBody: HTMLElement): void {
+    if (!doc.notebook) return;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    const dialog = new NotebookDialogComponent(host, {
+      mode: 'edit',
+      title: doc.name,
+      cover: doc.notebook.cover ?? NO_COVER_SPEC,
+      paper: doc.notebook.paper,
+      pageSize: doc.notebook.pageSize,
+      orientation: doc.notebook.orientation ?? 'portrait',
+      initialTab: 'cover',
+      onClose: () => host.remove(),
+      onSubmit: async ({ title, cover, paper, pageSize, orientation }) => {
+        try {
+          const activeCover = cover.category === 'none' ? NO_COVER_SPEC : cover;
+          const ok = await notebookController.restyleStoredNotebook(doc.id, {
+            title,
+            cover: activeCover,
+            paper,
+            pageSize,
+            orientation
+          });
+          if (ok) {
+            this._recentDocs = await getRecentDocuments();
+            this.renderFolderTabs(libraryBody);
+            this.renderLibraryResults(libraryBody);
+            showToast(tr('Notebook cover & style updated', 'جلد و تنظیمات دفترچه به‌روزرسانی شد'), 'success');
+          }
+        } catch (err: any) {
+          showToast(tr(`Could not update notebook: ${err.message}`, `خطا در ویرایش دفترچه: ${err.message}`), 'error');
         } finally {
           host.remove();
         }

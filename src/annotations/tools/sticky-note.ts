@@ -971,6 +971,31 @@ export class StickyNoteTool {
     ctx.restore();
   }
 
+  /**
+   * Applies the sticky note's rounded card clip path directly in page coordinates
+   * (for StreamingInkRenderer / StreamingHighlighterRenderer `clipCallback`).
+   */
+  public applyNoteClipPath(ctx: CanvasRenderingContext2D, ann: StickyNoteAnnotation): void {
+    const b = ann.box;
+    const m = getStickyNoteLayoutMetrics(b);
+    if (ann.rotation) {
+      const cx = b.x + b.width / 2;
+      const cy = b.y + b.height / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(ann.rotation);
+      ctx.translate(-cx, -cy);
+    }
+    drawRoundedRectPath(
+      ctx,
+      b.x + 1.5,
+      b.y + 1.5,
+      b.width - 3,
+      b.height - 3,
+      Math.max(2, m.cornerRadius - 1.5)
+    );
+    ctx.clip();
+  }
+
   public start(
     point: Point,
     pageIndex: number,

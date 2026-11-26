@@ -1420,28 +1420,379 @@ input[type="range"] {
   color: var(--text-primary);
 }
 
-/* Notebook paper chooser: preview on one side, controls on the other. */
+/* Notebook Studio Modal (Goodnotes-inspired split-pane Cover + Paper selector) */
 .modal-dialog.notebook-dialog {
   max-width: 760px;
 }
 
-.notebook-body {
+.modal-dialog.notebook-dialog.is-studio {
+  width: min(920px, calc(100vw - 32px));
+  max-width: 920px;
+  height: min(670px, calc(100vh - 44px));
+  max-height: calc(100vh - 44px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 16px;
+}
+
+.nb-studio-layout {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 230px 1fr;
-  gap: var(--space-5);
-  padding: var(--space-5);
+  grid-template-columns: 236px 1fr;
+  overflow: hidden;
+}
+
+/* Left Preview Rail */
+.nb-studio-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px 16px;
+  background: color-mix(in srgb, var(--bg-app) 45%, var(--bg-surface));
+  border-inline-end: 1px solid var(--border-subtle);
   overflow-y: auto;
 }
 
-.notebook-preview {
+.nb-rail-field,
+.nb-rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.nb-rail-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.nb-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.nb-rail-card {
+  appearance: none;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-2);
+  gap: 8px;
+  width: 100%;
+  padding: 12px 12px 10px;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  background: color-mix(in srgb, var(--bg-surface) 75%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
 }
 
-/* The sheet is the one surface that must not be themed: it shows the paper
-   colour the user picked, at the page's real aspect ratio. */
+.nb-rail-card:hover {
+  background: color-mix(in srgb, var(--bg-elevated, var(--bg-surface)) 90%, var(--accent) 4%);
+}
+
+.nb-rail-card.is-active {
+  border-color: var(--accent, #2596f3);
+  background: color-mix(in srgb, var(--accent, #2596f3) 7%, var(--bg-surface));
+}
+
+.nb-rail-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+}
+
+.nb-rail-cover-art .nb-cover-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.28));
+}
+
+.nb-rail-paper-art {
+  width: 106px;
+}
+
+.nb-rail-paper-canvas {
+  width: 100%;
+  border-radius: 5px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+}
+
+.nb-rail-card-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right Main Content */
+.nb-studio-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-surface);
+}
+
+.nb-studio-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.nb-topbar-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.nb-size-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border-medium);
+  background: color-mix(in srgb, var(--bg-app) 40%, var(--bg-surface));
+  color: var(--text-primary);
+}
+
+.nb-size-icon {
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.nb-topbar-select {
+  appearance: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+}
+
+.nb-topbar-select option {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.nb-orient-group {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border-medium);
+  background: color-mix(in srgb, var(--bg-app) 40%, var(--bg-surface));
+  gap: 2px;
+}
+
+.nb-orient-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 26px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.nb-orient-btn:hover {
+  color: var(--text-primary);
+}
+
+.nb-orient-btn.is-active {
+  background: color-mix(in srgb, var(--accent, #2596f3) 18%, transparent);
+  color: var(--accent, #2596f3);
+}
+
+.nb-studio-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+}
+
+/* Categorized Cover Gallery */
+.nb-pane-cover {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.nb-cover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nb-section-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nb-section-chevron {
+  font-size: 11px;
+  color: var(--text-secondary);
+  width: 12px;
+  text-align: center;
+}
+
+.nb-cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 16px 14px;
+}
+
+.nb-cover-grid[hidden] {
+  display: none;
+}
+
+.nb-cover-tile {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: center;
+}
+
+.nb-cover-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 5px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  transition: border-color 140ms ease, transform 150ms ease, background-color 140ms ease;
+  box-sizing: border-box;
+}
+
+.nb-cover-tile:hover .nb-cover-frame {
+  transform: translateY(-2px);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+
+.nb-cover-tile.is-selected .nb-cover-frame {
+  border-color: var(--accent, #2596f3);
+  background: color-mix(in srgb, var(--accent, #2596f3) 10%, transparent);
+}
+
+.nb-cover-frame .nb-cover-svg {
+  width: 100%;
+  max-width: 82px;
+  height: auto;
+  display: block;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.24));
+}
+
+.nb-cover-tile.is-no-cover .nb-cover-svg {
+  filter: none;
+  color: var(--text-secondary);
+}
+
+.nb-cover-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--text-secondary);
+  transition: color 140ms ease;
+}
+
+.nb-cover-tile.is-selected .nb-cover-label {
+  color: var(--accent, #2596f3);
+  font-weight: 600;
+}
+
+/* Paper Customization Pane */
+.nb-pane-paper {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.nb-pane-paper[hidden],
+.nb-pane-cover[hidden] {
+  display: none;
+}
+
+.nb-paper-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.nb-large-paper-canvas {
+  width: 100%;
+}
+
+/* Studio Footer */
+.nb-studio-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 13px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-app) 35%, var(--bg-surface));
+  flex-shrink: 0;
+}
+
+.nb-footer-cancel,
+.nb-footer-submit {
+  border-radius: 999px;
+  padding-inline: 18px;
+}
+
+/* Legacy helpers retained for paper customization controls */
 .paper-preview {
   width: 100%;
   border: 1px solid var(--border-medium);
@@ -1486,8 +1837,49 @@ input[type="range"] {
   cursor: pointer;
 }
 
-.notebook-actions {
-  padding: 0 var(--space-5) var(--space-5);
+@media (max-width: 720px) {
+  .modal-dialog.notebook-dialog.is-studio {
+    width: calc(100vw - 16px);
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+  .nb-studio-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .nb-studio-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+    padding: 12px 14px;
+    border-inline-end: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .nb-rail-field {
+    flex: 1 1 100%;
+  }
+  .nb-rail-group {
+    flex: 1 1 120px;
+  }
+  .nb-rail-card {
+    flex-direction: row;
+    padding: 8px 10px;
+  }
+  .nb-rail-art {
+    width: 36px;
+    flex-shrink: 0;
+  }
+  .nb-rail-paper-art {
+    width: 34px;
+  }
+  .nb-pane-paper {
+    grid-template-columns: 1fr;
+  }
+  .nb-paper-hero {
+    max-width: 160px;
+    margin: 0 auto;
+  }
 }
 
 /* Native colour input shown as a plain swatch. */

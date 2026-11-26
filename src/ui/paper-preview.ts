@@ -5,22 +5,23 @@
  * cannot drift from what actually lands in the document.
  */
 
-import { PaperStyle, PageSizeName, PAGE_SIZES } from '../core/types';
+import { PaperStyle, PageSizeName, NotebookOrientation, resolveNotebookPageDimensions } from '../core/types';
 import { paperGeometry } from '../io/notebook';
 
 /**
- * Paints `paper` into `canvas`, fitting the given page size. Sizes the canvas
- * backing store for the device pixel ratio so the rules stay crisp.
+ * Paints `paper` into `canvas`, fitting the given page size and orientation.
+ * Sizes the canvas backing store for the device pixel ratio so rules stay crisp.
  */
 export function drawPaperPreview(
   canvas: HTMLCanvasElement,
   paper: PaperStyle,
-  pageSize: PageSizeName
+  pageSize: PageSizeName,
+  orientation: NotebookOrientation = 'portrait'
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  const page = PAGE_SIZES[pageSize] ?? PAGE_SIZES.letter;
+  const page = resolveNotebookPageDimensions(pageSize, orientation);
   const box = canvas.getBoundingClientRect();
   const cssW = box.width || canvas.clientWidth || 200;
   const dpr = window.devicePixelRatio || 1;

@@ -190,15 +190,10 @@ export class PenTool {
   public finish(layerId: string): PenAnnotation | null {
     if (this._activePoints.length === 0) return null;
 
-    // Points are already causally One-Euro smoothed during live streaming:
-    // setting `preSmoothed: true` guarantees 0.000px visual shift on pen lift.
+    // Points are already causally One-Euro smoothed and painted verbatim during
+    // live streaming; never append unrendered _liveTip tail points on pen lift
+    // so committed ink matches the live stroke pixel-for-pixel with zero shift.
     const finalizedPoints = [...this._activePoints];
-    if (this._liveTip && finalizedPoints.length > 0) {
-      const last = finalizedPoints[finalizedPoints.length - 1];
-      if (Math.hypot(this._liveTip.x - last.x, this._liveTip.y - last.y) > 0.04) {
-        finalizedPoints.push(this._liveTip);
-      }
-    }
     const box: BoundingBox = computePointsBoundingBox(finalizedPoints, this._width);
 
     const annotation: PenAnnotation = {

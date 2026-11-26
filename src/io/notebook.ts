@@ -11,7 +11,14 @@
  */
 
 import { PDFDocument, rgb } from 'pdf-lib';
-import { PaperStyle, PageSizeName, PAGE_SIZES } from '../core/types';
+import {
+  PaperStyle,
+  PageSizeName,
+  NotebookCoverSpec,
+  NotebookOrientation,
+  resolveNotebookPageDimensions
+} from '../core/types';
+import { drawNotebookCoverPage, hasNotebookCover } from './notebook-covers';
 
 export const DEFAULT_PAPER: PaperStyle = {
   pattern: 'lined',
@@ -129,16 +136,30 @@ function drawPage(
   }
 }
 
-/** Builds the complete notebook PDF for a spec and page count. */
+export interface BuildNotebookPdfOptions {
+  cover?: NotebookCoverSpec | null;
+  orientation?: NotebookOrientation;
+}
+
+/**
+ * Builds the complete notebook PDF for a spec and paper page count.
+ * When `options.cover` is active (not `'none'`), Page 1 (index 0) is rendered as
+ * the matching vector book cover followed by `paperPageCount` paper sheets.
+ */
 export async function buildNotebookPdf(
   paper: PaperStyle,
   pageSize: PageSizeName,
-  pageCount: number
+  paperPageCount: number,
+  options?: BuildNotebookPdfOptions
 ): Promise<Uint8Array> {
-  const { width, height } = PAGE_SIZES[pageSize] ?? PAGE_SIZES.letter;
+  const { width, height } = resolveNotebookPageDimensions(pageSize, options?.orientation ?? 'portrait');
   const pdfDoc = await PDFDocument.create();
 
-  for (let i = 0; i < Math.max(1, pageCount); i++) {
+  if (options?.cover && hasNotebookCover(options.cover)) {
+    drawNotebookCoverPage(pdfDoc.addPage([width, height]), options.cover, width, height);
+  }
+
+  for (let i = 0; i < Math.max(1, paperPageCount); i++) {
     drawPage(pdfDoc.addPage([width, height]), paper, width, height);
   }
 

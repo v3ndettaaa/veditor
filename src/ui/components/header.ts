@@ -454,16 +454,20 @@ export class HeaderComponent {
 
     const dialog = new NotebookDialogComponent(host, {
       mode: 'edit',
+      title: doc.name,
+      cover: doc.notebook.cover,
       paper: doc.notebook.paper,
       pageSize: doc.notebook.pageSize,
+      orientation: doc.notebook.orientation ?? 'portrait',
+      initialTab: 'cover',
       onClose: () => host.remove(),
-      onSubmit: async ({ paper, pageSize }) => {
+      onSubmit: async ({ title, cover, paper, pageSize, orientation }) => {
         try {
-          showToast(fa ? 'در حال اعمال کاغذ…' : 'Applying paper…', 'progress');
-          await notebookController.restyle(paper, pageSize);
-          showToast(fa ? 'طرح کاغذ به‌روزرسانی شد' : 'Paper updated', 'success');
+          showToast(fa ? 'در حال اعمال تنظیمات دفترچه…' : 'Updating notebook style…', 'progress');
+          await notebookController.restyle({ title, cover, paper, pageSize, orientation });
+          showToast(fa ? 'جلد و کاغذ دفترچه به‌روزرسانی شد' : 'Notebook style updated', 'success');
         } catch (err: any) {
-          showToast(fa ? `خطا در اعمال کاغذ: ${err.message}` : `Could not apply paper: ${err.message}`, 'error');
+          showToast(fa ? `خطا در اعمال تنظیمات: ${err.message}` : `Could not update notebook: ${err.message}`, 'error');
         } finally {
           host.remove();
         }

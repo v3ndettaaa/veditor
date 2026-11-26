@@ -6,6 +6,7 @@
 import { StrokePoint, Point, BoundingBox } from '../core/types';
 import {
   buildAnalyticalRibbonPath2D,
+  buildUnifiedPenPathPlan,
   StreamingInkRenderer,
   type RibbonSample
 } from './ink-engine';
@@ -956,8 +957,22 @@ export function renderSmoothStroke(
         }
         cached = { key: cacheKey, highlighterPath: path };
       } else {
-        const pts = preSmoothed ? points : smoothStrokePoints(points, smoothing);
-        const penPlan = buildVectorPenPlan(pts, baseWidth, pressureCurve, pressureEnabled, strength);
+        const penPlan = preSmoothed
+          ? buildUnifiedPenPathPlan(
+              points,
+              baseWidth,
+              pressureCurve,
+              pressureEnabled,
+              strength,
+              calculateStrokeWidth
+            )
+          : buildVectorPenPlan(
+              smoothStrokePoints(points, smoothing),
+              baseWidth,
+              pressureCurve,
+              pressureEnabled,
+              strength
+            );
         cached = { key: cacheKey, penPlan };
       }
       committedStrokePathCache.set(points, cached);

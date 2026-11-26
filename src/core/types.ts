@@ -351,6 +351,50 @@ export const PAGE_SIZES = {
 
 export type PageSizeName = keyof typeof PAGE_SIZES;
 
+export type NotebookOrientation = 'portrait' | 'landscape';
+
+export type NotebookCoverCategory = 'none' | 'simple' | 'solid' | 'textured';
+
+export type NotebookCoverPattern =
+  | 'none'
+  | 'simple-ruled'
+  | 'solid-band'
+  | 'linen'
+  | 'blueprint'
+  | 'dot-foil'
+  | 'terrazzo';
+
+export interface NotebookCoverSpec {
+  id: string;
+  category: NotebookCoverCategory;
+  label: string;
+  labelFa: string;
+  bgColor: string;
+  accentColor: string;
+  spineColor?: string;
+  inkColor?: string;
+  pattern: NotebookCoverPattern;
+}
+
+/**
+ * Resolves exact PDF page point dimensions for a notebook page size and orientation.
+ */
+export function resolveNotebookPageDimensions(
+  pageSize: PageSizeName,
+  orientation: NotebookOrientation = 'portrait'
+): { width: number; height: number } {
+  const base = PAGE_SIZES[pageSize] ?? PAGE_SIZES.letter;
+  if (base.width === base.height) {
+    return { width: base.width, height: base.height };
+  }
+  const longSide = Math.max(base.width, base.height);
+  const shortSide = Math.min(base.width, base.height);
+  if (orientation === 'landscape') {
+    return { width: longSide, height: shortSide };
+  }
+  return { width: shortSide, height: longSide };
+}
+
 /**
  * Marks a document as an app-generated notebook rather than an imported file.
  * Its bytes are fully derived from this spec plus its page count, so it can be
@@ -359,6 +403,8 @@ export type PageSizeName = keyof typeof PAGE_SIZES;
 export interface NotebookSpec {
   paper: PaperStyle;
   pageSize: PageSizeName;
+  orientation?: NotebookOrientation;
+  cover?: NotebookCoverSpec | null;
 }
 
 export interface DocumentSession {

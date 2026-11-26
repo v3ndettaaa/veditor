@@ -9,8 +9,14 @@ import { history, AddAnnotationCommand, DeleteAnnotationsCommand, ReplaceAnnotat
 import { mergeBoundingBoxes, computePointsBoundingBox, findNearestVertex, distance, distanceToSegment } from '../utils/geometry';
 import { resolveAdaptiveCanvasDpr } from '../utils/dpi';
 import { fitStroke, type FittedShape } from '../utils/shape-fit';
-import { renderLiveStroke } from '../annotations/spline';
-import { getLowLatency2DContext } from '../annotations/ink-engine';
+import { renderLiveStroke, calculateStrokeWidth } from '../annotations/spline';
+import {
+  getLowLatency2DContext,
+  OneEuroStrokeFilter,
+  StreamingInkRenderer,
+  StreamingHighlighterRenderer
+} from '../annotations/ink-engine';
+import { computeStickyResizePreview } from '../annotations/resize-preview';
 import { tween, easeOutCubic, type TweenHandle } from '../utils/tween';
 import { annotationEngine } from '../annotations/engine';
 import { PressureEngine } from './pressure';
@@ -106,16 +112,22 @@ export class PointerHandler {
     hasLifted: boolean;
   } | null = null;
   /**
-   * GPU-composited drag sprite overlay for zero-lag move/rotate of large
-   * selections: rasterized ONCE on lift, then moved purely via CSS `transform`
-   * on the compositor thread (0ms Canvas2D work per frame).
+   * GPU-composited drag sprite overlay for zero-lag move/rotate/sticky-resize:
+   * rasterized ONCE on lift, then moved/scaled purely via CSS `transform`
+   * on the compositor thread (0ms Canvas2D re-rasterization per frame).
    */
   private _dragOverlay: {
     canvas: HTMLCanvasElement;
     pageIndex: number;
     centerCssX: number;
     centerCssY: number;
+    spriteBox: BoundingBox;
+    isResize: boolean;
   } | null = null;
+  /** Causal filter + O(1) append-only ink/highlighter streamers for lag-free Sticky Note writing. */
+  private readonly _stickyStrokeFilter = new OneEuroStrokeFilter();
+  private readonly _stickyInkRenderer = new StreamingInkRenderer();
+  private readonly _stickyHighlighterRenderer = new StreamingHighlighterRenderer();
   /**
    * When true, dragging a rectangle's corner handle keeps 90° rectangular corners
    * (resizing the rectangle); when false (default), dragging a corner moves that
@@ -329,9 +341,20 @@ export class PointerHandler {
     ov.canvas.height = 0;
   }
 
+  private isGpuStickyResize(drag: NonNullable<PointerHandler['_selectDrag']>): boolean {
+    if (drag.mode !== 'resize' || drag.originals.size !== 1) return false;
+    const orig = drag.originalsList[0];
+    if (!orig || orig.type !== 'sticky-note') return false;
+    if (drag.handle === 'start' || drag.handle === 'end') return false;
+    if (typeof drag.handle === 'string' && drag.handle.startsWith('vertex:')) return false;
+    return true;
+  }
+
   private createDragOverlay(
     drag: NonNullable<PointerHandler['_selectDrag']>,
-    scratchCanvas: HTMLCanvasElement
+    scratchCanvas: HTMLCanvasElement,
+    includeSelectionHandles: boolean = true,
+    isResize: boolean = false
   ): boolean {
     this.destroyDragOverlay();
     const container = scratchCanvas.parentElement;
@@ -341,7 +364,7 @@ export class PointerHandler {
     const spriteBox = this.computeSelectionDirtyBox(
       drag.merged,
       drag.originalsList,
-      drag.mode === 'rotate'
+      drag.mode === 'rotate' || Boolean(drag.originalsList[0]?.rotation)
     );
     const cssW = Math.max(2, Math.ceil(spriteBox.width * zoom));
     const cssH = Math.max(2, Math.ceil(spriteBox.height * zoom));
@@ -365,7 +388,9 @@ export class PointerHandler {
     ctx.save();
     ctx.translate(-spriteBox.x * spriteScale, -spriteBox.y * spriteScale);
     annotationEngine.renderCommittedAnnotations(ctx, drag.originalsList, [], spriteScale);
-    selectionManager.render(ctx, drag.originalsList, spriteScale);
+    if (includeSelectionHandles) {
+      selectionManager.render(ctx, drag.originalsList, spriteScale);
+    }
     ctx.restore();
 
     container.appendChild(overlay);
@@ -374,7 +399,9 @@ export class PointerHandler {
       canvas: overlay,
       pageIndex: drag.pageIndex,
       centerCssX: (center.x - spriteBox.x) * zoom,
-      centerCssY: (center.y - spriteBox.y) * zoom
+      centerCssY: (center.y - spriteBox.y) * zoom,
+      spriteBox,
+      isResize
     };
     return true;
   }
@@ -1174,24 +1201,79 @@ export class PointerHandler {
         }
       } else {
         if (mode === 'pen') {
-          this.startHoldTimer({ x: clampedPt.x, y: clampedPt.y });
+          const rawSmoothing = this._activeStickyStroke.smoothing || 'medium';
+          const normalizedSmoothing = rawSmoothing === 'light'
+            ? 'subtle'
+            : rawSmoothing === 'heavy'
+              ? 'high'
+              : rawSmoothing;
+          this._stickyStrokeFilter.reset(normalizedSmoothing);
+          const filteredStart = this._stickyStrokeFilter.filter(
+            clampedPt.x,
+            clampedPt.y,
+            clampedPt.pressure ?? 0.5,
+            clampedPt.time ?? performance.now(),
+            Math.max(0.25, store.zoom),
+            clampedPt.tiltX,
+            clampedPt.tiltY
+          );
+          this._activeStickyStroke.points = [filteredStart];
+          this._stickyInkRenderer.reset();
+          this.startHoldTimer({ x: filteredStart.x, y: filteredStart.y });
+        } else if (mode === 'highlighter') {
+          this._stickyHighlighterRenderer.reset();
         }
         if (this._pageScratchCtx && this._pageScratchCanvas) {
           const c = this._pageScratchCtx;
           const cv = this._pageScratchCanvas;
-          const rs = store.zoom * this.renderDpr();
-          this.clearScratchpadDirty(c, cv);
-          this.withScratchOffset(c, cv, () => {
-            stickyNoteTool.renderLiveStrokeInNote(c, note, [clampedPt], strokeColor, strokeW, strokeOpacity, rs, {
-              tool: mode,
-              pressureEnabled: this._activeStickyStroke?.pressureEnabled,
-              pressureCurve: this._activeStickyStroke?.pressureCurve,
-              pressureStrength: this._activeStickyStroke?.pressureStrength,
-              smoothing: this._activeStickyStroke?.smoothing,
-              blendMode: this._activeStickyStroke?.blendMode,
-              tipShape: this._activeStickyStroke?.tipShape
+          const dpr = this.renderDpr();
+          const rs = store.zoom * dpr;
+          const ox = (parseFloat(cv.dataset.offsetX || '0') || 0) * dpr;
+          const oy = (parseFloat(cv.dataset.offsetY || '0') || 0) * dpr;
+          if (mode === 'pen') {
+            this._stickyInkRenderer.render(
+              c,
+              cv,
+              this._activeStickyStroke.points,
+              strokeColor,
+              strokeW,
+              this._activeStickyStroke.pressureCurve || 'linear',
+              this._activeStickyStroke.pressureEnabled !== false,
+              this._activeStickyStroke.pressureStrength || 'balanced',
+              rs,
+              ox,
+              oy,
+              calculateStrokeWidth,
+              null,
+              null,
+              (clipCtx) => stickyNoteTool.applyNoteClipPath(clipCtx, note)
+            );
+          } else if (mode === 'highlighter' && !this._activeStickyStroke.straightLine) {
+            this._stickyHighlighterRenderer.render(
+              c,
+              cv,
+              this._activeStickyStroke.points,
+              strokeColor,
+              strokeW,
+              rs,
+              ox,
+              oy,
+              (clipCtx) => stickyNoteTool.applyNoteClipPath(clipCtx, note)
+            );
+          } else {
+            this.clearScratchpadDirty(c, cv);
+            this.withScratchOffset(c, cv, () => {
+              stickyNoteTool.renderLiveStrokeInNote(c, note, [clampedPt], strokeColor, strokeW, strokeOpacity, rs, {
+                tool: mode,
+                pressureEnabled: this._activeStickyStroke?.pressureEnabled,
+                pressureCurve: this._activeStickyStroke?.pressureCurve,
+                pressureStrength: this._activeStickyStroke?.pressureStrength,
+                smoothing: this._activeStickyStroke?.smoothing,
+                blendMode: this._activeStickyStroke?.blendMode,
+                tipShape: this._activeStickyStroke?.tipShape
+              });
             });
-          });
+          }
           const pad = Math.max(12, strokeW + 8);
           this.setScratchpadDirtyFromPageBox({
             x: note.box.x - pad,
@@ -1852,10 +1934,14 @@ export class PointerHandler {
             }, rs);
           });
         } else {
-          const minDist = 0.65 / Math.max(1, store.zoom);
+          const effZoom = Math.max(0.25, store.zoom);
+          const minDist = s.mode === 'pen'
+            ? Math.min(0.18, 0.24 / Math.max(1, effZoom))
+            : 0.65 / Math.max(1, effZoom);
+          const isStraightHl = s.mode === 'highlighter' && (s.straightLine || shiftKey);
           for (const rawPt of pts) {
             const clamped = stickyNoteTool.clampPointToNote(currentNote, rawPt, 2);
-            if (s.mode === 'highlighter' && (s.straightLine || shiftKey) && s.points.length >= 1) {
+            if (isStraightHl && s.points.length >= 1) {
               const startPt = s.points[0];
               if (shiftKey) {
                 const dx = clamped.x - startPt.x;
@@ -1874,8 +1960,24 @@ export class PointerHandler {
               }
             } else {
               const prev = s.points[s.points.length - 1];
-              if (!prev || Math.hypot(clamped.x - prev.x, clamped.y - prev.y) >= minDist) {
-                s.points.push(clamped);
+              const rawDist = prev ? Math.hypot(clamped.x - prev.x, clamped.y - prev.y) : Infinity;
+              if (rawDist >= minDist) {
+                if (s.mode === 'pen') {
+                  const filtered = this._stickyStrokeFilter.filter(
+                    clamped.x,
+                    clamped.y,
+                    clamped.pressure ?? 0.5,
+                    clamped.time ?? performance.now(),
+                    effZoom,
+                    clamped.tiltX,
+                    clamped.tiltY
+                  );
+                  s.points.push(filtered);
+                } else {
+                  s.points.push(clamped);
+                }
+              } else if (s.mode === 'pen' && prev) {
+                prev.pressure = prev.pressure * 0.55 + (clamped.pressure ?? 0.5) * 0.45;
               }
             }
           }
@@ -1894,9 +1996,14 @@ export class PointerHandler {
             if (!this._isPointerDown || !this._pageScratchCtx || !this._pageScratchCanvas) return;
             const c = this._pageScratchCtx;
             const cv = this._pageScratchCanvas;
-            const rs = store.zoom * this.renderDpr();
-            this.clearScratchpadDirty(c, cv);
+            const dpr = this.renderDpr();
+            const rs = store.zoom * dpr;
+            const ox = (parseFloat(cv.dataset.offsetX || '0') || 0) * dpr;
+            const oy = (parseFloat(cv.dataset.offsetY || '0') || 0) * dpr;
+
             if (s.mode === 'pen' && this._holdFired && this._holdShape) {
+              this._stickyInkRenderer.clearSettledDirtyOnCanvas(c, cv);
+              this.clearScratchpadDirty(c, cv);
               const preview = this.buildHoldShapeAnnotation(this._holdShape, pageIndex, 'layer-default');
               if (preview) {
                 this.withScratchOffset(c, cv, () => {
@@ -1905,7 +2012,41 @@ export class PointerHandler {
                   });
                 });
               }
+            } else if (s.mode === 'pen') {
+              // Strictly O(1) append-only GPU ink streaming inside the Sticky Note — ZERO mid-stroke clear!
+              this._stickyInkRenderer.render(
+                c,
+                cv,
+                s.points,
+                s.color,
+                s.strokeWidth,
+                s.pressureCurve || 'linear',
+                s.pressureEnabled !== false,
+                s.pressureStrength || 'balanced',
+                rs,
+                ox,
+                oy,
+                calculateStrokeWidth,
+                null,
+                null,
+                (clipCtx) => stickyNoteTool.applyNoteClipPath(clipCtx, currentNote)
+              );
+            } else if (s.mode === 'highlighter' && !isStraightHl) {
+              // Strictly O(1) append-only GPU highlighter streaming inside the Sticky Note!
+              this._stickyHighlighterRenderer.render(
+                c,
+                cv,
+                s.points,
+                s.color,
+                s.strokeWidth,
+                rs,
+                ox,
+                oy,
+                (clipCtx) => stickyNoteTool.applyNoteClipPath(clipCtx, currentNote)
+              );
             } else {
+              this._stickyHighlighterRenderer.restoreCanvasOpacity();
+              this.clearScratchpadDirty(c, cv);
               this.withScratchOffset(c, cv, () => {
                 stickyNoteTool.renderLiveStrokeInNote(
                   c,
@@ -1916,7 +2057,7 @@ export class PointerHandler {
                   s.opacity ?? 1.0,
                   rs,
                   {
-                    tool: s.mode === 'highlighter' ? 'highlighter' : 'pen',
+                    tool: 'highlighter',
                     pressureEnabled: s.pressureEnabled,
                     pressureCurve: s.pressureCurve,
                     pressureStrength: s.pressureStrength,
@@ -2073,7 +2214,9 @@ export class PointerHandler {
             if (!drag.hasLifted) {
               drag.hasLifted = true;
               if (drag.mode === 'move' || drag.mode === 'rotate') {
-                this.createDragOverlay(drag, scratchCanvas);
+                this.createDragOverlay(drag, scratchCanvas, true, false);
+              } else if (this.isGpuStickyResize(drag)) {
+                this.createDragOverlay(drag, scratchCanvas, false, true);
               }
               onNeedRepaint();
             }
@@ -2136,6 +2279,57 @@ export class PointerHandler {
                 this.computeSelectionDirtyBox(drag.merged, drag.originalsList, true),
                 rs
               );
+            } else if (
+              this._dragOverlay &&
+              this._dragOverlay.isResize &&
+              this._dragOverlay.pageIndex === pageIndex &&
+              drag.originalsList[0]?.type === 'sticky-note'
+            ) {
+              // 60fps GPU-composited Sticky Note resize preview: zero per-frame deep-cloning
+              // of embedded strokes/items, zero shadowBlur, zero Path2D cache invalidation.
+              const origNote = drag.originalsList[0] as StickyNoteAnnotation;
+              const zoom = Math.max(store.zoom || 1, 0.05);
+              let effLast = drag.lastPt;
+              if (origNote.rotation) {
+                effLast = rotatePoint(drag.lastPt, boxCenter(drag.merged), -origNote.rotation);
+              }
+              const t = this.selectTransformFor(drag, effLast, drag.shiftKey);
+              const origBox = origNote.collapsed
+                ? stickyNoteTool.getCollapsedIconBox(origNote)
+                : origNote.box;
+              const preview = computeStickyResizePreview(
+                origBox,
+                this._dragOverlay.spriteBox,
+                t,
+                zoom,
+                { collapsed: origNote.collapsed, rotation: origNote.rotation }
+              );
+              this._activeLoupeTarget = null;
+              this._dragOverlay.canvas.style.transformOrigin = preview.cssTransformOrigin;
+              this._dragOverlay.canvas.style.transform = preview.cssTransform;
+
+              // Draw ONLY crisp unstretched selection frame + 8 resize handles on scratchpad (~0.05ms)
+              const c = this._pageScratchCtx;
+              const cv = this._pageScratchCanvas || scratchCanvas;
+              if (c && cv) {
+                const rs = store.zoom * this.renderDpr();
+                this.clearScratchpadDirty(c, cv);
+                const lightPreviewNote: StickyNoteAnnotation = origNote.collapsed
+                  ? {
+                      ...origNote,
+                      box: { ...origNote.box, x: preview.nextBox.x, y: preview.nextBox.y },
+                      iconWidth: preview.nextBox.width,
+                      iconHeight: preview.nextBox.height
+                    }
+                  : { ...origNote, box: preview.nextBox };
+                this.withScratchOffset(c, cv, () => {
+                  selectionManager.render(c, [lightPreviewNote], rs);
+                });
+                this.setScratchpadDirtyFromPageBox(
+                  this.computeSelectionDirtyBox(preview.nextBox, [lightPreviewNote]),
+                  rs
+                );
+              }
             } else {
               const c = this._pageScratchCtx;
               const cv = this._pageScratchCanvas || scratchCanvas;
@@ -2427,12 +2621,16 @@ export class PointerHandler {
       return;
     }
 
-    // Defer clearing the scratchpad for live pen/highlighter strokes until
-    // right after incremental stamping so there is 0ms blank flicker and O(1) dirty-rect clear.
+    // Defer clearing the scratchpad for live pen/highlighter strokes (page or sticky note)
+    // until right after commit/repaint so there is 0ms blank flicker and O(1) dirty-rect clear.
     const isIncrementalInkUp =
       !this._stickyItemDrag &&
-      !this._activeStickyStroke &&
-      ((tool === 'pen' && !this._holdFired) || tool === 'highlighter');
+      (
+        (!this._activeStickyStroke && ((tool === 'pen' && !this._holdFired) || tool === 'highlighter')) ||
+        (!!this._activeStickyStroke &&
+          !this._holdFired &&
+          (this._activeStickyStroke.mode === 'pen' || this._activeStickyStroke.mode === 'highlighter'))
+      );
     if (!isIncrementalInkUp && this._pageScratchCtx && this._pageScratchCanvas) {
       this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
     }
@@ -2524,9 +2722,7 @@ export class PointerHandler {
           const newStroke: StickyNoteStroke = {
             id: 'nstroke_' + Math.random().toString(36).substring(2, 9),
             tool: s.mode === 'highlighter' ? 'highlighter' : 'pen',
-            points: s.points.length === 1
-              ? [s.points[0], { ...s.points[0], x: s.points[0].x + 0.5, y: s.points[0].y + 0.5 }]
-              : s.points,
+            points: [...s.points],
             color: s.color,
             strokeWidth: s.strokeWidth,
             opacity: s.opacity ?? 1.0,
@@ -2534,6 +2730,7 @@ export class PointerHandler {
             pressureCurve: s.pressureCurve,
             pressureStrength: s.pressureStrength,
             smoothing: s.smoothing,
+            preSmoothed: s.mode === 'pen',
             blendMode: s.blendMode,
             tipShape: s.tipShape,
             createdAt: stickyNoteTool.nextContentTimestamp(currentNote)
@@ -2545,6 +2742,16 @@ export class PointerHandler {
           };
           history.execute(new ModifyAnnotationCommand(pageIndex, s.originalNote, updatedNote));
         }
+      }
+      if (this._pageScratchCtx && this._pageScratchCanvas) {
+        if (s.mode === 'pen') {
+          this._stickyInkRenderer.clearSettledDirtyOnCanvas(this._pageScratchCtx, this._pageScratchCanvas);
+        } else if (s.mode === 'highlighter') {
+          this._stickyHighlighterRenderer.clearDirtyOnCanvas(this._pageScratchCtx, this._pageScratchCanvas);
+        }
+      } else {
+        this._stickyInkRenderer.reset();
+        this._stickyHighlighterRenderer.reset();
       }
       this._isPointerDown = false;
       this._strokeTool = null;

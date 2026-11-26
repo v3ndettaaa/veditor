@@ -387,6 +387,171 @@ export type WidthCalcFn = (
   strength: 'light' | 'balanced' | 'strong'
 ) => number;
 
+export interface UnifiedPenBatch {
+  width: number;
+  path: Path2D;
+}
+
+export interface UnifiedPenPathPlan {
+  fillPath: Path2D | null;
+  batches: UnifiedPenBatch[];
+}
+
+/**
+ * Pure causal quadratic control-point calculation for segment `points[i-1] -> points[i]`.
+ * Depends ONLY on `points[i-2]`, `points[i-1]`, and `points[i]` (zero look-ahead), so live
+ * streaming and committed rendering produce mathematically identical curves with 0px shift.
+ */
+export function computeStreamingQuadControl(
+  points: readonly StrokePoint[],
+  i: number
+): { useQuad: boolean; cpx: number; cpy: number } {
+  const p1 = points[i - 1];
+  const p2 = points[i];
+  const mx = (p1.x + p2.x) * 0.5;
+  const my = (p1.y + p2.y) * 0.5;
+  if (i < 2) return { useQuad: false, cpx: mx, cpy: my };
+
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord <= 4.0) return { useQuad: false, cpx: mx, cpy: my };
+
+  const p0 = points[i - 2];
+  const pdx = p1.x - p0.x;
+  const pdy = p1.y - p0.y;
+  const pLen = Math.hypot(pdx, pdy);
+  if (pLen <= 0.4) return { useQuad: false, cpx: mx, cpy: my };
+
+  const dot = (pdx * dx + pdy * dy) / (pLen * chord);
+  if (dot <= 0.25) return { useQuad: false, cpx: mx, cpy: my };
+
+  const tx = p1.x + (pdx / pLen) * chord * 0.35;
+  const ty = p1.y + (pdy / pLen) * chord * 0.35;
+  return {
+    useQuad: true,
+    cpx: (mx + tx) * 0.5,
+    cpy: (my + ty) * 0.5
+  };
+}
+
+/**
+ * Single-source-of-truth vector `Path2D` plan for committed `preSmoothed` pen strokes.
+ * Mirrors `StreamingInkRenderer` segment-for-segment (identical causal quadratic curves,
+ * identical round-capped stroke width batching, zero retroactive backward clamping) so
+ * lifting the pen produces ZERO visual shift in curve, width, or stroke tail.
+ */
+export function buildUnifiedPenPathPlan(
+  points: readonly StrokePoint[],
+  baseWidth: number,
+  pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential',
+  pressureEnabled: boolean,
+  strength: 'light' | 'balanced' | 'strong',
+  calcWidth: WidthCalcFn
+): UnifiedPenPathPlan {
+  const n = points.length;
+  if (n === 0) return { fillPath: null, batches: [] };
+
+  const widthAt = (pt: StrokePoint): number =>
+    Math.max(
+      INK_MIN_WIDTH,
+      calcWidth(baseWidth, pt.pressure ?? 0.5, pressureCurve, pressureEnabled, strength)
+    );
+
+  // Initial contact dot (matches StreamingInkRenderer step 1)
+  const p0 = points[0];
+  const r0 = Math.max(INK_MIN_DOT_WIDTH * 0.5, widthAt(p0) * 0.5);
+  const dotPath = new Path2D();
+  dotPath.arc(p0.x, p0.y, r0, 0, Math.PI * 2, false);
+
+  if (n === 1) {
+    return { fillPath: dotPath, batches: [] };
+  }
+
+  const batches: UnifiedPenBatch[] = [];
+
+  if (!pressureEnabled) {
+    const strokeW = Math.max(INK_MIN_WIDTH, baseWidth);
+    const path = new Path2D();
+    path.moveTo(p0.x, p0.y);
+    for (let i = 1; i < n; i++) {
+      const p2 = points[i];
+      const q = computeStreamingQuadControl(points, i);
+      if (q.useQuad) {
+        path.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
+      } else {
+        path.lineTo(p2.x, p2.y);
+      }
+    }
+    batches.push({ width: strokeW, path });
+    return { fillPath: dotPath, batches };
+  }
+
+  // Variable-pressure batched paths mirroring StreamingInkRenderer verbatim
+  let activeBatchW = -1;
+  let activePath: Path2D | null = null;
+  const widthTol = Math.max(0.08, baseWidth * 0.04);
+
+  const flushBatch = () => {
+    if (activePath && activeBatchW > 0) {
+      batches.push({ width: activeBatchW, path: activePath });
+      activePath = null;
+    }
+  };
+
+  for (let i = 1; i < n; i++) {
+    const p1 = points[i - 1];
+    const p2 = points[i];
+    const w1 = widthAt(p1);
+    const w2 = widthAt(p2);
+    const dw = Math.abs(w2 - w1);
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const q = computeStreamingQuadControl(points, i);
+
+    if (dw <= widthTol) {
+      const avgW = (w1 + w2) * 0.5;
+      if (!activePath || Math.abs(avgW - activeBatchW) > widthTol) {
+        flushBatch();
+        activeBatchW = avgW;
+        activePath = new Path2D();
+        activePath.moveTo(p1.x, p1.y);
+      }
+      if (q.useQuad) {
+        activePath.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
+      } else {
+        activePath.lineTo(p2.x, p2.y);
+      }
+    } else {
+      flushBatch();
+      const steps = Math.min(3, Math.max(2, Math.ceil(dw / Math.max(0.25, baseWidth * 0.14))));
+      let prevX = p1.x;
+      let prevY = p1.y;
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const it = 1 - t;
+        const nx = q.useQuad
+          ? it * it * p1.x + 2 * it * t * q.cpx + t * t * p2.x
+          : p1.x + dx * t;
+        const ny = q.useQuad
+          ? it * it * p1.y + 2 * it * t * q.cpy + t * t * p2.y
+          : p1.y + dy * t;
+        const sw = w1 + (w2 - w1) * ((s - 0.5) / steps);
+        const segPath = new Path2D();
+        segPath.moveTo(prevX, prevY);
+        segPath.lineTo(nx, ny);
+        batches.push({ width: sw, path: segPath });
+        prevX = nx;
+        prevY = ny;
+      }
+      activeBatchW = -1;
+    }
+  }
+  flushBatch();
+
+  return { fillPath: dotPath, batches };
+}
+
 /**
  * Strictly O(1), zero-blit, zero-DOM-mutation append-only live ink streamer.
  *
@@ -577,33 +742,13 @@ export class StreamingInkRenderer {
         this.expandDirtyPx(anchor.x, anchor.y, pad, scale, offsetPxX, offsetPxY);
 
         for (let i = startIdx; i < n; i++) {
-          const p1 = points[i - 1];
           const p2 = points[i];
-          const dx = p2.x - p1.x;
-          const dy = p2.y - p1.y;
-          const chord = Math.hypot(dx, dy);
-
-          if (hasQuad && i >= 2 && chord > 4.0) {
-            const p0 = points[i - 2];
-            const pdx = p1.x - p0.x;
-            const pdy = p1.y - p0.y;
-            const pLen = Math.hypot(pdx, pdy);
-            if (pLen > 0.4) {
-              const dot = (pdx * dx + pdy * dy) / (pLen * chord);
-              if (dot > 0.25) {
-                const mx = (p1.x + p2.x) * 0.5;
-                const my = (p1.y + p2.y) * 0.5;
-                const tx = p1.x + (pdx / pLen) * chord * 0.35;
-                const ty = p1.y + (pdy / pLen) * chord * 0.35;
-                const cpx = (mx + tx) * 0.5;
-                const cpy = (my + ty) * 0.5;
-                targetCtx.quadraticCurveTo(cpx, cpy, p2.x, p2.y);
-                this.expandDirtyPx(p2.x, p2.y, pad, scale, offsetPxX, offsetPxY);
-                continue;
-              }
-            }
+          const q = hasQuad ? computeStreamingQuadControl(points, i) : { useQuad: false, cpx: 0, cpy: 0 };
+          if (q.useQuad) {
+            targetCtx.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
+          } else {
+            targetCtx.lineTo(p2.x, p2.y);
           }
-          targetCtx.lineTo(p2.x, p2.y);
           this.expandDirtyPx(p2.x, p2.y, pad, scale, offsetPxX, offsetPxY);
         }
         targetCtx.stroke();
@@ -633,28 +778,7 @@ export class StreamingInkRenderer {
           const dw = Math.abs(w2 - w1);
           const dx = p2.x - p1.x;
           const dy = p2.y - p1.y;
-          const chord = Math.hypot(dx, dy);
-
-          // Compute optional gentle quadratic control point for smooth fast sweeps
-          let useQuad = false;
-          let cpx = (p1.x + p2.x) * 0.5;
-          let cpy = (p1.y + p2.y) * 0.5;
-          if (hasQuad && i >= 2 && chord > 4.0) {
-            const p0 = points[i - 2];
-            const pdx = p1.x - p0.x;
-            const pdy = p1.y - p0.y;
-            const pLen = Math.hypot(pdx, pdy);
-            if (pLen > 0.4) {
-              const dot = (pdx * dx + pdy * dy) / (pLen * chord);
-              if (dot > 0.25) {
-                const tx = p1.x + (pdx / pLen) * chord * 0.35;
-                const ty = p1.y + (pdy / pLen) * chord * 0.35;
-                cpx = (cpx + tx) * 0.5;
-                cpy = (cpy + ty) * 0.5;
-                useQuad = true;
-              }
-            }
-          }
+          const q = hasQuad ? computeStreamingQuadControl(points, i) : { useQuad: false, cpx: 0, cpy: 0 };
 
           if (dw <= widthTol) {
             const avgW = (w1 + w2) * 0.5;
@@ -666,8 +790,8 @@ export class StreamingInkRenderer {
               targetCtx.moveTo(p1.x, p1.y);
               pathOpen = true;
             }
-            if (useQuad) {
-              targetCtx.quadraticCurveTo(cpx, cpy, p2.x, p2.y);
+            if (q.useQuad) {
+              targetCtx.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
             } else {
               targetCtx.lineTo(p2.x, p2.y);
             }
@@ -679,11 +803,11 @@ export class StreamingInkRenderer {
             for (let s = 1; s <= steps; s++) {
               const t = s / steps;
               const it = 1 - t;
-              const nx = useQuad
-                ? it * it * p1.x + 2 * it * t * cpx + t * t * p2.x
+              const nx = q.useQuad
+                ? it * it * p1.x + 2 * it * t * q.cpx + t * t * p2.x
                 : p1.x + dx * t;
-              const ny = useQuad
-                ? it * it * p1.y + 2 * it * t * cpy + t * t * p2.y
+              const ny = q.useQuad
+                ? it * it * p1.y + 2 * it * t * q.cpy + t * t * p2.y
                 : p1.y + dy * t;
               const sw = w1 + (w2 - w1) * ((s - 0.5) / steps);
               targetCtx.lineWidth = sw;
@@ -812,7 +936,8 @@ export class StreamingHighlighterRenderer {
     baseWidth: number,
     scale: number,
     offsetPxX: number,
-    offsetPxY: number
+    offsetPxY: number,
+    clipCallback?: ((ctx: CanvasRenderingContext2D) => void) | null
   ): void {
     const n = points.length;
     if (n === 0) return;
@@ -854,6 +979,7 @@ export class StreamingHighlighterRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.translate(-offsetPxX, -offsetPxY);
     ctx.scale(scale, scale);
+    if (clipCallback) clipCallback(ctx);
 
     if (n === 1 && this._drawnEnd === 0) {
       const p0 = points[0];
