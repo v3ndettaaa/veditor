@@ -5,6 +5,7 @@
 
 import { store } from '../../core/store';
 import { getIconSvg } from '../../utils/icons';
+import { APP_LOGO_DATA_URL } from '../../utils/app-logo';
 import { escapeHtml } from '../../utils/html';
 import { saveActiveDocument, saveActiveDocumentAs, isDocumentDirty, forgetFileHandle } from '../../io/save';
 import { openPrintDialog } from './print-dialog';
@@ -131,7 +132,7 @@ export class HeaderComponent {
 
         <div class="header-logo" id="header-logo-btn" role="button" tabindex="0" aria-label="${escapeHtml(t('appName'))}">
           <span class="header-logo-frame">
-            <img src="icons/icon-32.png" alt="veditor" class="header-logo-icon">
+            <img src="${APP_LOGO_DATA_URL}" alt="veditor" class="header-logo-icon" decoding="sync">
           </span>
           <span class="header-logo-wordmark">${t('appName')}</span>
         </div>

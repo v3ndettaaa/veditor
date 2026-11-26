@@ -21,8 +21,12 @@
 [dir="rtl"] .landing-section-title,
 [dir="rtl"] .dropzone-prompt,
 [dir="rtl"] .pdf-loading-title,
-[dir="rtl"] .scratchpad-title {
+[dir="rtl"] .scratchpad-title,
+[dir="rtl"] .sg-rail-title,
+[dir="rtl"] .sg-stage-title,
+[dir="rtl"] .sg-heading {
   font-family: var(--font-display);
+  letter-spacing: 0;
 }
 
 [dir="rtl"] .sc-keycap,
@@ -55,7 +59,12 @@
 [dir="rtl"] .about-version-val,
 [dir="rtl"] .about-spec-figure,
 [dir="rtl"] .about-kbd,
-[dir="rtl"] .about-link-mono {
+[dir="rtl"] .about-link-mono,
+[dir="rtl"] .sg-meta-mono,
+[dir="rtl"] .sg-esc-hint,
+[dir="rtl"] .sg-dpi-input,
+[dir="rtl"] .sg-dpi-unit,
+[dir="rtl"] .sg-taper-range {
   font-family: var(--font-mono);
   direction: ltr;
   unicode-bidi: isolate;
@@ -112,6 +121,10 @@
 
 [dir="rtl"] .gn-switch.is-on .gn-switch-thumb {
   transform: translateX(-16px);
+}
+
+[dir="rtl"] .setting-switch input:checked + .setting-slider::before {
+  transform: translateX(-18px);
 }
 
 [dir="rtl"] .gn-range-slider::-webkit-slider-runnable-track,
