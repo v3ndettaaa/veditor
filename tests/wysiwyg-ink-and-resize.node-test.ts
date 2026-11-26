@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeStreamingQuadControl,
-  buildUnifiedPenPathPlan
+  buildUnifiedPenPathPlan,
+  warmInkPipeline,
+  isScratchChunkReusable
 } from '../src/annotations/ink-engine';
 import { calculateStrokeWidth } from '../src/annotations/spline';
 import { PenTool } from '../src/annotations/tools/pen';
@@ -73,6 +75,47 @@ test('buildUnifiedPenPathPlan builds deterministic Path2D batches matching Strea
   } finally {
     (globalThis as any).Path2D = prevPath2D;
   }
+});
+
+test('warmInkPipeline is idempotent and isScratchChunkReusable avoids redundant pointerdown reallocations', () => {
+  const firstRun = warmInkPipeline();
+  const secondRun = warmInkPipeline();
+  assert.equal(firstRun, true);
+  assert.equal(secondRun, false);
+
+  assert.equal(
+    isScratchChunkReusable({
+      displayBlock: true,
+      pixelWidth: 1600,
+      pixelHeight: 1200,
+      baseZoom: 2.25,
+      currentZoom: 2.25,
+      coversViewport: true
+    }),
+    true
+  );
+  assert.equal(
+    isScratchChunkReusable({
+      displayBlock: true,
+      pixelWidth: 1600,
+      pixelHeight: 1200,
+      baseZoom: 2.0,
+      currentZoom: 2.25,
+      coversViewport: true
+    }),
+    false
+  );
+  assert.equal(
+    isScratchChunkReusable({
+      displayBlock: true,
+      pixelWidth: 1,
+      pixelHeight: 1,
+      baseZoom: 2.25,
+      currentZoom: 2.25,
+      coversViewport: true
+    }),
+    false
+  );
 });
 
 test('computeStickyResizePreview computes exact GPU scale transform and clamps min dimensions', () => {

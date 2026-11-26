@@ -1024,3 +1024,87 @@ export class StreamingHighlighterRenderer {
     ctx.restore();
   }
 }
+
+let _inkPipelineWarmed = false;
+
+/**
+ * Idempotent one-time idle warm-up of the pen ink hot path:
+ * 1. Exercises `OneEuroStrokeFilter`, `computeStreamingQuadControl`,
+ *    `StreamingInkRenderer`, and `buildUnifiedPenPathPlan` so V8 JIT compiles
+ *    their hot loops before the user draws their very first stroke.
+ * 2. Executes a single tiny round-cap `Path2D` stroke on a detached 16x16
+ *    canvas (immediately collapsed to 0x0 afterwards) so Skia / Chromium
+ *    pre-compiles its GPU stroke shader without holding any persistent VRAM.
+ */
+export function warmInkPipeline(): boolean {
+  if (_inkPipelineWarmed) return false;
+  _inkPipelineWarmed = true;
+
+  const filter = new OneEuroStrokeFilter();
+  filter.reset('medium');
+  const synthPts: StrokePoint[] = [];
+  for (let i = 0; i < 6; i++) {
+    synthPts.push(filter.filter(2 + i * 2.2, 4 + Math.sin(i) * 2.5, 0.55, i * 8, 1));
+  }
+  const calcW: WidthCalcFn = (base, p) => Math.max(INK_MIN_WIDTH, base * (0.6 + p * 0.8));
+
+  if (typeof Path2D === 'function') {
+    buildUnifiedPenPathPlan(synthPts, 2.5, 'linear', true, 'balanced', calcW);
+  }
+
+  if (typeof document !== 'undefined') {
+    try {
+      const tiny = document.createElement('canvas');
+      tiny.width = 16;
+      tiny.height = 16;
+      const ctx = tiny.getContext('2d');
+      if (ctx) {
+        const renderer = new StreamingInkRenderer();
+        for (let i = 0; i < synthPts.length; i++) {
+          renderer.render(
+            ctx,
+            tiny,
+            synthPts.slice(0, i + 1),
+            '#111111',
+            2.5,
+            'linear',
+            true,
+            'balanced',
+            1,
+            0,
+            0,
+            calcW
+          );
+        }
+        ctx.clearRect(0, 0, 16, 16);
+      }
+      tiny.width = 0;
+      tiny.height = 0;
+    } catch {
+      // Headless / test environments without Canvas2D ignore safely.
+    }
+  }
+  return true;
+}
+
+/**
+ * Pure check determining whether an already-allocated High-DPI scratchpad chunk
+ * can be reused immediately on `pointerdown` without tearing down, reallocating,
+ * or repainting `annotChunkCanvas`.
+ */
+export function isScratchChunkReusable(params: {
+  displayBlock: boolean;
+  pixelWidth: number;
+  pixelHeight: number;
+  baseZoom: number;
+  currentZoom: number;
+  coversViewport: boolean;
+}): boolean {
+  if (!params.displayBlock) return false;
+  if (params.pixelWidth <= 1 || params.pixelHeight <= 1) return false;
+  if (!Number.isFinite(params.baseZoom) || Math.abs(params.baseZoom - params.currentZoom) > 0.0005) {
+    return false;
+  }
+  return params.coversViewport;
+}
+

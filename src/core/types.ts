@@ -296,7 +296,17 @@ export interface JumpHistoryItem {
   timestamp: number;
 }
 
-export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots' | 'isometric';
+export type PaperPattern =
+  | 'blank'
+  | 'lined'
+  | 'grid'
+  | 'dots'
+  | 'isometric'
+  | 'cornell'
+  | 'two-column'
+  | 'three-column'
+  | 'weekly'
+  | 'checklist';
 
 /** How a notebook's paper looks. Drawn into the PDF, so it exports as seen. */
 export interface PaperStyle {

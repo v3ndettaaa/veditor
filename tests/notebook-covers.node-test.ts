@@ -12,7 +12,16 @@ import {
   renderNotebookCoverSvg,
   remapDocumentPagesForCoverToggle
 } from '../src/io/notebook-covers';
-import { buildNotebookPdf, DEFAULT_PAPER } from '../src/io/notebook';
+import {
+  buildNotebookPdf,
+  DEFAULT_PAPER,
+  PAPER_TONES,
+  PAPER_TEMPLATES,
+  paperGeometry,
+  paperStyleForTemplate,
+  inferPaperToneId,
+  getPaperToneById
+} from '../src/io/notebook';
 import { resolveNotebookPageDimensions } from '../src/core/types';
 
 test('cover catalog includes Common, Simple, Solid, Textured, and No cover', () => {
@@ -36,6 +45,43 @@ test('cover catalog includes Common, Simple, Solid, Textured, and No cover', () 
     assert.ok(svgPortrait.includes('<svg') && svgPortrait.includes('</svg>'));
     assert.ok(svgLandscape.includes('viewBox="0 0 160 120"'));
   }
+});
+
+test('paper template catalog covers Essentials, Writing papers, Planner and builds valid PDFs', async () => {
+  assert.ok(PAPER_TONES.some(t => t.id === 'white'));
+  assert.ok(PAPER_TONES.some(t => t.id === 'dark'));
+  assert.equal(inferPaperToneId('#1f2126'), 'dark');
+  assert.equal(inferPaperToneId('#fefbe8'), 'yellow');
+  assert.equal(inferPaperToneId('#ffffff'), 'white');
+
+  assert.ok(PAPER_TEMPLATES.filter(t => t.category === 'essentials').length >= 5);
+  assert.ok(PAPER_TEMPLATES.filter(t => t.category === 'writing').length >= 4);
+  assert.ok(PAPER_TEMPLATES.filter(t => t.category === 'planner').length >= 2);
+
+  const darkTone = getPaperToneById('dark');
+  for (const tpl of PAPER_TEMPLATES) {
+    const style = paperStyleForTemplate(tpl, darkTone);
+    const geom = paperGeometry(style, 612, 792);
+    if (tpl.pattern === 'blank') {
+      assert.equal(geom.lines.length, 0);
+      assert.equal(geom.dots.length, 0);
+    } else if (tpl.pattern === 'dots') {
+      assert.ok(geom.dots.length > 50);
+    } else {
+      assert.ok(geom.lines.length > 5, `${tpl.id} should produce vector lines`);
+    }
+    if (tpl.pattern === 'weekly' || tpl.pattern === 'checklist') {
+      assert.ok(geom.rects.length >= 1, `${tpl.id} should produce vector frames/checkboxes`);
+    }
+  }
+
+  const cornell = PAPER_TEMPLATES.find(t => t.id === 'cornell')!;
+  const bytes = await buildNotebookPdf(paperStyleForTemplate(cornell, darkTone), 'letter', 2, {
+    cover: getNotebookCoverById('simple-allblack'),
+    orientation: 'portrait'
+  });
+  const doc = await PDFDocument.load(bytes);
+  assert.equal(doc.getPageCount(), 3);
 });
 
 test('buildNotebookPdf prepends Page 1 cover when selected and respects orientation', async () => {

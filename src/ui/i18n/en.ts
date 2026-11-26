@@ -167,6 +167,11 @@ export const en = {
     noCover: 'No cover',
     portrait: 'Portrait',
     landscape: 'Landscape',
+    paperTone: 'Paper tone',
+    paperEssentials: 'Essentials',
+    paperWriting: 'Writing papers',
+    paperPlanner: 'Planner',
+    paperCustomize: 'Customize',
     addPage: 'Page',
     addPageTitle: 'Append a blank page',
     preset: 'Preset',
@@ -187,7 +192,12 @@ export const en = {
       lined: 'Lined',
       grid: 'Grid',
       dots: 'Dots',
-      isometric: 'Isometric'
+      isometric: 'Isometric',
+      cornell: 'Cornell',
+      'two-column': 'Two Column',
+      'three-column': 'Three Column',
+      weekly: 'Weekly Grid',
+      checklist: 'Checklist'
     },
     presets: {
       ruled: 'Ruled',

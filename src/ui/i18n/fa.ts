@@ -167,6 +167,11 @@ export const fa = {
     noCover: 'بدون کاور',
     portrait: 'عمودی',
     landscape: 'افقی',
+    paperTone: 'تم رنگی کاغذ',
+    paperEssentials: 'پایه (Essentials)',
+    paperWriting: 'کاغذهای نوشتاری',
+    paperPlanner: 'برنامه‌ریز (Planner)',
+    paperCustomize: 'سفارشی‌سازی دقیق',
     addPage: 'افزودن صفحه',
     addPageTitle: 'افزودن یک صفحه جدید به انتهای دفترچه',
     preset: 'الگوی آماده',
@@ -187,7 +192,12 @@ export const fa = {
       lined: 'خط‌دار',
       grid: 'شطرنجی',
       dots: 'نقطه‌ای',
-      isometric: 'ایزومتریک'
+      isometric: 'ایزومتریک',
+      cornell: 'کرنل',
+      'two-column': 'دوستونی',
+      'three-column': 'سه‌ستونی',
+      weekly: 'هفتگی',
+      checklist: 'چک‌لیست'
     },
     presets: {
       ruled: 'دفتر خط‌دار',

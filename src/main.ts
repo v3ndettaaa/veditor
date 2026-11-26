@@ -16,6 +16,7 @@ import {
   ZoomGestureTransformState
 } from './core/viewport';
 import { annotationEngine } from './annotations/engine';
+import { getLowLatency2DContext, warmInkPipeline, isScratchChunkReusable } from './annotations/ink-engine';
 import { pointerHandler } from './input/pointer-handler';
 import { HeaderComponent } from './ui/components/header';
 import { ToolbarComponent } from './ui/components/toolbar';
@@ -1723,6 +1724,7 @@ class VeditorApp {
           p.scratchChunkCanvas.style.display = 'none';
           p.scratchChunkCanvas.width = 0;
           p.scratchChunkCanvas.height = 0;
+          delete p.scratchChunkCanvas.dataset.gpuPrimed;
         }
         const wasAnnotZero = p.annotCanvas.width <= 1 || p.annotCanvas.height <= 1;
         if (layout && (!this._isFastScrolling || wasAnnotZero)) {
@@ -1762,6 +1764,7 @@ class VeditorApp {
           p.scratchChunkCanvas.style.display = 'none';
           p.scratchChunkCanvas.width = 0;
           p.scratchChunkCanvas.height = 0;
+          delete p.scratchChunkCanvas.dataset.gpuPrimed;
         }
         continue;
       }
@@ -1873,14 +1876,18 @@ class VeditorApp {
         if (scratchChunk.width !== pw || scratchChunk.height !== ph) {
           scratchChunk.width = pw;
           scratchChunk.height = ph;
+          delete scratchChunk.dataset.gpuPrimed;
         }
+        this.primeScratchCanvasSurface(scratchChunk);
       } else if (scratchChunk.width > 1 || scratchChunk.height > 1) {
         scratchChunk.width = 0;
         scratchChunk.height = 0;
+        delete scratchChunk.dataset.gpuPrimed;
       }
       if (p.scratchCanvas.width > 1 || p.scratchCanvas.height > 1) {
         p.scratchCanvas.width = 0;
         p.scratchCanvas.height = 0;
+        delete p.scratchCanvas.dataset.gpuPrimed;
       }
     }
 
@@ -1905,18 +1912,95 @@ class VeditorApp {
   }
 
   /**
-   * Lazily pre-warms the active visible page's scratchpad canvas on idle after
-   * scroll/layout settles so the very first `pointerdown` has 0ms allocation lag.
+   * Forces Chromium/Skia to allocate and promote the GPU backing SkSurface
+   * for a newly sized scratchpad canvas during idle/hover, preventing the
+   * 30-80ms cold texture allocation stall on the user's very first pen stroke.
    */
-  private scheduleScratchpadPrewarm(pageIndex: number): void {
+  private primeScratchCanvasSurface(canvas: HTMLCanvasElement): void {
+    if (canvas.width <= 1 || canvas.height <= 1 || canvas.dataset.gpuPrimed === '1') return;
+    const ctx = getLowLatency2DContext(canvas);
+    if (!ctx) return;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.004)';
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.restore();
+    canvas.dataset.gpuPrimed = '1';
+  }
+
+  /**
+   * Aligns `scratchChunkCanvas` to an already-valid `annotChunkCanvas` without
+   * tearing down or repainting existing annotations on `pointerdown` / prewarm.
+   */
+  private syncScratchChunkFromAnnotChunk(
+    annotChunk: HTMLCanvasElement,
+    scratchChunk: HTMLCanvasElement
+  ): void {
+    scratchChunk.style.left = annotChunk.style.left;
+    scratchChunk.style.top = annotChunk.style.top;
+    scratchChunk.style.width = annotChunk.style.width;
+    scratchChunk.style.height = annotChunk.style.height;
+    scratchChunk.style.display = 'block';
+    scratchChunk.dataset.baseZoom = annotChunk.dataset.baseZoom || String(store.zoom);
+    scratchChunk.dataset.baseLeft = annotChunk.dataset.baseLeft || '0';
+    scratchChunk.dataset.baseTop = annotChunk.dataset.baseTop || '0';
+    scratchChunk.dataset.baseWidth = annotChunk.dataset.baseWidth || '0';
+    scratchChunk.dataset.baseHeight = annotChunk.dataset.baseHeight || '0';
+    scratchChunk.dataset.offsetX = annotChunk.dataset.offsetX || '0';
+    scratchChunk.dataset.offsetY = annotChunk.dataset.offsetY || '0';
+    if (scratchChunk.width !== annotChunk.width || scratchChunk.height !== annotChunk.height) {
+      scratchChunk.width = annotChunk.width;
+      scratchChunk.height = annotChunk.height;
+      delete scratchChunk.dataset.gpuPrimed;
+    }
+    this.primeScratchCanvasSurface(scratchChunk);
+  }
+
+  /** True when `pageIndex`'s active scratchpad is already sized, aligned, and GPU-primed. */
+  private isScratchpadWarmForPage(pageIndex: number): boolean {
+    if (pageIndex < 0 || this._warmScratchPageIndex !== pageIndex) return false;
+    const p = this._renderedPages.get(pageIndex);
+    const layout = viewportManager.getLayout(pageIndex);
+    if (!p || !layout) return false;
+    const rot = store.pageRotations[pageIndex] || 0;
+    if (pdfEngine.needsViewportChunk(pageIndex, store.zoom, rot)) {
+      const sc = p.scratchChunkCanvas;
+      if (!sc || sc.dataset.gpuPrimed !== '1') return false;
+      return isScratchChunkReusable({
+        displayBlock: sc.style.display === 'block',
+        pixelWidth: sc.width,
+        pixelHeight: sc.height,
+        baseZoom: parseFloat(sc.dataset.baseZoom || '0'),
+        currentZoom: store.zoom,
+        coversViewport: this.doesChunkCoverViewport(sc, p.container, layout, 8)
+      });
+    }
+    const dpr = resolveAdaptiveCanvasDpr(layout.width, layout.height, store.appSettings.targetDPI);
+    const w = Math.max(1, Math.round(layout.width * dpr));
+    const h = Math.max(1, Math.round(layout.height * dpr));
+    return (
+      p.scratchCanvas.width === w &&
+      p.scratchCanvas.height === h &&
+      p.scratchCanvas.dataset.gpuPrimed === '1'
+    );
+  }
+
+  /**
+   * Lazily pre-warms the active visible page's scratchpad canvas and ink shader
+   * pipeline on idle/hover so the very first pen stroke has 0ms cold-start stall.
+   */
+  private scheduleScratchpadPrewarm(pageIndex: number, delayMs: number = 80): void {
+    if (pageIndex < 0) return;
+    if (this.isScratchpadWarmForPage(pageIndex)) return;
     if (this._scratchPrewarmTimer !== null) {
       window.clearTimeout(this._scratchPrewarmTimer);
       this._scratchPrewarmTimer = null;
     }
-    if (pageIndex < 0 || this._warmScratchPageIndex === pageIndex) return;
-    this._scratchPrewarmTimer = window.setTimeout(() => {
+    const runPrewarm = () => {
       this._scratchPrewarmTimer = null;
       if (this._isZoomGestureActive || this._isFastScrolling || pointerHandler.isPointerDown) return;
+      warmInkPipeline();
       const p = this._renderedPages.get(pageIndex);
       const layout = viewportManager.getLayout(pageIndex);
       if (!p || !layout) return;
@@ -1929,14 +2013,27 @@ class VeditorApp {
           if (prevPage.scratchCanvas.width > 1 || prevPage.scratchCanvas.height > 1) {
             prevPage.scratchCanvas.width = 1;
             prevPage.scratchCanvas.height = 1;
+            delete prevPage.scratchCanvas.dataset.gpuPrimed;
           }
           if (prevPage.scratchChunkCanvas && (prevPage.scratchChunkCanvas.width > 1 || prevPage.scratchChunkCanvas.height > 1)) {
             prevPage.scratchChunkCanvas.width = 1;
             prevPage.scratchChunkCanvas.height = 1;
+            delete prevPage.scratchChunkCanvas.dataset.gpuPrimed;
           }
         }
       }
       if (pdfEngine.needsViewportChunk(pageIndex, store.zoom, rot)) {
+        if (
+          p.annotChunkCanvas &&
+          p.scratchChunkCanvas &&
+          p.annotChunkCanvas.style.display === 'block' &&
+          p.annotChunkCanvas.width > 1 &&
+          Math.abs(parseFloat(p.annotChunkCanvas.dataset.baseZoom || '0') - store.zoom) <= 0.0005 &&
+          this.doesChunkCoverViewport(p.annotChunkCanvas, p.container, layout, 8)
+        ) {
+          this.syncScratchChunkFromAnnotChunk(p.annotChunkCanvas, p.scratchChunkCanvas);
+          return;
+        }
         const chunkRect = this.computePageViewportChunkRect(p.container, layout);
         if (chunkRect) {
           const expectedKey = `${store.zoom.toFixed(4)}|${chunkRect.x},${chunkRect.y},${chunkRect.width},${chunkRect.height}`;
@@ -1953,14 +2050,23 @@ class VeditorApp {
       if (p.scratchCanvas.width !== w || p.scratchCanvas.height !== h) {
         p.scratchCanvas.width = w;
         p.scratchCanvas.height = h;
+        delete p.scratchCanvas.dataset.gpuPrimed;
       }
-    }, 120);
+      this.primeScratchCanvasSurface(p.scratchCanvas);
+    };
+
+    if (delayMs <= 0) {
+      this._scratchPrewarmTimer = window.setTimeout(runPrewarm, 0);
+    } else {
+      this._scratchPrewarmTimer = window.setTimeout(runPrewarm, delayMs);
+    }
   }
 
   /**
    * Synchronously prepares the active page's scratchpad backing store and
    * High-DPI Viewport Chunk right on `pointerdown` before `pointerHandler`
-   * starts a stroke. Guarantees 0ms chunk lag and 100% coordinate lock.
+   * starts a stroke. Reuses any chunk that already covers the viewport so a
+   * small scroll never triggers texture reallocation or PDF re-rasterization.
    */
   private preparePageForPointerDown(pageIndex: number): void {
     if (this._chunkUpdateTimer !== null) {
@@ -1979,10 +2085,12 @@ class VeditorApp {
         if (prevPage.scratchCanvas.width > 1 || prevPage.scratchCanvas.height > 1) {
           prevPage.scratchCanvas.width = 1;
           prevPage.scratchCanvas.height = 1;
+          delete prevPage.scratchCanvas.dataset.gpuPrimed;
         }
         if (prevPage.scratchChunkCanvas && (prevPage.scratchChunkCanvas.width > 1 || prevPage.scratchChunkCanvas.height > 1)) {
           prevPage.scratchChunkCanvas.width = 1;
           prevPage.scratchChunkCanvas.height = 1;
+          delete prevPage.scratchChunkCanvas.dataset.gpuPrimed;
         }
       }
     }
@@ -1992,22 +2100,45 @@ class VeditorApp {
 
     const rot = store.pageRotations[pageIndex] || 0;
     if (pdfEngine.needsViewportChunk(pageIndex, store.zoom, rot)) {
+      const sc = p.scratchChunkCanvas;
+      const chunkReady = Boolean(
+        sc &&
+        isScratchChunkReusable({
+          displayBlock: sc.style.display === 'block',
+          pixelWidth: sc.width,
+          pixelHeight: sc.height,
+          baseZoom: parseFloat(sc.dataset.baseZoom || '0'),
+          currentZoom: store.zoom,
+          coversViewport: this.doesChunkCoverViewport(sc, p.container, layout, 8)
+        })
+      );
+      if (chunkReady) {
+        return;
+      }
+
+      // Fast path: if `annotChunkCanvas` already covers the viewport, clone its
+      // geometry onto `scratchChunkCanvas` without repainting annotations or PDF.
+      if (
+        p.annotChunkCanvas &&
+        sc &&
+        p.annotChunkCanvas.style.display === 'block' &&
+        p.annotChunkCanvas.width > 1 &&
+        Math.abs(parseFloat(p.annotChunkCanvas.dataset.baseZoom || '0') - store.zoom) <= 0.0005 &&
+        this.doesChunkCoverViewport(p.annotChunkCanvas, p.container, layout, 8)
+      ) {
+        this.syncScratchChunkFromAnnotChunk(p.annotChunkCanvas, sc);
+        return;
+      }
+
       const chunkRect = this.computePageViewportChunkRect(p.container, layout);
       if (chunkRect) {
         const expectedKey = `${store.zoom.toFixed(4)}|${chunkRect.x},${chunkRect.y},${chunkRect.width},${chunkRect.height}`;
-        const chunkReady =
-          p.scratchChunkCanvas &&
-          p.scratchChunkCanvas.style.display === 'block' &&
-          p.scratchChunkCanvas.width > 1 &&
-          p.scratchChunkCanvas.dataset.chunkKey === expectedKey;
-        if (!chunkReady) {
-          this.updateAnnotationChunkGeometry(pageIndex, p, chunkRect, true);
-          if (p.scratchChunkCanvas) {
-            p.scratchChunkCanvas.dataset.chunkKey = expectedKey;
-          }
-          if (p.chunkCanvas) {
-            void pdfEngine.renderPageChunkToCanvas(pageIndex, p.chunkCanvas, store.zoom, rot, chunkRect);
-          }
+        this.updateAnnotationChunkGeometry(pageIndex, p, chunkRect, true);
+        if (p.scratchChunkCanvas) {
+          p.scratchChunkCanvas.dataset.chunkKey = expectedKey;
+        }
+        if (p.chunkCanvas && !this.doesChunkCoverViewport(p.chunkCanvas, p.container, layout, 8)) {
+          void pdfEngine.renderPageChunkToCanvas(pageIndex, p.chunkCanvas, store.zoom, rot, chunkRect);
         }
         return;
       }
@@ -2017,6 +2148,7 @@ class VeditorApp {
       p.scratchChunkCanvas.style.display = 'none';
       p.scratchChunkCanvas.width = 1;
       p.scratchChunkCanvas.height = 1;
+      delete p.scratchChunkCanvas.dataset.gpuPrimed;
     }
     const dpr = resolveAdaptiveCanvasDpr(layout.width, layout.height, store.appSettings.targetDPI);
     const w = Math.max(1, Math.round(layout.width * dpr));
@@ -2024,6 +2156,7 @@ class VeditorApp {
     if (p.scratchCanvas.width !== w || p.scratchCanvas.height !== h) {
       p.scratchCanvas.width = w;
       p.scratchCanvas.height = h;
+      delete p.scratchCanvas.dataset.gpuPrimed;
     }
     if (p.scratchCanvas.dataset.offsetX) delete p.scratchCanvas.dataset.offsetX;
     if (p.scratchCanvas.dataset.offsetY) delete p.scratchCanvas.dataset.offsetY;
@@ -2041,10 +2174,12 @@ class VeditorApp {
     if (p.scratchCanvas.width !== 1 || p.scratchCanvas.height !== 1) {
       p.scratchCanvas.width = 1;
       p.scratchCanvas.height = 1;
+      delete p.scratchCanvas.dataset.gpuPrimed;
     }
     if (p.scratchChunkCanvas && (p.scratchChunkCanvas.width !== 1 || p.scratchChunkCanvas.height !== 1)) {
       p.scratchChunkCanvas.width = 1;
       p.scratchChunkCanvas.height = 1;
+      delete p.scratchChunkCanvas.dataset.gpuPrimed;
     }
   }
 
@@ -2639,6 +2774,7 @@ class VeditorApp {
       if (p.scratchCanvas.width > 1 || p.scratchCanvas.height > 1) {
         p.scratchCanvas.width = 0;
         p.scratchCanvas.height = 0;
+        delete p.scratchCanvas.dataset.gpuPrimed;
       }
     }
 
@@ -2805,6 +2941,16 @@ class VeditorApp {
     });
     canvas.addEventListener('auxclick', (e) => {
       if (e.button === 1) e.preventDefault();
+    });
+
+    // Pre-warm this page's GPU scratchpad surface the moment the pointer/stylus
+    // enters the page so the very first stroke starts with 0ms texture stall.
+    canvas.addEventListener('pointerenter', () => {
+      if (this._isFastScrolling || this._isZoomGestureActive || pointerHandler.isPointerDown) return;
+      const tool = store.activeTool;
+      if (tool !== 'hand') {
+        this.scheduleScratchpadPrewarm(pageIndex, 0);
+      }
     });
 
     canvas.addEventListener('pointerdown', (e) => {
@@ -3295,6 +3441,15 @@ class VeditorApp {
       if (p.scratchCanvas.style.cursor !== cursor) {
         p.scratchCanvas.style.cursor = cursor;
       }
+    }
+    if (
+      (store.activeTool === 'pen' || store.activeTool === 'highlighter') &&
+      !this._isFastScrolling &&
+      !this._isZoomGestureActive &&
+      !pointerHandler.isPointerDown &&
+      this._renderedPages.has(store.activePageIndex)
+    ) {
+      this.scheduleScratchpadPrewarm(store.activePageIndex, 0);
     }
   }
 

@@ -3,9 +3,13 @@
  *
  * Goodnotes-inspired split-pane studio:
  * - Left rail: Title input, Cover preview card (active focus frame), Paper preview card
- * - Right top bar: Page size selector, Portrait/Landscape orientation toggle, Close
- * - Right main pane: Categorized Cover gallery (Common, Simple, Solid, Textured + No cover)
- *   OR full Paper customization controls when Paper is selected
+ * - Right top bar: Page size selector, Paper tone selector (on Paper tab),
+ *   Portrait/Landscape orientation toggle, Close
+ * - Right main pane:
+ *   - Cover tab: Categorized Cover gallery (Common, Simple, Solid, Textured + No cover)
+ *   - Paper tab: Categorized Paper Template gallery (Essentials, Writing papers, Planner)
+ *     tinted live by Paper Tone + full Customize section preserving all existing controls
+ *     (Pattern, Spacing, Paper/Rule colors, Margin rule, Starting pages)
  * - Footer: Cancel & Create Notebook / Save Changes
  */
 
@@ -20,10 +24,17 @@ import {
   resolveNotebookPageDimensions
 } from '../../core/types';
 import {
-  PAPER_PRESETS,
+  PAPER_TONES,
+  PAPER_TEMPLATES,
+  PaperToneId,
+  PaperTemplateSpec,
   DEFAULT_PAPER,
   SPACING_MIN,
-  SPACING_MAX
+  SPACING_MAX,
+  getPaperToneById,
+  inferPaperToneId,
+  paperStyleForTemplate,
+  findMatchingPaperTemplate
 } from '../../io/notebook';
 import {
   NO_COVER_SPEC,
@@ -38,13 +49,18 @@ import { drawPaperPreview } from '../paper-preview';
 import { t, isFa } from '../i18n';
 import { enhanceRangeSliders } from '../slider-scrub';
 
-/** `id` doubles as the translation key (`notebook.patterns.<id>`). */
+/** All paper patterns exposed in the Customize controls (`id` matches `notebook.patterns.<id>`). */
 const PATTERNS: { id: PaperPattern; icon: string }[] = [
   { id: 'blank', icon: 'blankPage' },
   { id: 'lined', icon: 'linedPage' },
   { id: 'grid', icon: 'gridPage' },
   { id: 'dots', icon: 'dotsPage' },
-  { id: 'isometric', icon: 'isoPage' }
+  { id: 'isometric', icon: 'isoPage' },
+  { id: 'cornell', icon: 'linedPage' },
+  { id: 'two-column', icon: 'linedPage' },
+  { id: 'three-column', icon: 'linedPage' },
+  { id: 'weekly', icon: 'gridPage' },
+  { id: 'checklist', icon: 'linedPage' }
 ];
 
 export interface NotebookDialogResult {
@@ -82,6 +98,8 @@ export class NotebookDialogComponent {
   private _title: string;
   private _cover: NotebookCoverSpec;
   private _paper: PaperStyle;
+  private _paperTone: PaperToneId;
+  private _activeTemplateId: string | null;
   private _pageSize: PageSizeName;
   private _orientation: NotebookOrientation;
   private _activeTab: 'cover' | 'paper';
@@ -98,6 +116,8 @@ export class NotebookDialogComponent {
       ? (opts.cover ? getNotebookCoverById(opts.cover.id) : NO_COVER_SPEC)
       : (opts.mode === 'create' ? getDefaultNotebookCover() : NO_COVER_SPEC);
     this._paper = { ...DEFAULT_PAPER, ...(opts.paper ?? {}) };
+    this._paperTone = inferPaperToneId(this._paper.paperColor);
+    this._activeTemplateId = findMatchingPaperTemplate(this._paper)?.id ?? null;
     this._pageSize = opts.pageSize ?? 'letter';
     this._orientation = opts.orientation ?? 'portrait';
     this._activeTab = opts.initialTab ?? 'cover';
@@ -120,6 +140,10 @@ export class NotebookDialogComponent {
     const solidCovers = getCoversByCategory('solid');
     const texturedCovers = getCoversByCategory('textured');
 
+    const essentialTemplates = PAPER_TEMPLATES.filter(tpl => tpl.category === 'essentials');
+    const writingTemplates = PAPER_TEMPLATES.filter(tpl => tpl.category === 'writing');
+    const plannerTemplates = PAPER_TEMPLATES.filter(tpl => tpl.category === 'planner');
+
     const renderCoverSection = (sectionId: string, heading: string, covers: NotebookCoverSpec[]) => `
       <section class="nb-cover-section" data-nb-section="${sectionId}">
         <button type="button" class="nb-section-toggle" data-nb-toggle-section="${sectionId}" aria-expanded="true">
@@ -138,6 +162,33 @@ export class NotebookDialogComponent {
                       aria-label="${escapeAttr(label)}">
                 <span class="nb-cover-frame">
                   ${renderNotebookCoverSvg(c, { landscape: this._orientation === 'landscape', compact: true })}
+                </span>
+                <span class="nb-cover-label">${escapeAttr(label)}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+      </section>
+    `;
+
+    const renderPaperSection = (sectionId: string, heading: string, templates: PaperTemplateSpec[]) => `
+      <section class="nb-cover-section" data-nb-section="${sectionId}">
+        <button type="button" class="nb-section-toggle" data-nb-toggle-section="${sectionId}" aria-expanded="true">
+          <span class="nb-section-chevron" aria-hidden="true">▾</span>
+          <span>${heading}</span>
+        </button>
+        <div class="nb-cover-grid nb-paper-grid" data-nb-section-body="${sectionId}">
+          ${templates.map(tpl => {
+            const selected = this._activeTemplateId === tpl.id;
+            const label = fa ? tpl.labelFa : tpl.label;
+            return `
+              <button type="button"
+                      class="nb-cover-tile nb-paper-tile ${selected ? 'is-selected' : ''}"
+                      data-nb-paper-tpl="${tpl.id}"
+                      aria-pressed="${selected}"
+                      aria-label="${escapeAttr(label)}">
+                <span class="nb-cover-frame nb-paper-frame">
+                  <canvas class="nb-paper-tile-canvas" data-nb-tpl-canvas="${tpl.id}"></canvas>
                 </span>
                 <span class="nb-cover-label">${escapeAttr(label)}</span>
               </button>
@@ -212,6 +263,16 @@ export class NotebookDialogComponent {
                     </select>
                   </label>
 
+                  <label class="nb-size-select-wrap nb-tone-select-wrap" id="nb-tone-wrap" ${this._activeTab === 'paper' ? '' : 'hidden'}>
+                    <select id="nb-paper-tone" class="nb-topbar-select" aria-label="${t('notebook.paperTone')}">
+                      ${PAPER_TONES.map(tone => `
+                        <option value="${tone.id}" ${this._paperTone === tone.id ? 'selected' : ''}>
+                          ${escapeAttr(fa ? tone.labelFa : tone.label)}
+                        </option>
+                      `).join('')}
+                    </select>
+                  </label>
+
                   <div class="nb-orient-group" role="group" aria-label="${fa ? 'جهت صفحه' : 'Orientation'}">
                     <button type="button"
                             class="nb-orient-btn ${this._orientation === 'portrait' ? 'is-active' : ''}"
@@ -252,86 +313,87 @@ export class NotebookDialogComponent {
                   ${renderCoverSection('textured', t('notebook.texturedCovers'), texturedCovers)}
                 </div>
 
-                <!-- Paper Customization Pane -->
-                <div class="nb-pane nb-pane-paper" id="nb-pane-paper" ${this._activeTab === 'paper' ? '' : 'hidden'}>
-                  <div class="nb-paper-hero">
-                    <canvas id="nb-preview-large" class="paper-preview nb-large-paper-canvas"></canvas>
-                    <span class="notebook-preview-caption" id="nb-preview-caption"></span>
-                  </div>
+                <!-- Paper Template Gallery + Full Customization Controls -->
+                <div class="nb-pane nb-pane-paper-gallery" id="nb-pane-paper" ${this._activeTab === 'paper' ? '' : 'hidden'}>
+                  ${renderPaperSection('paper-essentials', t('notebook.paperEssentials'), essentialTemplates)}
+                  ${renderPaperSection('paper-writing', t('notebook.paperWriting'), writingTemplates)}
+                  ${renderPaperSection('paper-planner', t('notebook.paperPlanner'), plannerTemplates)}
 
-                  <div class="notebook-controls">
-                    <div class="form-field">
-                      <span class="form-label">${t('notebook.preset')}</span>
-                      <div class="chip-row">
-                        ${PAPER_PRESETS.map(preset => `
-                          <button type="button" class="secondary-btn is-compact"
-                                  data-nb-preset="${preset.id}">${t('notebook.presets.' + preset.id)}</button>
-                        `).join('')}
-                      </div>
+                  <section class="nb-cover-section nb-customize-section" data-nb-section="paper-customize">
+                    <div class="nb-customize-header">
+                      <button type="button" class="nb-section-toggle" data-nb-toggle-section="paper-customize" aria-expanded="true">
+                        <span class="nb-section-chevron" aria-hidden="true">▾</span>
+                        <span>${t('notebook.paperCustomize')}</span>
+                      </button>
+                      <span class="notebook-preview-caption" id="nb-preview-caption"></span>
                     </div>
 
-                    <div class="form-field">
-                      <span class="form-label">${t('notebook.pattern')}</span>
-                      <div class="chip-row">
-                        ${PATTERNS.map(pat => `
-                          <button type="button"
-                                  class="secondary-btn is-compact ${p.pattern === pat.id ? 'is-selected' : ''}"
-                                  data-nb-pattern="${pat.id}" aria-pressed="${p.pattern === pat.id}">
-                            ${getIconSvg(pat.icon, 14)} ${t('notebook.patterns.' + pat.id)}
-                          </button>
-                        `).join('')}
-                      </div>
-                    </div>
-
-                    <div class="form-field" id="nb-spacing-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
-                      <div class="prop-label-row">
-                        <span class="form-label">${t('notebook.spacing')}</span>
-                        <span class="prop-value" id="nb-spacing-out">${p.spacing}pt</span>
-                      </div>
-                      <input type="range" id="nb-spacing" class="prop-slider"
-                             min="${SPACING_MIN}" max="${SPACING_MAX}" value="${p.spacing}"
-                             aria-label="${t('notebook.spacing')}">
-                    </div>
-
-                    <div class="notebook-color-row">
+                    <div class="nb-customize-body" data-nb-section-body="paper-customize">
                       <div class="form-field">
-                        <span class="form-label">${t('notebook.paperColor')}</span>
+                        <span class="form-label">${t('notebook.pattern')}</span>
                         <div class="chip-row">
-                          <input type="color" id="nb-paper-color" class="swatch-input"
-                                 value="${p.paperColor}" aria-label="${t('notebook.paperColor')}">
-                          <code class="prop-color-value" id="nb-paper-out">${p.paperColor}</code>
+                          ${PATTERNS.map(pat => `
+                            <button type="button"
+                                    class="secondary-btn is-compact ${p.pattern === pat.id ? 'is-selected' : ''}"
+                                    data-nb-pattern="${pat.id}" aria-pressed="${p.pattern === pat.id}">
+                              ${getIconSvg(pat.icon, 13)} ${t('notebook.patterns.' + pat.id)}
+                            </button>
+                          `).join('')}
                         </div>
                       </div>
-                      <div class="form-field" id="nb-rule-color-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
-                        <span class="form-label">${t('notebook.ruleColor')}</span>
-                        <div class="chip-row">
-                          <input type="color" id="nb-line-color" class="swatch-input"
-                                 value="${p.lineColor}" aria-label="${t('notebook.ruleColor')}">
-                          <code class="prop-color-value" id="nb-line-out">${p.lineColor}</code>
+
+                      <div class="nb-customize-grid">
+                        <div class="form-field" id="nb-spacing-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
+                          <div class="prop-label-row">
+                            <span class="form-label">${t('notebook.spacing')}</span>
+                            <span class="prop-value" id="nb-spacing-out">${p.spacing}pt</span>
+                          </div>
+                          <input type="range" id="nb-spacing" class="prop-slider"
+                                 min="${SPACING_MIN}" max="${SPACING_MAX}" value="${p.spacing}"
+                                 aria-label="${t('notebook.spacing')}">
+                        </div>
+
+                        <div class="notebook-color-row">
+                          <div class="form-field">
+                            <span class="form-label">${t('notebook.paperColor')}</span>
+                            <div class="chip-row">
+                              <input type="color" id="nb-paper-color" class="swatch-input"
+                                     value="${p.paperColor}" aria-label="${t('notebook.paperColor')}">
+                              <code class="prop-color-value" id="nb-paper-out">${p.paperColor}</code>
+                            </div>
+                          </div>
+                          <div class="form-field" id="nb-rule-color-field" ${p.pattern === 'blank' ? 'hidden' : ''}>
+                            <span class="form-label">${t('notebook.ruleColor')}</span>
+                            <div class="chip-row">
+                              <input type="color" id="nb-line-color" class="swatch-input"
+                                     value="${p.lineColor}" aria-label="${t('notebook.ruleColor')}">
+                              <code class="prop-color-value" id="nb-line-out">${p.lineColor}</code>
+                            </div>
+                          </div>
                         </div>
                       </div>
+
+                      <label class="notebook-check" id="nb-margin-field" ${p.pattern === 'lined' ? '' : 'hidden'}>
+                        <input type="checkbox" id="nb-margin" ${p.margin ? 'checked' : ''}>
+                        <span>${t('notebook.marginRule')}</span>
+                      </label>
+
+                      ${isEdit ? `
+                        <p class="empty-note is-inline">${t('notebook.restyleHint')}</p>
+                      ` : `
+                        <div class="form-field">
+                          <div class="prop-label-row">
+                            <span class="form-label">${t('notebook.startingPages')}</span>
+                            <span class="prop-value" id="nb-pages-out">${this._pageCount}</span>
+                          </div>
+                          <input type="range" id="nb-pages" class="prop-slider"
+                                 min="1" max="20" value="${this._pageCount}"
+                                 aria-label="${t('notebook.startingPages')}">
+                          <p class="empty-note is-inline">${t('notebook.autoExtendHint')}</p>
+                        </div>
+                      `}
                     </div>
-
-                    <label class="notebook-check" id="nb-margin-field" ${p.pattern === 'lined' ? '' : 'hidden'}>
-                      <input type="checkbox" id="nb-margin" ${p.margin ? 'checked' : ''}>
-                      <span>${t('notebook.marginRule')}</span>
-                    </label>
-
-                    ${isEdit ? `
-                      <p class="empty-note is-inline">${t('notebook.restyleHint')}</p>
-                    ` : `
-                      <div class="form-field">
-                        <div class="prop-label-row">
-                          <span class="form-label">${t('notebook.startingPages')}</span>
-                          <span class="prop-value" id="nb-pages-out">${this._pageCount}</span>
-                        </div>
-                        <input type="range" id="nb-pages" class="prop-slider"
-                               min="1" max="20" value="${this._pageCount}"
-                               aria-label="${t('notebook.startingPages')}">
-                        <p class="empty-note is-inline">${t('notebook.autoExtendHint')}</p>
-                      </div>
-                    `}
-                  </div>
+                  </section>
                 </div>
               </div>
             </div>
@@ -366,17 +428,14 @@ export class NotebookDialogComponent {
   }
 
   private getPaperLabel(): string {
-    const p = this._paper;
-    const match = PAPER_PRESETS.find(pr =>
-      pr.paper.pattern === p.pattern &&
-      pr.paper.paperColor.toLowerCase() === p.paperColor.toLowerCase() &&
-      (p.pattern === 'blank' || (
-        pr.paper.lineColor.toLowerCase() === p.lineColor.toLowerCase() &&
-        pr.paper.spacing === p.spacing
-      ))
-    );
-    if (match) return t(`notebook.presets.${match.id}`);
-    return t(`notebook.patterns.${p.pattern}`);
+    const fa = isFa();
+    if (this._activeTemplateId) {
+      const tpl = PAPER_TEMPLATES.find(item => item.id === this._activeTemplateId);
+      if (tpl) return fa ? tpl.labelFa : tpl.label;
+    }
+    const matched = findMatchingPaperTemplate(this._paper);
+    if (matched) return fa ? matched.labelFa : matched.label;
+    return t(`notebook.patterns.${this._paper.pattern}`);
   }
 
   private paint(): void {
@@ -384,10 +443,21 @@ export class NotebookDialogComponent {
     if (railCanvas) {
       drawPaperPreview(railCanvas, this._paper, this._pageSize, this._orientation);
     }
-    const largeCanvas = this._container.querySelector<HTMLCanvasElement>('#nb-preview-large');
-    if (largeCanvas && this._activeTab === 'paper') {
-      drawPaperPreview(largeCanvas, this._paper, this._pageSize, this._orientation);
+    if (this._activeTab === 'paper') {
+      this.paintPaperGalleryThumbnails();
     }
+  }
+
+  /** Paints every paper template tile using the active paper tone, size, and orientation. */
+  private paintPaperGalleryThumbnails(): void {
+    const tone = getPaperToneById(this._paperTone);
+    this._container.querySelectorAll<HTMLCanvasElement>('[data-nb-tpl-canvas]').forEach(canvas => {
+      const tplId = canvas.dataset.nbTplCanvas;
+      const tpl = PAPER_TEMPLATES.find(item => item.id === tplId);
+      if (!tpl) return;
+      const style = paperStyleForTemplate(tpl, tone);
+      drawPaperPreview(canvas, style, this._pageSize, this._orientation);
+    });
   }
 
   private refreshCoverPreviews(): void {
@@ -432,6 +502,13 @@ export class NotebookDialogComponent {
     if (coverPane) coverPane.hidden = this._activeTab !== 'cover';
     if (paperPane) paperPane.hidden = this._activeTab !== 'paper';
 
+    const toneWrap = q('#nb-tone-wrap');
+    if (toneWrap) toneWrap.hidden = this._activeTab !== 'paper';
+    const toneSelect = q<HTMLSelectElement>('#nb-paper-tone');
+    if (toneSelect && toneSelect.value !== this._paperTone) {
+      toneSelect.value = this._paperTone;
+    }
+
     // Orientation buttons
     this._container.querySelectorAll<HTMLElement>('[data-nb-orientation]').forEach(btn => {
       const active = btn.dataset.nbOrientation === this._orientation;
@@ -458,25 +535,18 @@ export class NotebookDialogComponent {
     const railPaperName = q('#nb-rail-paper-name');
     if (railPaperName) railPaperName.textContent = this.getPaperLabel();
 
-    // Paper patterns & presets
-    this._container.querySelectorAll<HTMLElement>('[data-nb-pattern]').forEach(btn => {
-      const active = btn.dataset.nbPattern === p.pattern;
+    // Paper template tiles
+    this._container.querySelectorAll<HTMLElement>('[data-nb-paper-tpl]').forEach(btn => {
+      const active = btn.dataset.nbPaperTpl === this._activeTemplateId;
       btn.classList.toggle('is-selected', active);
       btn.setAttribute('aria-pressed', String(active));
     });
 
-    this._container.querySelectorAll<HTMLElement>('[data-nb-preset]').forEach(btn => {
-      const preset = PAPER_PRESETS.find(pr => pr.id === btn.dataset.nbPreset);
-      const matches = !!preset &&
-        preset.paper.pattern === p.pattern &&
-        preset.paper.paperColor.toLowerCase() === p.paperColor.toLowerCase() &&
-        (p.pattern === 'blank' || (
-          preset.paper.lineColor.toLowerCase() === p.lineColor.toLowerCase() &&
-          preset.paper.spacing === p.spacing
-        )) &&
-        (p.pattern !== 'lined' || Boolean(preset.paper.margin) === Boolean(p.margin));
-      btn.classList.toggle('is-selected', matches);
-      btn.setAttribute('aria-pressed', String(matches));
+    // Paper patterns in Customize section
+    this._container.querySelectorAll<HTMLElement>('[data-nb-pattern]').forEach(btn => {
+      const active = btn.dataset.nbPattern === p.pattern;
+      btn.classList.toggle('is-selected', active);
+      btn.setAttribute('aria-pressed', String(active));
     });
 
     const isBlank = p.pattern === 'blank';
@@ -535,8 +605,16 @@ export class NotebookDialogComponent {
     }
   }
 
-  private updatePaper(patch: Partial<PaperStyle>): void {
+  private updatePaper(patch: Partial<PaperStyle>, explicitTemplateId?: string | null): void {
     this._paper = { ...this._paper, ...patch };
+    if (patch.paperColor) {
+      this._paperTone = inferPaperToneId(this._paper.paperColor);
+    }
+    if (explicitTemplateId !== undefined) {
+      this._activeTemplateId = explicitTemplateId;
+    } else {
+      this._activeTemplateId = findMatchingPaperTemplate(this._paper)?.id ?? null;
+    }
     this.syncControls();
     this.paint();
   }
@@ -584,7 +662,7 @@ export class NotebookDialogComponent {
       });
     });
 
-    // Collapsible cover sections
+    // Collapsible sections (Cover & Paper galleries + Customize)
     this._container.querySelectorAll<HTMLElement>('[data-nb-toggle-section]').forEach(btn => {
       btn.addEventListener('click', () => {
         const secId = btn.dataset.nbToggleSection;
@@ -596,6 +674,9 @@ export class NotebookDialogComponent {
         body.hidden = expanded;
         const chev = btn.querySelector('.nb-section-chevron');
         if (chev) chev.textContent = expanded ? '▸' : '▾';
+        if (!expanded && secId.startsWith('paper-')) {
+          this.paintPaperGalleryThumbnails();
+        }
       });
     });
 
@@ -606,6 +687,28 @@ export class NotebookDialogComponent {
         this._cover = getNotebookCoverById(id);
         this.syncControls();
       });
+    });
+
+    // Paper template tile selection
+    this._container.querySelectorAll<HTMLElement>('[data-nb-paper-tpl]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tplId = btn.dataset.nbPaperTpl;
+        const tpl = PAPER_TEMPLATES.find(item => item.id === tplId);
+        if (!tpl) return;
+        const tone = getPaperToneById(this._paperTone);
+        this.updatePaper(paperStyleForTemplate(tpl, tone), tpl.id);
+      });
+    });
+
+    // Paper tone dropdown (White Paper / Yellow Paper / Warm Paper / Dark Paper)
+    q<HTMLSelectElement>('#nb-paper-tone')?.addEventListener('change', (e) => {
+      const toneId = (e.target as HTMLSelectElement).value as PaperToneId;
+      const tone = getPaperToneById(toneId);
+      this._paperTone = tone.id;
+      this.updatePaper(
+        { paperColor: tone.paperColor, lineColor: tone.lineColor },
+        this._activeTemplateId
+      );
     });
 
     // Orientation buttons
@@ -621,14 +724,7 @@ export class NotebookDialogComponent {
       });
     });
 
-    // Paper presets & patterns
-    this._container.querySelectorAll<HTMLElement>('[data-nb-preset]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const preset = PAPER_PRESETS.find(p => p.id === btn.dataset.nbPreset);
-        if (preset) this.updatePaper({ ...preset.paper });
-      });
-    });
-
+    // Customize pattern chips
     this._container.querySelectorAll<HTMLElement>('[data-nb-pattern]').forEach(btn => {
       btn.addEventListener('click', () => {
         this.updatePaper({ pattern: btn.dataset.nbPattern as PaperPattern });

@@ -49,7 +49,7 @@ export function drawPaperPreview(
   ctx.rect(0, 0, page.width, page.height);
   ctx.clip();
 
-  const { lines, dots, marginX } = paperGeometry(paper, page.width, page.height);
+  const { lines, dots, rects, marginX } = paperGeometry(paper, page.width, page.height);
 
   ctx.strokeStyle = paper.lineColor;
   ctx.fillStyle = paper.lineColor;
@@ -77,8 +77,17 @@ export function drawPaperPreview(
     ctx.fill();
   }
 
+  if (rects.length > 0) {
+    for (const rc of rects) {
+      ctx.lineWidth = Math.max(rc.thickness, 0.75 / scale);
+      ctx.strokeRect(rc.x, rc.y, rc.width, rc.height);
+    }
+  }
+
   if (marginX !== null) {
-    ctx.strokeStyle = '#e8a0a8';
+    const norm = paper.paperColor.trim().toLowerCase();
+    const isDark = norm === '#1f2126' || norm === '#151821' || norm.startsWith('#1') || norm.startsWith('#2');
+    ctx.strokeStyle = isDark ? '#8f4b56' : '#e8a0a8';
     ctx.lineWidth = Math.max(0.9, 1 / scale);
     ctx.beginPath();
     ctx.moveTo(marginX, 0);
