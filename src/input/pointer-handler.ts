@@ -95,6 +95,11 @@ export class PointerHandler {
    * feedback; pointer-up commits ONE undo step for the whole drag.
    */
   private _eraserSession: { pageIndex: number; original: Annotation[] } | null = null;
+  /** Batched eraser sweep points queued between rAF frames so 120–240Hz pointermove never stalls the main thread. */
+  private _eraserPendingPts: Point[] = [];
+  private _eraserPointerType: string = 'mouse';
+  private _stickyEraserPendingPts: Point[] = [];
+  private _stickyEraserPendingNoteId: string | null = null;
     /**
    * Selection drag: moving the selection body or resizing via a transform
    * handle. Mutates live (like the eraser) and commits ONE undo step.
@@ -112,7 +117,7 @@ export class PointerHandler {
     hasLifted: boolean;
   } | null = null;
   /**
-   * GPU-composited drag sprite overlay for zero-lag move/rotate/sticky-resize:
+   * GPU-composited drag sprite overlay for zero-lag move/rotate/collapsed-sticky-resize:
    * rasterized ONCE on lift, then moved/scaled purely via CSS `transform`
    * on the compositor thread (0ms Canvas2D re-rasterization per frame).
    */
@@ -123,6 +128,14 @@ export class PointerHandler {
     centerCssY: number;
     spriteBox: BoundingBox;
     isResize: boolean;
+  } | null = null;
+  /** Offscreen interior content sprite cached once on expanded sticky-note resize lift. */
+  private _stickyResizeContentSprite: {
+    canvas: HTMLCanvasElement;
+    origBox: BoundingBox;
+    origHeaderHeight: number;
+    spriteScale: number;
+    noteId: string;
   } | null = null;
   /** Causal filter + O(1) append-only ink/highlighter streamers for lag-free Sticky Note writing. */
   private readonly _stickyStrokeFilter = new OneEuroStrokeFilter();
@@ -228,6 +241,8 @@ export class PointerHandler {
   private _holdShape: FittedShape | null = null;
   private _hoverCursorSig: string = '';
   private _hoverCursorValue: string = '';
+  /** Tracks a scratch canvas whose cursor was temporarily switched to the eraser circle for stylus barrel/inverted erasing. */
+  private _stylusEraserCursorCanvas: HTMLCanvasElement | null = null;
   /** In-flight raw-ink -> fitted-shape crossfade on the scratch canvas. */
   private _morphHandle: TweenHandle | null = null;
   /** Vertex the active shape/polygon point is currently magnet-snapped to. */
@@ -333,12 +348,61 @@ export class PointerHandler {
   private destroyDragOverlay(): void {
     const ov = this._dragOverlay;
     this._dragOverlay = null;
-    if (!ov) return;
-    if (ov.canvas.parentNode) {
-      ov.canvas.parentNode.removeChild(ov.canvas);
+    if (ov) {
+      if (ov.canvas.parentNode) {
+        ov.canvas.parentNode.removeChild(ov.canvas);
+      }
+      ov.canvas.width = 0;
+      ov.canvas.height = 0;
     }
-    ov.canvas.width = 0;
-    ov.canvas.height = 0;
+    const sp = this._stickyResizeContentSprite;
+    this._stickyResizeContentSprite = null;
+    if (sp) {
+      sp.canvas.width = 0;
+      sp.canvas.height = 0;
+    }
+  }
+
+  private createStickyResizeContentSprite(note: StickyNoteAnnotation): void {
+    if (this._stickyResizeContentSprite) {
+      this._stickyResizeContentSprite.canvas.width = 0;
+      this._stickyResizeContentSprite.canvas.height = 0;
+      this._stickyResizeContentSprite = null;
+    }
+    if (note.collapsed || typeof document === 'undefined') return;
+    const hasText = Boolean((note.text || '').trim().length > 0);
+    const hasStrokes = Array.isArray(note.strokes) && note.strokes.length > 0;
+    const hasItems = Array.isArray(note.items) && note.items.length > 0;
+    if (!hasText && !hasStrokes && !hasItems) return;
+
+    const zoom = Math.max(store.zoom || 1, 0.05);
+    const b = note.box;
+    const cssW = Math.max(2, Math.ceil(b.width * zoom));
+    const cssH = Math.max(2, Math.ceil(b.height * zoom));
+    const dpr = resolveAdaptiveCanvasDpr(cssW, cssH, store.appSettings.targetDPI);
+    const pixelW = Math.max(2, Math.round(cssW * dpr));
+    const pixelH = Math.max(2, Math.round(cssH * dpr));
+
+    const off = document.createElement('canvas');
+    off.width = pixelW;
+    off.height = pixelH;
+    const ctx = off.getContext('2d');
+    if (!ctx) return;
+
+    const spriteScale = (pixelW / cssW) * zoom;
+    ctx.save();
+    ctx.translate(-b.x * spriteScale, -b.y * spriteScale);
+    stickyNoteTool.renderCardInteriorOnly(ctx, note, spriteScale, false);
+    ctx.restore();
+
+    const origMetrics = getStickyNoteLayoutMetrics(b);
+    this._stickyResizeContentSprite = {
+      canvas: off,
+      origBox: { ...b },
+      origHeaderHeight: origMetrics.headerHeight,
+      spriteScale,
+      noteId: note.id
+    };
   }
 
   private isGpuStickyResize(drag: NonNullable<PointerHandler['_selectDrag']>): boolean {
@@ -373,7 +437,7 @@ export class PointerHandler {
     const pixelH = Math.max(2, Math.round(cssH * dpr));
 
     const overlay = document.createElement('canvas');
-    overlay.className = 'select-drag-overlay';
+    overlay.className = isResize ? 'select-drag-overlay is-resize-preview' : 'select-drag-overlay';
     overlay.width = pixelW;
     overlay.height = pixelH;
     overlay.style.left = `${spriteBox.x * zoom}px`;
@@ -873,7 +937,7 @@ export class PointerHandler {
     e: PointerEvent,
     pageIndex: number,
     scratchCanvas: HTMLCanvasElement,
-    onNeedRepaint: () => void
+    onNeedRepaint: (dirtyPageBox?: BoundingBox | null) => void
   ): void {
     const tSettings = store.toolSettings;
 
@@ -891,6 +955,10 @@ export class PointerHandler {
     this._activeCanvasRect = scratchCanvas.getBoundingClientRect();
     this._scratchDirtyRect = null;
     this._predictedPtsBuffer.length = 0;
+    this._eraserPendingPts.length = 0;
+    this._stickyEraserPendingPts.length = 0;
+    this._stickyEraserPendingNoteId = null;
+    this._eraserPointerType = e.pointerType || 'mouse';
     this._lastPointerTime = performance.now();
     this._lastPointerX = e.clientX;
     this._lastPointerY = e.clientY;
@@ -899,8 +967,9 @@ export class PointerHandler {
     const pt = this.getPointInPage(e, scratchCanvas);
     let tool = store.activeTool;
 
-    // Auto-detect stylus eraser tip (buttons === 32 or button === 5)
-    if (tSettings.stylusInvertedEraserEnabled && e.pointerType === 'pen' && (e.buttons === 32 || (e as any).button === 5)) {
+    // Auto-detect stylus eraser tip / barrel button (buttons & 32 or button === 5)
+    const isStylusEraser = this.isStylusEraserEvent(e);
+    if (isStylusEraser) {
       tool = 'eraser';
     }
     this._strokeTool = tool;
@@ -921,6 +990,7 @@ export class PointerHandler {
           this._pageScratchCtx = null;
           this._activeCanvasRect = null;
           this._activeStickyPolygonNoteId = null;
+          this.restoreStylusEraserCursor(e);
           const nextNote = stickyNoteTool.collapseStickyNote(cand);
           history.execute(new ModifyAnnotationCommand(pageIndex, cand, nextNote));
           store.setActiveTool('select');
@@ -932,6 +1002,13 @@ export class PointerHandler {
           break;
         }
       }
+    }
+
+    // When erasing via the stylus eraser button/tip while another tool (e.g. Pen)
+    // is active, switch the hardware OS cursor to the eraser circle immediately.
+    if (isStylusEraser && store.activeTool !== 'eraser') {
+      this._stylusEraserCursorCanvas = scratchCanvas;
+      this.setCanvasCursor(scratchCanvas, this.getCachedDrawingCursor('eraser'));
     }
 
     // 2. Check if using any drawing/annotation tool inside an expanded Sticky Note mini-board
@@ -1178,11 +1255,20 @@ export class PointerHandler {
       if (mode === 'eraser') {
         const radius = Math.max(8, tSettings.eraserWidth / 2);
         eraserTool.start(clampedPt, radius, tSettings.eraserMode);
+        this._stickyEraserPendingNoteId = note.id;
         if (this.applyStickyNoteEraser([pt], pageIndex, note.id, radius, tSettings.eraserMode)) {
           this._activeStickyStroke.modified = true;
-          onNeedRepaint();
+          const pad = 20;
+          onNeedRepaint({
+            x: note.box.x - pad,
+            y: note.box.y - pad,
+            width: note.box.width + pad * 2,
+            height: note.box.height + pad * 2
+          });
         }
-        if (this._pageScratchCtx && this._pageScratchCanvas) {
+        // On mouse/pen, the hardware OS cursor already renders the eraser circle at 0ms latency.
+        // Only draw a canvas guide circle for touch input where no OS cursor exists.
+        if (this._eraserPointerType === 'touch' && this._pageScratchCtx && this._pageScratchCanvas) {
           const c = this._pageScratchCtx;
           const cv = this._pageScratchCanvas;
           const rs = store.zoom * this.renderDpr();
@@ -1353,8 +1439,23 @@ export class PointerHandler {
       case 'eraser': {
         eraserTool.start(pt, tSettings.eraserWidth / 2, tSettings.eraserMode);
         this.beginEraserSession(pageIndex);
-        this.applyEraserDirect([pt], pageIndex);
-        onNeedRepaint();
+        const dirtyBox = this.applyEraserDirect([pt], pageIndex);
+        if (dirtyBox) {
+          onNeedRepaint(dirtyBox);
+        }
+        if (this._eraserPointerType === 'touch' && this._pageScratchCtx && this._pageScratchCanvas) {
+          const c = this._pageScratchCtx;
+          const cv = this._pageScratchCanvas;
+          const rs = store.zoom * this.renderDpr();
+          this.clearScratchpadDirty(c, cv);
+          const livePt = eraserTool.getLiveBoundingBox();
+          if (livePt) {
+            this.withScratchOffset(c, cv, () => {
+              eraserTool.renderScratchpad(c, pt, rs);
+            });
+            this.setScratchpadDirtyFromPageBox(livePt, rs);
+          }
+        }
         break;
       }
 
@@ -1753,7 +1854,7 @@ export class PointerHandler {
     e: PointerEvent,
     pageIndex: number,
     scratchCanvas: HTMLCanvasElement,
-    onNeedRepaint: () => void
+    onNeedRepaint: (dirtyPageBox?: BoundingBox | null) => void
   ): void {
     // Polygon hover: between clicks there is no button down, but the elastic
     // segment has to follow the cursor exactly like the line tool's does. This
@@ -1864,28 +1965,43 @@ export class PointerHandler {
           const radius = Math.max(8, store.toolSettings.eraserWidth / 2);
           const clampedLast = stickyNoteTool.clampPointToNote(currentNote, lastPt, 2);
           eraserTool.move(clampedLast);
-          const erasedAny = this.applyStickyNoteEraser(pts, pageIndex, s.noteId, radius, store.toolSettings.eraserMode);
-          if (erasedAny) {
-            s.modified = true;
+          for (let i = 0; i < pts.length; i++) {
+            this._stickyEraserPendingPts.push({ x: pts[i].x, y: pts[i].y });
           }
+          this._stickyEraserPendingNoteId = s.noteId;
           this.scheduleLiveInkPaint(() => {
-            if (!this._isPointerDown || !this._pageScratchCtx || !this._pageScratchCanvas) return;
-            if (erasedAny) onNeedRepaint();
-            const c = this._pageScratchCtx;
-            const cv = this._pageScratchCanvas;
-            const rs = store.zoom * this.renderDpr();
-            this.clearScratchpadDirty(c, cv);
-            this.withScratchOffset(c, cv, () => {
-              stickyNoteTool.withNoteClip(c, currentNote, rs, () => {
-                eraserTool.renderScratchpad(c, clampedLast, rs);
+            if (!this._isPointerDown || !this._activeStickyStroke || this._activeStickyStroke.mode !== 'eraser') return;
+            const batch = this._stickyEraserPendingPts.splice(0, this._stickyEraserPendingPts.length);
+            if (batch.length > 0) {
+              const erasedAny = this.applyStickyNoteEraser(batch, pageIndex, s.noteId, radius, store.toolSettings.eraserMode);
+              if (erasedAny) {
+                s.modified = true;
+                const pad = 20;
+                onNeedRepaint({
+                  x: currentNote.box.x - pad,
+                  y: currentNote.box.y - pad,
+                  width: currentNote.box.width + pad * 2,
+                  height: currentNote.box.height + pad * 2
+                });
+              }
+            }
+            if (this._eraserPointerType === 'touch' && this._pageScratchCtx && this._pageScratchCanvas) {
+              const c = this._pageScratchCtx;
+              const cv = this._pageScratchCanvas;
+              const rs = store.zoom * this.renderDpr();
+              this.clearScratchpadDirty(c, cv);
+              this.withScratchOffset(c, cv, () => {
+                stickyNoteTool.withNoteClip(c, currentNote, rs, () => {
+                  eraserTool.renderScratchpad(c, clampedLast, rs);
+                });
               });
-            });
-            this.setScratchpadDirtyFromPageBox({
-              x: clampedLast.x - radius - 4,
-              y: clampedLast.y - radius - 4,
-              width: (radius + 4) * 2,
-              height: (radius + 4) * 2
-            }, rs);
+              this.setScratchpadDirtyFromPageBox({
+                x: clampedLast.x - radius - 4,
+                y: clampedLast.y - radius - 4,
+                width: (radius + 4) * 2,
+                height: (radius + 4) * 2
+              }, rs);
+            }
           });
         } else if (s.mode === 'measure' && s.measureTool) {
           const clamped = stickyNoteTool.clampPointToNote(currentNote, lastPt, 4);
@@ -1976,8 +2092,6 @@ export class PointerHandler {
                 } else {
                   s.points.push(clamped);
                 }
-              } else if (s.mode === 'pen' && prev) {
-                prev.pressure = prev.pressure * 0.55 + (clamped.pressure ?? 0.5) * 0.45;
               }
             }
           }
@@ -2110,37 +2224,38 @@ export class PointerHandler {
     }
 
     if (tool === 'eraser') {
+      if (this._stylusEraserCursorCanvas === scratchCanvas) {
+        this.setCanvasCursor(scratchCanvas, this.getCachedDrawingCursor('eraser'));
+      }
       eraserTool.move(lastPt);
-      if (this.applyEraserDirect(pts, pageIndex)) {
-        onNeedRepaint();
+      for (let i = 0; i < pts.length; i++) {
+        this._eraserPendingPts.push({ x: pts[i].x, y: pts[i].y });
       }
-      const paintEraser = () => {
-        if (!this._isPointerDown || !this._pageScratchCtx || !this._pageScratchCanvas) return;
-        const c = this._pageScratchCtx;
-        const cv = this._pageScratchCanvas;
-        const rs = store.zoom * this.renderDpr();
-        this.clearScratchpadDirty(c, cv);
-        const livePt = eraserTool.getLiveBoundingBox();
-        if (livePt) {
-          this.withScratchOffset(c, cv, () => {
-            eraserTool.renderScratchpad(c, { x: livePt.x + livePt.width / 2, y: livePt.y + livePt.height / 2 }, rs);
-          });
-          this.setScratchpadDirtyFromPageBox(livePt, rs);
-        }
-      };
-      if (this._scratchRafId === null) {
-        paintEraser();
-        this._scratchNeedsTrailingPaint = false;
-        this._scratchRafId = requestAnimationFrame(() => {
-          this._scratchRafId = null;
-          if (this._scratchNeedsTrailingPaint) {
-            this._scratchNeedsTrailingPaint = false;
-            paintEraser();
+      this.scheduleLiveInkPaint(() => {
+        if (!this._isPointerDown) return;
+        const batch = this._eraserPendingPts.splice(0, this._eraserPendingPts.length);
+        if (batch.length > 0) {
+          const dirtyBox = this.applyEraserDirect(batch, pageIndex);
+          if (dirtyBox) {
+            onNeedRepaint(dirtyBox);
           }
-        });
-      } else {
-        this._scratchNeedsTrailingPaint = true;
-      }
+        }
+        // Native OS cursor renders the eraser circle at 0ms latency for mouse/pen.
+        // Only draw a touch-guide circle on scratchpad for finger touch input.
+        if (this._eraserPointerType === 'touch' && this._pageScratchCtx && this._pageScratchCanvas) {
+          const c = this._pageScratchCtx;
+          const cv = this._pageScratchCanvas;
+          const rs = store.zoom * this.renderDpr();
+          this.clearScratchpadDirty(c, cv);
+          const livePt = eraserTool.getLiveBoundingBox();
+          if (livePt) {
+            this.withScratchOffset(c, cv, () => {
+              eraserTool.renderScratchpad(c, { x: livePt.x + livePt.width / 2, y: livePt.y + livePt.height / 2 }, rs);
+            });
+            this.setScratchpadDirtyFromPageBox(livePt, rs);
+          }
+        }
+      });
       return;
     }
 
@@ -2216,7 +2331,12 @@ export class PointerHandler {
               if (drag.mode === 'move' || drag.mode === 'rotate') {
                 this.createDragOverlay(drag, scratchCanvas, true, false);
               } else if (this.isGpuStickyResize(drag)) {
-                this.createDragOverlay(drag, scratchCanvas, false, true);
+                const origNote = drag.originalsList[0] as StickyNoteAnnotation;
+                if (origNote.collapsed) {
+                  this.createDragOverlay(drag, scratchCanvas, false, true);
+                } else {
+                  this.createStickyResizeContentSprite(origNote);
+                }
               }
               onNeedRepaint();
             }
@@ -2279,14 +2399,7 @@ export class PointerHandler {
                 this.computeSelectionDirtyBox(drag.merged, drag.originalsList, true),
                 rs
               );
-            } else if (
-              this._dragOverlay &&
-              this._dragOverlay.isResize &&
-              this._dragOverlay.pageIndex === pageIndex &&
-              drag.originalsList[0]?.type === 'sticky-note'
-            ) {
-              // 60fps GPU-composited Sticky Note resize preview: zero per-frame deep-cloning
-              // of embedded strokes/items, zero shadowBlur, zero Path2D cache invalidation.
+            } else if (this.isGpuStickyResize(drag)) {
               const origNote = drag.originalsList[0] as StickyNoteAnnotation;
               const zoom = Math.max(store.zoom || 1, 0.05);
               let effLast = drag.lastPt;
@@ -2297,18 +2410,23 @@ export class PointerHandler {
               const origBox = origNote.collapsed
                 ? stickyNoteTool.getCollapsedIconBox(origNote)
                 : origNote.box;
+              const spriteBox = (origNote.collapsed && this._dragOverlay)
+                ? this._dragOverlay.spriteBox
+                : origBox;
               const preview = computeStickyResizePreview(
                 origBox,
-                this._dragOverlay.spriteBox,
+                spriteBox,
                 t,
                 zoom,
                 { collapsed: origNote.collapsed, rotation: origNote.rotation }
               );
               this._activeLoupeTarget = null;
-              this._dragOverlay.canvas.style.transformOrigin = preview.cssTransformOrigin;
-              this._dragOverlay.canvas.style.transform = preview.cssTransform;
 
-              // Draw ONLY crisp unstretched selection frame + 8 resize handles on scratchpad (~0.05ms)
+              if (origNote.collapsed && this._dragOverlay && this._dragOverlay.isResize && this._dragOverlay.pageIndex === pageIndex) {
+                this._dragOverlay.canvas.style.transformOrigin = preview.cssTransformOrigin;
+                this._dragOverlay.canvas.style.transform = preview.cssTransform;
+              }
+
               const c = this._pageScratchCtx;
               const cv = this._pageScratchCanvas || scratchCanvas;
               if (c && cv) {
@@ -2323,6 +2441,57 @@ export class PointerHandler {
                     }
                   : { ...origNote, box: preview.nextBox };
                 this.withScratchOffset(c, cv, () => {
+                  if (!origNote.collapsed) {
+                    // 1. Crisp, undistorted card shell + constant/ratio header + square collapse icon (~0.04ms)
+                    stickyNoteTool.renderCardChrome(c, preview.nextBox, {
+                      color: origNote.color,
+                      textColor: origNote.textColor,
+                      opacity: origNote.opacity,
+                      rotation: origNote.rotation,
+                      fastDrag: true,
+                      scale: rs
+                    });
+                    // 2. Fast GPU blit of cached interior content (text/strokes/items) below the header
+                    const sprite = this._stickyResizeContentSprite;
+                    if (sprite && sprite.noteId === origNote.id && sprite.canvas.width > 0 && sprite.canvas.height > 0) {
+                      const nextM = getStickyNoteLayoutMetrics(preview.nextBox);
+                      const srcY = Math.min(sprite.canvas.height - 1, Math.max(0, sprite.origHeaderHeight * sprite.spriteScale));
+                      const srcH = Math.max(1, sprite.canvas.height - srcY);
+                      const dstH = preview.nextBox.height - nextM.headerHeight;
+                      if (dstH > 2) {
+                        c.save();
+                        c.scale(rs, rs);
+                        if (origNote.rotation) {
+                          const cx = preview.nextBox.x + preview.nextBox.width * 0.5;
+                          const cy = preview.nextBox.y + preview.nextBox.height * 0.5;
+                          c.translate(cx, cy);
+                          c.rotate(origNote.rotation);
+                          c.translate(-cx, -cy);
+                        }
+                        c.beginPath();
+                        c.rect(
+                          preview.nextBox.x + 1.5,
+                          preview.nextBox.y + nextM.headerHeight + 0.5,
+                          Math.max(1, preview.nextBox.width - 3),
+                          Math.max(1, dstH - 2)
+                        );
+                        c.clip();
+                        c.drawImage(
+                          sprite.canvas,
+                          0,
+                          srcY,
+                          sprite.canvas.width,
+                          srcH,
+                          preview.nextBox.x,
+                          preview.nextBox.y + nextM.headerHeight,
+                          preview.nextBox.width,
+                          dstH
+                        );
+                        c.restore();
+                      }
+                    }
+                  }
+                  // 3. Draw crisp selection border, all 8 handles, and dimension pill STRICTLY ON TOP
                   selectionManager.render(c, [lightPreviewNote], rs);
                 });
                 this.setScratchpadDirtyFromPageBox(
@@ -2557,7 +2726,7 @@ export class PointerHandler {
     _e: PointerEvent,
     pageIndex: number,
     scratchCanvas: HTMLCanvasElement,
-    onNeedRepaint: () => void
+    onNeedRepaint: (dirtyPageBox?: BoundingBox | null) => void
   ): void {
     if (!this._isPointerDown || this._activePageIndex !== pageIndex) return;
 
@@ -2679,12 +2848,33 @@ export class PointerHandler {
         }
         return;
       }
+      let stickyErasedDirty: BoundingBox | null = null;
+      let stickyErasedIncrementally = false;
       if (currentNote) {
         if (s.mode === 'eraser') {
+          const pending = this._stickyEraserPendingPts.splice(0, this._stickyEraserPendingPts.length);
+          this._stickyEraserPendingNoteId = null;
+          if (pending.length > 0) {
+            const radius = Math.max(8, store.toolSettings.eraserWidth / 2);
+            if (this.applyStickyNoteEraser(pending, pageIndex, s.noteId, radius, store.toolSettings.eraserMode)) {
+              s.modified = true;
+              const pad = 20;
+              stickyErasedDirty = {
+                x: currentNote.box.x - pad,
+                y: currentNote.box.y - pad,
+                width: currentNote.box.width + pad * 2,
+                height: currentNote.box.height + pad * 2
+              };
+            }
+          }
+          const latestNote = doc?.annotations[pageIndex]?.find(
+            (a): a is StickyNoteAnnotation => a.id === s.noteId && a.type === 'sticky-note'
+          ) || currentNote;
           eraserTool.finish();
           if (s.modified) {
-            history.pushCommitted(new ModifyAnnotationCommand(pageIndex, s.originalNote, { ...currentNote }));
+            history.pushCommitted(new ModifyAnnotationCommand(pageIndex, s.originalNote, { ...latestNote }));
           }
+          stickyErasedIncrementally = true;
         } else if (s.mode === 'measure') {
           const measureAnn = measureTool.finish(defaultLayerId);
           if (measureAnn) {
@@ -2758,7 +2948,12 @@ export class PointerHandler {
       this._activePageIndex = -1;
       this._pageScratchCanvas = null;
       this._pageScratchCtx = null;
-      onNeedRepaint();
+      this.restoreStylusEraserCursor(_e);
+      if (stickyErasedIncrementally) {
+        if (stickyErasedDirty) onNeedRepaint(stickyErasedDirty);
+      } else {
+        onNeedRepaint();
+      }
       return;
     }
 
@@ -2910,8 +3105,16 @@ export class PointerHandler {
       }
 
       case 'eraser': {
+        const pending = this._eraserPendingPts.splice(0, this._eraserPendingPts.length);
+        if (pending.length > 0) {
+          const dirtyBox = this.applyEraserDirect(pending, pageIndex);
+          if (dirtyBox) {
+            onNeedRepaint(dirtyBox);
+          }
+        }
         eraserTool.finish();
         this.commitEraserSession(pageIndex);
+        handledIncrementally = true;
         break;
       }
 
@@ -3029,6 +3232,7 @@ export class PointerHandler {
     this._pageScratchCtx = null;
     this._scratchDirtyRect = null;
     this._predictedPtsBuffer.length = 0;
+    this.restoreStylusEraserCursor(_e);
     if (!handledIncrementally) {
       onNeedRepaint();
     }
@@ -3662,6 +3866,57 @@ export class PointerHandler {
     if (pageIndex === undefined || this._lastHoverTarget?.pageIndex === pageIndex) {
       this._lastHoverTarget = null;
     }
+    if (!this._isPointerDown && this._stylusEraserCursorCanvas) {
+      this.restoreStylusEraserCursor();
+    }
+  }
+
+  public isStylusEraserEvent(e: PointerEvent): boolean {
+    return (
+      store.toolSettings.stylusInvertedEraserEnabled !== false &&
+      e.pointerType === 'pen' &&
+      ((e.buttons & 32) !== 0 || (e as any).button === 5)
+    );
+  }
+
+  public isStylusEraserCursorCanvas(canvas: HTMLCanvasElement): boolean {
+    return this._stylusEraserCursorCanvas === canvas;
+  }
+
+  public syncStylusEraserCursor(e: PointerEvent, canvas: HTMLCanvasElement): boolean {
+    if (this.isStylusEraserEvent(e) && store.activeTool !== 'eraser') {
+      this._stylusEraserCursorCanvas = canvas;
+      this.setCanvasCursor(canvas, this.getCachedDrawingCursor('eraser'));
+      return true;
+    }
+    if (this._stylusEraserCursorCanvas) {
+      const prev = this._stylusEraserCursorCanvas;
+      this._stylusEraserCursorCanvas = null;
+      this.setCanvasCursor(prev, this.getCachedDrawingCursor());
+      if (prev !== canvas) {
+        this.setCanvasCursor(canvas, this.getCachedDrawingCursor());
+      }
+    }
+    return false;
+  }
+
+  private restoreStylusEraserCursor(upEvent?: PointerEvent): void {
+    if (!this._stylusEraserCursorCanvas) return;
+    // On pointerup, e.button === 5 can be the button that was just released, so only
+    // keep the eraser cursor if the eraser button bit (32) is still held down.
+    if (
+      upEvent &&
+      store.toolSettings.stylusInvertedEraserEnabled !== false &&
+      upEvent.pointerType === 'pen' &&
+      (upEvent.buttons & 32) !== 0 &&
+      store.activeTool !== 'eraser'
+    ) {
+      this.setCanvasCursor(this._stylusEraserCursorCanvas, this.getCachedDrawingCursor('eraser'));
+      return;
+    }
+    const prev = this._stylusEraserCursorCanvas;
+    this._stylusEraserCursorCanvas = null;
+    this.setCanvasCursor(prev, this.getCachedDrawingCursor());
   }
 
   private setCanvasCursor(canvas: HTMLCanvasElement, cursor: string): void {
@@ -3670,11 +3925,12 @@ export class PointerHandler {
     }
   }
 
-  private getCachedDrawingCursor(): string {
-    const tool = store.activeTool;
-    const style = store.toolSettings.drawingCursor || 'pen';
+  private getCachedDrawingCursor(toolOverride?: ToolType): string {
+    const tool = toolOverride ?? store.activeTool;
+    const ts = store.toolSettings;
+    const style = ts.drawingCursor || 'pen';
     const zoomKey = Math.round((store.zoom || 1) * 100);
-    const sig = `${tool}|${style}|${zoomKey}`;
+    const sig = `${tool}|${style}|${zoomKey}|${ts.penWidth}|${ts.eraserWidth}|${ts.eraserCursor || 'circle'}|${ts.highlighterWidth}|${ts.highlighterCursor || 'rectangle'}|${ts.highlighterColor}|${ts.highlighterOpacity ?? 0.45}`;
     if (sig !== this._hoverCursorSig) {
       this._hoverCursorSig = sig;
       this._hoverCursorValue = drawingCursorValue(tool, style, store.zoom);
@@ -3688,6 +3944,11 @@ export class PointerHandler {
     const pageAnns = doc.annotations[pageIndex] || [];
     const pt = precomputedPt ?? this.getPointInPage(e, canvas);
     this._lastHoverTarget = { pageIndex, canvas, pt: { x: pt.x, y: pt.y } };
+
+    if (this.syncStylusEraserCursor(e, canvas)) {
+      floatingPropsBar?.setHoverState(false);
+      return;
+    }
 
     const selected = pageAnns.filter(a => store.selectedAnnotationIds.has(a.id));
     if (selected.length > 0) {
@@ -3811,9 +4072,16 @@ export class PointerHandler {
     this._holdShape = null;
 
     if (tool === 'eraser' && this._eraserSession) {
+      const pending = this._eraserPendingPts.splice(0, this._eraserPendingPts.length);
+      if (pending.length > 0) {
+        this.applyEraserDirect(pending, this._eraserSession.pageIndex);
+      }
       eraserTool.finish();
       this.commitEraserSession(this._eraserSession.pageIndex);
     } else {
+      this._eraserPendingPts.length = 0;
+      this._stickyEraserPendingPts.length = 0;
+      this._stickyEraserPendingNoteId = null;
       // A gesture takeover commits (never silently drops) a selection drag;
       // an uncommitted marquee/lasso is just a rubber band.
       this.commitSelectDrag();
@@ -3845,6 +4113,7 @@ export class PointerHandler {
     this._scratchDirtyRect = null;
     this._predictedPtsBuffer.length = 0;
     this._cachedShapeVertices = null;
+    this.restoreStylusEraserCursor();
   }
 
   private beginEraserSession(pageIndex: number): void {
@@ -3859,30 +4128,60 @@ export class PointerHandler {
   }
 
   /**
-   * Applies eraser hits straight to the document with no history and no
-   * store notification — pure live visual feedback at pointer-event rate.
-   * Each point is tested against the CURRENT page state so continuous drags
-   * (including splits created earlier in the same frame) erase correctly.
+   * Applies a frame's batched eraser sweep straight to the document in ONE
+   * vectorized pass (zero history/notify cost) and returns the tight page-space
+   * dirty rectangle covering all modified annotations for sub-millisecond
+   * clipped repaints, or `null` if nothing was hit.
    */
-  private applyEraserDirect(points: Point[], pageIndex: number): boolean {
+  private applyEraserDirect(points: Point[], pageIndex: number): BoundingBox | null {
     const doc = store.activeDocument;
-    if (!doc || points.length === 0) return false;
-    if (!doc.annotations[pageIndex]) return false;
+    if (!doc || points.length === 0) return null;
+    const current = doc.annotations[pageIndex];
+    if (!current || current.length === 0) return null;
 
-    let modified = false;
-    for (const point of points) {
-      const current = doc.annotations[pageIndex];
-      if (current.length === 0) break;
-      const result = eraserTool.testErase(point, current);
-      if (result.toRemove.length === 0) continue;
-      const removeIds = new Set(result.toRemove.map(a => a.id));
-      doc.annotations[pageIndex] = current
-        .filter(a => !removeIds.has(a.id))
-        .concat(result.toAdd);
-      doc.lastModifiedAt = Date.now();
-      modified = true;
+    const result = eraserTool.testEraseBatch(points, current);
+    if (result.toRemove.length === 0) return null;
+
+    const removeIds = new Set<string>();
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxPad = Math.max(8, (store.toolSettings.eraserWidth || 20) * 0.6);
+
+    const includeAnn = (a: Annotation) => {
+      const sw = typeof (a as { strokeWidth?: number }).strokeWidth === 'number'
+        ? (a as { strokeWidth: number }).strokeWidth
+        : 2;
+      const pad = Math.max(10, sw * 2 + 8);
+      if (pad > maxPad) maxPad = pad;
+      const b = a.box;
+      if (b.x < minX) minX = b.x;
+      if (b.y < minY) minY = b.y;
+      if (b.x + b.width > maxX) maxX = b.x + b.width;
+      if (b.y + b.height > maxY) maxY = b.y + b.height;
+    };
+
+    for (let i = 0; i < result.toRemove.length; i++) {
+      removeIds.add(result.toRemove[i].id);
+      includeAnn(result.toRemove[i]);
     }
-    return modified;
+    for (let i = 0; i < result.toAdd.length; i++) {
+      includeAnn(result.toAdd[i]);
+    }
+
+    doc.annotations[pageIndex] = current
+      .filter(a => !removeIds.has(a.id))
+      .concat(result.toAdd);
+    doc.lastModifiedAt = Date.now();
+
+    if (!Number.isFinite(minX)) return null;
+    return {
+      x: minX - maxPad,
+      y: minY - maxPad,
+      width: (maxX - minX) + maxPad * 2,
+      height: (maxY - minY) + maxPad * 2
+    };
   }
 
   /**

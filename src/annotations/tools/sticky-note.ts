@@ -153,34 +153,42 @@ export interface StickyNoteLayoutMetrics {
 }
 
 /**
- * Computes proportional internal card metrics for any Sticky Note box size.
- * At >= 210x210 page units `uiScale` is 1.0 (preserving exact standard layout);
- * when shrunk smaller, header height, button icon, corner radius, and padding
- * scale smoothly with the card instead of clipping or overflowing.
+ * Computes clean, stable internal card metrics for any Sticky Note box size.
+ * The header bar and collapse button stay at a consistent fixed visual size
+ * (`headerHeight = 32`, `btnSize = 22`) across normal, wide, and tall notes
+ * (`width >= 100 && height >= 92`) so resizing width or height never distorts
+ * or shrinks the header. Only when a card becomes genuinely compact does the
+ * header scale down gently with a clean proportional floor (`>= 0.70`, while
+ * guaranteeing the header never consumes more than 42% of ultra-short cards).
  */
 export function getStickyNoteLayoutMetrics(box: BoundingBox): StickyNoteLayoutMetrics {
-  const uiScale = Math.max(
-    0.28,
-    Math.min(1.0, Math.min((box.width || STICKY_NOTE_DEFAULT_SIZE) / STICKY_NOTE_DEFAULT_SIZE, (box.height || STICKY_NOTE_DEFAULT_SIZE) / STICKY_NOTE_DEFAULT_SIZE))
-  );
-  const headerHeight = Math.max(11, Math.round(36 * uiScale * 10) / 10);
-  const btnSize = Math.max(8, Math.round(22 * uiScale * 10) / 10);
-  const btnOffsetRight = Math.max(7, Math.min(box.width * 0.3, 21 * uiScale));
+  const w = Math.max(1, box.width || STICKY_NOTE_DEFAULT_SIZE);
+  const h = Math.max(1, box.height || STICKY_NOTE_DEFAULT_SIZE);
+  const rawCompactRatio = Math.min(w / 104, h / 92);
+  const headerScale = Math.max(0.70, Math.min(1.0, rawCompactRatio));
+  // Keep header clean & constant for normal notes, and never exceed 42% height on tiny notes
+  const idealHeaderH = Math.round(32 * headerScale * 10) / 10;
+  const maxHeaderH = Math.max(18, Math.round(h * 0.42 * 10) / 10);
+  const headerHeight = Math.min(idealHeaderH, maxHeaderH);
+  const effScale = Math.max(0.56, Math.min(1.0, headerHeight / 32));
+  const btnSize = Math.max(14, Math.min(22, Math.round(22 * effScale * 10) / 10));
+  const btnOffsetRight = Math.max(btnSize * 0.5 + 5, Math.min(w * 0.3, Math.round(19 * effScale * 10) / 10));
+  const cornerRadius = Math.max(4, Math.min(STICKY_NOTE_CORNER_RADIUS, w * 0.2, h * 0.22));
   return {
-    uiScale,
-    cornerRadius: Math.max(3, STICKY_NOTE_CORNER_RADIUS * uiScale),
+    uiScale: effScale,
+    cornerRadius,
     headerHeight,
-    headerDividerInset: Math.max(4, 12 * uiScale),
-    btnCenterX: box.x + box.width - btnOffsetRight,
+    headerDividerInset: Math.max(6, Math.round(12 * effScale * 10) / 10),
+    btnCenterX: box.x + w - btnOffsetRight,
     btnCenterY: box.y + headerHeight / 2,
     btnSize,
-    btnRadius: Math.max(2, 6 * uiScale),
-    btnStrokeWidth: Math.max(0.75, 1.4 * uiScale),
-    btnArrowSpan: Math.max(2.0, 5 * uiScale),
-    btnArrowBarb: Math.max(1.5, 3.5 * uiScale),
-    padX: Math.max(4, 14 * uiScale),
-    padTop: headerHeight + Math.max(2.5, 8 * uiScale),
-    footerReserve: Math.max(3.5, 12 * uiScale)
+    btnRadius: Math.max(3, Math.round(6 * effScale * 10) / 10),
+    btnStrokeWidth: Math.max(1.0, Math.round(1.4 * effScale * 100) / 100),
+    btnArrowSpan: Math.max(3.2, Math.round(4.8 * effScale * 10) / 10),
+    btnArrowBarb: Math.max(2.2, Math.round(3.3 * effScale * 10) / 10),
+    padX: Math.max(6, Math.round(14 * effScale * 10) / 10),
+    padTop: headerHeight + Math.max(4, Math.round(8 * effScale * 10) / 10),
+    footerReserve: Math.max(4, Math.round(10 * effScale * 10) / 10)
   };
 }
 
@@ -1238,58 +1246,139 @@ export class StickyNoteTool {
   }
 
   /**
-   * Renders a StickyNoteAnnotation onto any 2D canvas context (screen or PDF export).
+   * Renders ONLY the crisp card shell (background fill, border, header divider,
+   * and square collapse button) for a Sticky Note box. Used both by normal
+   * rendering and 60fps live resize preview so the header and corners stay
+   * sharp and undistorted while resizing.
    */
-  public renderToCanvas(
+  public renderCardChrome(
+    ctx: CanvasRenderingContext2D,
+    box: BoundingBox,
+    options: {
+      color?: string;
+      textColor?: string;
+      opacity?: number;
+      rotation?: number;
+      fastDrag?: boolean;
+      scale?: number;
+    } = {}
+  ): void {
+    const scale = options.scale ?? 1.0;
+    const m = getStickyNoteLayoutMetrics(box);
+    const r = m.cornerRadius;
+
+    ctx.save();
+    if (scale !== 1) ctx.scale(scale, scale);
+    if (options.rotation) {
+      const cx = box.x + box.width * 0.5;
+      const cy = box.y + box.height * 0.5;
+      ctx.translate(cx, cy);
+      ctx.rotate(options.rotation);
+      ctx.translate(-cx, -cy);
+    }
+
+    // 1. Card fill (skip expensive Gaussian shadowBlur during active 60fps drag)
+    ctx.save();
+    if (!options.fastDrag) {
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.20)';
+      ctx.shadowBlur = 12 * m.uiScale;
+      ctx.shadowOffsetY = 4 * m.uiScale;
+    }
+    drawRoundedRectPath(ctx, box.x, box.y, box.width, box.height, r);
+    ctx.fillStyle = options.color || '#fef08a';
+    ctx.fill();
+    ctx.restore();
+
+    // 2. Subtle card border
+    drawRoundedRectPath(ctx, box.x, box.y, box.width, box.height, r);
+    ctx.strokeStyle = 'rgba(59, 47, 30, 0.26)';
+    ctx.lineWidth = Math.max(0.85, 1.1 * m.uiScale);
+    ctx.stroke();
+
+    // 3. Header bar separator line
+    ctx.save();
+    ctx.strokeStyle = 'rgba(59, 47, 30, 0.14)';
+    ctx.lineWidth = Math.max(0.75, m.uiScale);
+    ctx.beginPath();
+    ctx.moveTo(box.x + m.headerDividerInset, box.y + m.headerHeight);
+    ctx.lineTo(box.x + box.width - m.headerDividerInset, box.y + m.headerHeight);
+    ctx.stroke();
+    ctx.restore();
+
+    // 4. Crisp square top-right collapse button
+    this.renderCollapseButton(ctx, m, options.textColor || '#3b2f1e', options.opacity ?? 1);
+    ctx.restore();
+  }
+
+  private renderCollapseButton(
+    ctx: CanvasRenderingContext2D,
+    m: StickyNoteLayoutMetrics,
+    textColor: string,
+    opacity: number
+  ): void {
+    ctx.save();
+    const btnCx = m.btnCenterX;
+    const btnCy = m.btnCenterY;
+    const halfBtn = m.btnSize / 2;
+    const span = m.btnArrowSpan;
+    const arm = Math.max(0.6, span - m.btnArrowBarb);
+    const gap = Math.max(0.6, 1 * m.uiScale);
+    ctx.fillStyle = 'rgba(59, 47, 30, 0.08)';
+    drawRoundedRectPath(ctx, btnCx - halfBtn, btnCy - halfBtn, m.btnSize, m.btnSize, m.btnRadius);
+    ctx.fill();
+
+    ctx.strokeStyle = textColor;
+    ctx.globalAlpha = opacity * 0.72;
+    ctx.lineWidth = m.btnStrokeWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(btnCx + span, btnCy - span);
+    ctx.lineTo(btnCx + gap, btnCy - gap);
+    ctx.moveTo(btnCx + gap, btnCy - (span - arm * 0.25));
+    ctx.lineTo(btnCx + gap, btnCy - gap);
+    ctx.lineTo(btnCx + (span - arm * 0.25), btnCy - gap);
+    ctx.moveTo(btnCx - span, btnCy + span);
+    ctx.lineTo(btnCx - gap, btnCy + gap);
+    ctx.moveTo(btnCx - gap, btnCy + (span - arm * 0.25));
+    ctx.lineTo(btnCx - gap, btnCy + gap);
+    ctx.lineTo(btnCx - (span - arm * 0.25), btnCy + gap);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * Renders ONLY the transparent interior content (typed text, freehand strokes,
+   * and embedded items) of an expanded Sticky Note in page coordinates so live
+   * resize can cache interior content once onto an offscreen sprite without
+   * distorting the card shell or header.
+   */
+  public renderCardInteriorOnly(
     ctx: CanvasRenderingContext2D,
     ann: StickyNoteAnnotation,
     scale: number = 1.0,
     isEditingText: boolean = false
   ): void {
-    ctx.save();
-    ctx.scale(scale, scale);
-
-    if (ann.collapsed) {
-      this.renderCollapsedIcon(ctx, ann);
-      ctx.restore();
-      return;
-    }
-
+    if (ann.collapsed) return;
     const b = ann.box;
     const m = getStickyNoteLayoutMetrics(b);
     const r = m.cornerRadius;
 
-    // 1. Card elevation shadow & warm paper fill
     ctx.save();
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.20)';
-    ctx.shadowBlur = 12 * m.uiScale;
-    ctx.shadowOffsetY = 4 * m.uiScale;
-    drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
-    ctx.fillStyle = ann.color || '#fef08a';
-    ctx.fill();
-    ctx.restore();
-
-    // 2. Subtle card border
-    drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
-    ctx.strokeStyle = 'rgba(59, 47, 30, 0.26)';
-    ctx.lineWidth = Math.max(0.75, 1.1 * m.uiScale);
-    ctx.stroke();
-
-    // 3. Header bar separator line (scales proportionally with card dimensions)
-    ctx.save();
-    ctx.strokeStyle = 'rgba(59, 47, 30, 0.14)';
-    ctx.lineWidth = Math.max(0.65, m.uiScale);
-    ctx.beginPath();
-    ctx.moveTo(b.x + m.headerDividerInset, b.y + m.headerHeight);
-    ctx.lineTo(b.x + b.width - m.headerDividerInset, b.y + m.headerHeight);
-    ctx.stroke();
-    ctx.restore();
-
-    // 4. Clipped interior for typography, freehand strokes (pen & highlighter), and embedded items (shapes & text)
-    ctx.save();
+    if (scale !== 1) ctx.scale(scale, scale);
     drawRoundedRectPath(ctx, b.x + 1.5, b.y + 1.5, b.width - 3, b.height - 3, Math.max(2, r - 1.5));
     ctx.clip();
+    this.renderInteriorContentUnclipped(ctx, ann, m, isEditingText);
+    ctx.restore();
+  }
 
+  private renderInteriorContentUnclipped(
+    ctx: CanvasRenderingContext2D,
+    ann: StickyNoteAnnotation,
+    m: StickyNoteLayoutMetrics,
+    isEditingText: boolean
+  ): void {
+    const b = ann.box;
     const hasStrokes = Array.isArray(ann.strokes) && ann.strokes.length > 0;
     const hasItems = Array.isArray(ann.items) && ann.items.length > 0;
     const rawText = (ann.text || '').trim();
@@ -1299,46 +1388,42 @@ export class StickyNoteTool {
     const availW = Math.max(12, b.width - padX * 2);
     const availH = Math.max(10, b.height - padTop - footerReserve);
 
-    if (!isEditingText) {
-      if (rawText.length > 0) {
-        const fontSize = Math.max(5, ann.fontSize || 15);
-        const weight = ann.fontWeight === 'bold' || Number(ann.fontWeight) >= 600 ? 'bold' : 'normal';
-        const style = ann.fontStyle === 'italic' ? 'italic' : 'normal';
-        const familyCss = resolveAnnotationFontCss(ann.fontFamily);
-        ctx.font = `${style} ${weight} ${fontSize}px ${familyCss}`;
-        ctx.fillStyle = ann.textColor || '#3b2f1e';
-        ctx.textBaseline = 'top';
+    if (!isEditingText && rawText.length > 0) {
+      const fontSize = Math.max(5, ann.fontSize || 15);
+      const weight = ann.fontWeight === 'bold' || Number(ann.fontWeight) >= 600 ? 'bold' : 'normal';
+      const style = ann.fontStyle === 'italic' ? 'italic' : 'normal';
+      const familyCss = resolveAnnotationFontCss(ann.fontFamily);
+      ctx.font = `${style} ${weight} ${fontSize}px ${familyCss}`;
+      ctx.fillStyle = ann.textColor || '#3b2f1e';
+      ctx.textBaseline = 'top';
 
-        const displayLines = formatStickyNoteDisplayLines(ann.text, ann.listStyle);
-        const wrappedLines: string[] = [];
-        for (const para of displayLines) {
-          wrappedLines.push(...wrapLine(ctx, para, availW));
+      const displayLines = formatStickyNoteDisplayLines(ann.text, ann.listStyle);
+      const wrappedLines: string[] = [];
+      for (const para of displayLines) {
+        wrappedLines.push(...wrapLine(ctx, para, availW));
+      }
+
+      const lineHeight = fontSize * 1.35;
+      let curY = b.y + padTop;
+      const maxBottom = b.y + padTop + availH;
+
+      for (const line of wrappedLines) {
+        if (curY + fontSize * 0.6 > maxBottom) break;
+        let drawX = b.x + padX;
+        if (ann.textAlign === 'center') {
+          drawX = b.x + b.width / 2;
+          ctx.textAlign = 'center';
+        } else if (ann.textAlign === 'right') {
+          drawX = b.x + b.width - padX;
+          ctx.textAlign = 'right';
+        } else {
+          ctx.textAlign = 'left';
         }
-
-        const lineHeight = fontSize * 1.35;
-        let curY = b.y + padTop;
-        const maxBottom = b.y + padTop + availH;
-
-        for (const line of wrappedLines) {
-          if (curY + fontSize * 0.6 > maxBottom) break;
-          let drawX = b.x + padX;
-          if (ann.textAlign === 'center') {
-            drawX = b.x + b.width / 2;
-            ctx.textAlign = 'center';
-          } else if (ann.textAlign === 'right') {
-            drawX = b.x + b.width - padX;
-            ctx.textAlign = 'right';
-          } else {
-            ctx.textAlign = 'left';
-          }
-          ctx.fillText(line, drawX, curY);
-          curY += lineHeight;
-        }
+        ctx.fillText(line, drawX, curY);
+        curY += lineHeight;
       }
     }
 
-    // Render internal freehand strokes (pen & highlighter) and embedded board items (shapes & text)
-    // in unified chronological creation order so newer drawings always appear on top of older ones.
     if (hasStrokes || hasItems) {
       type NoteDrawable =
         | { kind: 'stroke'; stroke: StickyNoteStroke; time: number; seq: number }
@@ -1365,7 +1450,7 @@ export class StickyNoteTool {
           });
         }
       }
-      drawables.sort((a, b) => (a.time !== b.time ? a.time - b.time : a.seq - b.seq));
+      drawables.sort((a, b2) => (a.time !== b2.time ? a.time - b2.time : a.seq - b2.seq));
 
       for (const entry of drawables) {
         if (entry.kind === 'stroke') {
@@ -1402,39 +1487,65 @@ export class StickyNoteTool {
         }
       }
     }
+  }
 
+  /**
+   * Renders a StickyNoteAnnotation onto any 2D canvas context (screen or PDF export).
+   */
+  public renderToCanvas(
+    ctx: CanvasRenderingContext2D,
+    ann: StickyNoteAnnotation,
+    scale: number = 1.0,
+    isEditingText: boolean = false
+  ): void {
+    ctx.save();
+    ctx.scale(scale, scale);
+
+    if (ann.collapsed) {
+      this.renderCollapsedIcon(ctx, ann);
+      ctx.restore();
+      return;
+    }
+
+    const b = ann.box;
+    const m = getStickyNoteLayoutMetrics(b);
+    const r = m.cornerRadius;
+
+    // 1. Card elevation shadow & warm paper fill
+    ctx.save();
+    ctx.shadowColor = 'rgba(15, 23, 42, 0.20)';
+    ctx.shadowBlur = 12 * m.uiScale;
+    ctx.shadowOffsetY = 4 * m.uiScale;
+    drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
+    ctx.fillStyle = ann.color || '#fef08a';
+    ctx.fill();
     ctx.restore();
 
-    // 6. Top-right collapse button icon scaled proportionally to card header
-    ctx.save();
-    const btnCx = m.btnCenterX;
-    const btnCy = m.btnCenterY;
-    const halfBtn = m.btnSize / 2;
-    const span = m.btnArrowSpan;
-    const arm = Math.max(0.6, span - m.btnArrowBarb);
-    const gap = Math.max(0.5, 1 * m.uiScale);
-    ctx.fillStyle = 'rgba(59, 47, 30, 0.08)';
-    drawRoundedRectPath(ctx, btnCx - halfBtn, btnCy - halfBtn, m.btnSize, m.btnSize, m.btnRadius);
-    ctx.fill();
+    // 2. Subtle card border
+    drawRoundedRectPath(ctx, b.x, b.y, b.width, b.height, r);
+    ctx.strokeStyle = 'rgba(59, 47, 30, 0.26)';
+    ctx.lineWidth = Math.max(0.85, 1.1 * m.uiScale);
+    ctx.stroke();
 
-    ctx.strokeStyle = ann.textColor || '#3b2f1e';
-    ctx.globalAlpha = (ann.opacity ?? 1) * 0.72;
-    ctx.lineWidth = m.btnStrokeWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    // 3. Header bar separator line
+    ctx.save();
+    ctx.strokeStyle = 'rgba(59, 47, 30, 0.14)';
+    ctx.lineWidth = Math.max(0.75, m.uiScale);
     ctx.beginPath();
-    ctx.moveTo(btnCx + span, btnCy - span);
-    ctx.lineTo(btnCx + gap, btnCy - gap);
-    ctx.moveTo(btnCx + gap, btnCy - (span - arm * 0.25));
-    ctx.lineTo(btnCx + gap, btnCy - gap);
-    ctx.lineTo(btnCx + (span - arm * 0.25), btnCy - gap);
-    ctx.moveTo(btnCx - span, btnCy + span);
-    ctx.lineTo(btnCx - gap, btnCy + gap);
-    ctx.moveTo(btnCx - gap, btnCy + (span - arm * 0.25));
-    ctx.lineTo(btnCx - gap, btnCy + gap);
-    ctx.lineTo(btnCx - (span - arm * 0.25), btnCy + gap);
+    ctx.moveTo(b.x + m.headerDividerInset, b.y + m.headerHeight);
+    ctx.lineTo(b.x + b.width - m.headerDividerInset, b.y + m.headerHeight);
     ctx.stroke();
     ctx.restore();
+
+    // 4. Clipped interior for typography, freehand strokes, and embedded items
+    ctx.save();
+    drawRoundedRectPath(ctx, b.x + 1.5, b.y + 1.5, b.width - 3, b.height - 3, Math.max(2, r - 1.5));
+    ctx.clip();
+    this.renderInteriorContentUnclipped(ctx, ann, m, isEditingText);
+    ctx.restore();
+
+    // 5. Crisp top-right collapse button icon
+    this.renderCollapseButton(ctx, m, ann.textColor || '#3b2f1e', ann.opacity ?? 1);
 
     ctx.restore();
   }

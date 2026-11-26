@@ -398,6 +398,21 @@ export interface UnifiedPenPathPlan {
 }
 
 /**
+ * Pure deterministic width quantization for variable-pressure pen segments.
+ * Ensures every segment `i` resolves to the exact same `lineWidth` whether
+ * streamed incrementally across frames or built in one shot on commit.
+ */
+export function quantizePenSegmentWidth(
+  w1: number,
+  w2: number,
+  baseWidth: number
+): number {
+  const widthStep = Math.max(0.06, baseWidth * 0.03);
+  const avgW = (w1 + w2) * 0.5;
+  return Math.max(INK_MIN_WIDTH, Math.round(avgW / widthStep) * widthStep);
+}
+
+/**
  * Pure causal quadratic control-point calculation for segment `points[i-1] -> points[i]`.
  * Depends ONLY on `points[i-2]`, `points[i-1]`, and `points[i]` (zero look-ahead), so live
  * streaming and committed rendering produce mathematically identical curves with 0px shift.
@@ -436,10 +451,146 @@ export function computeStreamingQuadControl(
 }
 
 /**
+ * Incremental Path2D builder shared verbatim by both `StreamingInkRenderer` (live)
+ * and `buildUnifiedPenPathPlan` (committed). Appending points 1-by-1 across 60 frames
+ * yields the exact same `fillPath` and `batches` as building the whole stroke in one pass.
+ */
+export class UnifiedPenPlanBuilder {
+  public fillPath: Path2D | null = null;
+  public batches: UnifiedPenBatch[] = [];
+  private _activeBatchW = -1;
+  private _activePath: Path2D | null = null;
+  private _appendedCount = 0;
+
+  public reset(): void {
+    this.fillPath = null;
+    this.batches = [];
+    this._activeBatchW = -1;
+    this._activePath = null;
+    this._appendedCount = 0;
+  }
+
+  public get appendedCount(): number {
+    return this._appendedCount;
+  }
+
+  public appendUpTo(
+    points: readonly StrokePoint[],
+    baseWidth: number,
+    pressureCurve: 'linear' | 'soft' | 'firm' | 'exponential',
+    pressureEnabled: boolean,
+    strength: 'light' | 'balanced' | 'strong',
+    calcWidth: WidthCalcFn
+  ): void {
+    const n = points.length;
+    if (n === 0 || n <= this._appendedCount) return;
+
+    const widthAt = (pt: StrokePoint): number =>
+      Math.max(
+        INK_MIN_WIDTH,
+        calcWidth(baseWidth, pt.pressure ?? 0.5, pressureCurve, pressureEnabled, strength)
+      );
+
+    if (this._appendedCount === 0) {
+      const p0 = points[0];
+      const r0 = Math.max(INK_MIN_DOT_WIDTH * 0.5, widthAt(p0) * 0.5);
+      const dotPath = new Path2D();
+      dotPath.arc(p0.x, p0.y, r0, 0, Math.PI * 2, false);
+      this.fillPath = dotPath;
+      this._appendedCount = 1;
+    }
+
+    if (n <= 1) return;
+
+    const startIdx = Math.max(1, this._appendedCount);
+
+    if (!pressureEnabled) {
+      const strokeW = Math.max(INK_MIN_WIDTH, baseWidth);
+      if (!this._activePath) {
+        this._activeBatchW = strokeW;
+        this._activePath = new Path2D();
+        this._activePath.moveTo(points[0].x, points[0].y);
+        this.batches.push({ width: strokeW, path: this._activePath });
+      }
+      for (let i = startIdx; i < n; i++) {
+        const p2 = points[i];
+        const q = computeStreamingQuadControl(points, i);
+        if (q.useQuad) {
+          this._activePath.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
+        } else {
+          this._activePath.lineTo(p2.x, p2.y);
+        }
+      }
+      this._appendedCount = n;
+      return;
+    }
+
+    const widthTol = Math.max(0.08, baseWidth * 0.04);
+
+    for (let i = startIdx; i < n; i++) {
+      const p1 = points[i - 1];
+      const p2 = points[i];
+      const w1 = widthAt(p1);
+      const w2 = widthAt(p2);
+      const dw = Math.abs(w2 - w1);
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const q = computeStreamingQuadControl(points, i);
+
+      if (dw <= widthTol) {
+        const qW = quantizePenSegmentWidth(w1, w2, baseWidth);
+        if (!this._activePath || Math.abs(qW - this._activeBatchW) > 1e-6) {
+          this._activeBatchW = qW;
+          this._activePath = new Path2D();
+          this._activePath.moveTo(p1.x, p1.y);
+          this.batches.push({ width: qW, path: this._activePath });
+        }
+        if (q.useQuad) {
+          this._activePath.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
+        } else {
+          this._activePath.lineTo(p2.x, p2.y);
+        }
+      } else {
+        this._activePath = null;
+        this._activeBatchW = -1;
+        const steps = Math.min(3, Math.max(2, Math.ceil(dw / Math.max(0.25, baseWidth * 0.14))));
+        let prevX = p1.x;
+        let prevY = p1.y;
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const it = 1 - t;
+          const nx = q.useQuad
+            ? it * it * p1.x + 2 * it * t * q.cpx + t * t * p2.x
+            : p1.x + dx * t;
+          const ny = q.useQuad
+            ? it * it * p1.y + 2 * it * t * q.cpy + t * t * p2.y
+            : p1.y + dy * t;
+          const sw = w1 + (w2 - w1) * ((s - 0.5) / steps);
+          const segPath = new Path2D();
+          segPath.moveTo(prevX, prevY);
+          segPath.lineTo(nx, ny);
+          this.batches.push({ width: sw, path: segPath });
+          prevX = nx;
+          prevY = ny;
+        }
+      }
+    }
+
+    this._appendedCount = n;
+  }
+
+  public toPlan(): UnifiedPenPathPlan {
+    return {
+      fillPath: this.fillPath,
+      batches: this.batches
+    };
+  }
+}
+
+/**
  * Single-source-of-truth vector `Path2D` plan for committed `preSmoothed` pen strokes.
- * Mirrors `StreamingInkRenderer` segment-for-segment (identical causal quadratic curves,
- * identical round-capped stroke width batching, zero retroactive backward clamping) so
- * lifting the pen produces ZERO visual shift in curve, width, or stroke tail.
+ * Delegates directly to `UnifiedPenPlanBuilder` so committed strokes are 100% identical
+ * to `StreamingInkRenderer` — zero shift in curve, width, anti-aliasing, or stroke tail.
  */
 export function buildUnifiedPenPathPlan(
   points: readonly StrokePoint[],
@@ -449,116 +600,20 @@ export function buildUnifiedPenPathPlan(
   strength: 'light' | 'balanced' | 'strong',
   calcWidth: WidthCalcFn
 ): UnifiedPenPathPlan {
-  const n = points.length;
-  if (n === 0) return { fillPath: null, batches: [] };
-
-  const widthAt = (pt: StrokePoint): number =>
-    Math.max(
-      INK_MIN_WIDTH,
-      calcWidth(baseWidth, pt.pressure ?? 0.5, pressureCurve, pressureEnabled, strength)
-    );
-
-  // Initial contact dot (matches StreamingInkRenderer step 1)
-  const p0 = points[0];
-  const r0 = Math.max(INK_MIN_DOT_WIDTH * 0.5, widthAt(p0) * 0.5);
-  const dotPath = new Path2D();
-  dotPath.arc(p0.x, p0.y, r0, 0, Math.PI * 2, false);
-
-  if (n === 1) {
-    return { fillPath: dotPath, batches: [] };
-  }
-
-  const batches: UnifiedPenBatch[] = [];
-
-  if (!pressureEnabled) {
-    const strokeW = Math.max(INK_MIN_WIDTH, baseWidth);
-    const path = new Path2D();
-    path.moveTo(p0.x, p0.y);
-    for (let i = 1; i < n; i++) {
-      const p2 = points[i];
-      const q = computeStreamingQuadControl(points, i);
-      if (q.useQuad) {
-        path.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
-      } else {
-        path.lineTo(p2.x, p2.y);
-      }
-    }
-    batches.push({ width: strokeW, path });
-    return { fillPath: dotPath, batches };
-  }
-
-  // Variable-pressure batched paths mirroring StreamingInkRenderer verbatim
-  let activeBatchW = -1;
-  let activePath: Path2D | null = null;
-  const widthTol = Math.max(0.08, baseWidth * 0.04);
-
-  const flushBatch = () => {
-    if (activePath && activeBatchW > 0) {
-      batches.push({ width: activeBatchW, path: activePath });
-      activePath = null;
-    }
-  };
-
-  for (let i = 1; i < n; i++) {
-    const p1 = points[i - 1];
-    const p2 = points[i];
-    const w1 = widthAt(p1);
-    const w2 = widthAt(p2);
-    const dw = Math.abs(w2 - w1);
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const q = computeStreamingQuadControl(points, i);
-
-    if (dw <= widthTol) {
-      const avgW = (w1 + w2) * 0.5;
-      if (!activePath || Math.abs(avgW - activeBatchW) > widthTol) {
-        flushBatch();
-        activeBatchW = avgW;
-        activePath = new Path2D();
-        activePath.moveTo(p1.x, p1.y);
-      }
-      if (q.useQuad) {
-        activePath.quadraticCurveTo(q.cpx, q.cpy, p2.x, p2.y);
-      } else {
-        activePath.lineTo(p2.x, p2.y);
-      }
-    } else {
-      flushBatch();
-      const steps = Math.min(3, Math.max(2, Math.ceil(dw / Math.max(0.25, baseWidth * 0.14))));
-      let prevX = p1.x;
-      let prevY = p1.y;
-      for (let s = 1; s <= steps; s++) {
-        const t = s / steps;
-        const it = 1 - t;
-        const nx = q.useQuad
-          ? it * it * p1.x + 2 * it * t * q.cpx + t * t * p2.x
-          : p1.x + dx * t;
-        const ny = q.useQuad
-          ? it * it * p1.y + 2 * it * t * q.cpy + t * t * p2.y
-          : p1.y + dy * t;
-        const sw = w1 + (w2 - w1) * ((s - 0.5) / steps);
-        const segPath = new Path2D();
-        segPath.moveTo(prevX, prevY);
-        segPath.lineTo(nx, ny);
-        batches.push({ width: sw, path: segPath });
-        prevX = nx;
-        prevY = ny;
-      }
-      activeBatchW = -1;
-    }
-  }
-  flushBatch();
-
-  return { fillPath: dotPath, batches };
+  if (points.length === 0) return { fillPath: null, batches: [] };
+  const builder = new UnifiedPenPlanBuilder();
+  builder.appendUpTo(points, baseWidth, pressureCurve, pressureEnabled, strength, calcWidth);
+  return builder.toPlan();
 }
 
 /**
- * Strictly O(1), zero-blit, zero-DOM-mutation append-only live ink streamer.
+ * High-speed live ink renderer with 100% pixel-identical commit parity.
  *
- * Paints each newly arrived pointer segment directly onto `targetCanvas` using
- * native GPU-accelerated round-capped strokes (zero floating tip DOM canvas,
- * zero layout reflows, zero mid-stroke `clearRect`, zero 28-capsule Skia
- * nonzero-winding tessellation stalls), delivering <0.2ms per-frame live ink.
+ * Uses `UnifiedPenPlanBuilder` to append ONLY newly arrived segments in O(1)
+ * onto persistent `Path2D` batches, then clears ONLY the stroke's tight dirty
+ * rectangle and paints those exact single-pass `Path2D` batches (zero AA
+ * double-blending at frame boundaries, zero width drift on lift). Falls back
+ * to pure append-only for marathon strokes (>1200 pts) or headless test mocks.
  */
 export class StreamingInkRenderer {
   private _drawnPointCount = 0;
@@ -569,8 +624,12 @@ export class StreamingInkRenderer {
   private _lastScale = 0;
   private _lastOffsetX = 0;
   private _lastOffsetY = 0;
+  private _lastColor = '';
+  private _lastBaseWidth = 0;
+  private _lastPressureEnabled = false;
+  private _planBuilder = new UnifiedPenPlanBuilder();
 
-  // Tight device-pixel dirty bounds painted on targetCanvas (for O(1) clear on pointerup!)
+  // Tight device-pixel dirty bounds painted on targetCanvas (for O(1) clear)
   private _dirtyMinX = Infinity;
   private _dirtyMinY = Infinity;
   private _dirtyMaxX = -Infinity;
@@ -582,6 +641,9 @@ export class StreamingInkRenderer {
     this._lastScale = 0;
     this._lastOffsetX = 0;
     this._lastOffsetY = 0;
+    this._lastColor = '';
+    this._lastBaseWidth = 0;
+    this._planBuilder.reset();
     this._dirtyMinX = Infinity;
     this._dirtyMinY = Infinity;
     this._dirtyMaxX = -Infinity;
@@ -640,8 +702,8 @@ export class StreamingInkRenderer {
   }
 
   /**
-   * Appends ONLY newly added stroke segments directly onto `targetCtx` with
-   * zero mid-stroke clears, zero offscreen blits, and zero DOM mutations.
+   * Incrementally appends new stroke segments onto the unified `Path2D` plan
+   * and paints with 100% bit-exact parity to committed `renderSmoothStroke`.
    */
   public render(
     targetCtx: CanvasRenderingContext2D,
@@ -672,11 +734,15 @@ export class StreamingInkRenderer {
       Math.abs(this._lastScale - scale) > 1e-4 ||
       Math.abs(this._lastOffsetX - offsetPxX) > 0.5 ||
       Math.abs(this._lastOffsetY - offsetPxY) > 0.5 ||
+      this._lastColor !== color ||
+      this._lastBaseWidth !== baseWidth ||
+      this._lastPressureEnabled !== pressureEnabled ||
       n < this._drawnPointCount;
 
     if (geometryChanged) {
       this._drawnPointCount = 0;
       this._hasInitialDot = false;
+      this._planBuilder.reset();
       this._dirtyMinX = Infinity;
       this._dirtyMinY = Infinity;
       this._dirtyMaxX = -Infinity;
@@ -687,7 +753,12 @@ export class StreamingInkRenderer {
       this._lastScale = scale;
       this._lastOffsetX = offsetPxX;
       this._lastOffsetY = offsetPxY;
+      this._lastColor = color;
+      this._lastBaseWidth = baseWidth;
+      this._lastPressureEnabled = pressureEnabled;
     }
+
+    if (n <= this._drawnPointCount && !geometryChanged) return;
 
     const widthAt = (pt: StrokePoint): number =>
       Math.max(
@@ -695,7 +766,71 @@ export class StreamingInkRenderer {
         calcWidth(baseWidth, pt.pressure ?? 0.5, pressureCurve, pressureEnabled, strength)
       );
 
-    // 1. Paint initial contact dot immediately on pointerdown (0ms latency)
+    const hasNativeStroke = typeof targetCtx.stroke === 'function';
+    const hasPath2D = typeof Path2D !== 'undefined';
+
+    // Exact WYSIWYG single-pass Path2D mode (real browsers, strokes <= 1200 pts):
+    // Appends only the new points to `_planBuilder` in O(1), clears only the tight
+    // stroke dirty rect, and paints the EXACT same `fillPath` + `batches` as
+    // `renderSmoothStroke` on `annotCanvas` -> 0.00px & 0-alpha shift on pen lift!
+    if (hasNativeStroke && hasPath2D && n <= 1200) {
+      const prevDirty = this.getSettledDirtyRectPx();
+      const firstNew = Math.max(0, this._drawnPointCount - 1);
+      for (let i = firstNew; i < n; i++) {
+        const pt = points[i];
+        const pad = Math.max(INK_MIN_DOT_WIDTH, widthAt(pt)) * 0.5 + 3;
+        this.expandDirtyPx(pt.x, pt.y, pad, scale, offsetPxX, offsetPxY);
+      }
+
+      this._planBuilder.appendUpTo(
+        points,
+        baseWidth,
+        pressureCurve,
+        pressureEnabled,
+        strength,
+        calcWidth
+      );
+
+      targetCtx.save();
+      targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+      if (prevDirty) {
+        const cx = Math.max(0, prevDirty.x - 4);
+        const cy = Math.max(0, prevDirty.y - 4);
+        const cw = Math.min(targetCanvas.width - cx, prevDirty.width + 8);
+        const ch = Math.min(targetCanvas.height - cy, prevDirty.height + 8);
+        if (cw > 0 && ch > 0) {
+          targetCtx.clearRect(cx, cy, cw, ch);
+        }
+      }
+      targetCtx.translate(-offsetPxX, -offsetPxY);
+      targetCtx.scale(scale, scale);
+      if (clipCallback) clipCallback(targetCtx);
+
+      targetCtx.lineCap = 'round';
+      targetCtx.lineJoin = 'round';
+      targetCtx.imageSmoothingEnabled = true;
+      if ('imageSmoothingQuality' in targetCtx) {
+        targetCtx.imageSmoothingQuality = 'high';
+      }
+      targetCtx.strokeStyle = color;
+      targetCtx.fillStyle = color;
+
+      if (this._planBuilder.fillPath) {
+        targetCtx.fill(this._planBuilder.fillPath, 'nonzero');
+      }
+      const batches = this._planBuilder.batches;
+      for (let i = 0; i < batches.length; i++) {
+        targetCtx.lineWidth = batches[i].width;
+        targetCtx.stroke(batches[i].path);
+      }
+      targetCtx.restore();
+
+      this._hasInitialDot = true;
+      this._drawnPointCount = n;
+      return;
+    }
+
+    // Append-only fallback for marathon strokes (>1200 pts) or headless test mocks
     if (!this._hasInitialDot) {
       const p0 = points[0];
       const r0 = Math.max(INK_MIN_DOT_WIDTH * 0.5, widthAt(p0) * 0.5);
@@ -717,7 +852,6 @@ export class StreamingInkRenderer {
     if (n <= this._drawnPointCount) return;
 
     const startIdx = Math.max(1, this._drawnPointCount);
-    const hasNativeStroke = typeof targetCtx.stroke === 'function';
     const hasQuad = typeof targetCtx.quadraticCurveTo === 'function';
 
     targetCtx.save();
@@ -732,7 +866,6 @@ export class StreamingInkRenderer {
       targetCtx.lineJoin = 'round';
 
       if (!pressureEnabled) {
-        // Ultra-fast single GPU draw call for all new segments this frame
         const strokeW = Math.max(INK_MIN_WIDTH, baseWidth);
         const pad = strokeW * 0.5 + 2;
         targetCtx.lineWidth = strokeW;
@@ -753,8 +886,6 @@ export class StreamingInkRenderer {
         }
         targetCtx.stroke();
       } else {
-        // Variable-pressure fast batched strokes (coalesces constant-width runs into 1 draw call;
-        // smoothly subdivides only segments with noticeable pressure delta into at most 3 steps).
         let activeBatchW = -1;
         let pathOpen = false;
         const widthTol = Math.max(0.08, baseWidth * 0.04);
@@ -781,11 +912,11 @@ export class StreamingInkRenderer {
           const q = hasQuad ? computeStreamingQuadControl(points, i) : { useQuad: false, cpx: 0, cpy: 0 };
 
           if (dw <= widthTol) {
-            const avgW = (w1 + w2) * 0.5;
-            if (!pathOpen || Math.abs(avgW - activeBatchW) > widthTol) {
+            const qW = quantizePenSegmentWidth(w1, w2, baseWidth);
+            if (!pathOpen || Math.abs(qW - activeBatchW) > 1e-6) {
               flushBatch();
-              activeBatchW = avgW;
-              targetCtx.lineWidth = avgW;
+              activeBatchW = qW;
+              targetCtx.lineWidth = qW;
               targetCtx.beginPath();
               targetCtx.moveTo(p1.x, p1.y);
               pathOpen = true;
@@ -824,7 +955,6 @@ export class StreamingInkRenderer {
         flushBatch();
       }
     } else {
-      // Minimal mock-context fallback (unit tests without Canvas2D stroke)
       targetCtx.fillStyle = color;
       targetCtx.beginPath();
       for (let i = startIdx; i < n; i++) {

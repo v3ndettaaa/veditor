@@ -2367,7 +2367,7 @@ body.invert-pdf-document .pdf-ph-num {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 5;
+  z-index: 6;
   touch-action: none;
   cursor: crosshair;
 }
@@ -2377,7 +2377,7 @@ body.invert-pdf-document .pdf-ph-num {
   top: 0;
   left: 0;
   pointer-events: none;
-  z-index: 6;
+  z-index: 7;
   display: none;
 }
 
@@ -2388,7 +2388,7 @@ body.invert-pdf-document .pdf-ph-num {
   top: 0;
   left: 0;
   pointer-events: none;
-  z-index: 7;
+  z-index: 8;
   display: none;
 }
 
@@ -2397,8 +2397,14 @@ body.invert-pdf-document .pdf-ph-num {
 .select-drag-overlay {
   position: absolute;
   pointer-events: none;
-  z-index: 8;
+  z-index: 9;
   will-change: transform;
+}
+
+/* During resize preview, selection handles render on scratchpad (z-index 6/7), so
+   keep resize preview overlays strictly underneath the handles (never occluding them). */
+.select-drag-overlay.is-resize-preview {
+  z-index: 5;
 }
 
 /* Floating View Controls (Bottom-Right) */

@@ -2185,7 +2185,8 @@ class VeditorApp {
 
   private repaintAnnotationChunk(
     pageIndex: number,
-    p: { annotCanvas: HTMLCanvasElement; annotChunkCanvas?: HTMLCanvasElement }
+    p: { annotCanvas: HTMLCanvasElement; annotChunkCanvas?: HTMLCanvasElement },
+    dirtyPageBox?: { x: number; y: number; width: number; height: number } | null
   ): void {
     const chunk = p.annotChunkCanvas;
     if (!chunk || chunk.style.display !== 'block' || chunk.width <= 1 || chunk.height <= 1) return;
@@ -2198,12 +2199,6 @@ class VeditorApp {
 
     const ctx = chunk.getContext('2d');
     if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, chunk.width, chunk.height);
-    // Commit a 1x1 imperceptible pixel so Blink/Skia's deferred Canvas2D swapchain
-    // never discards an empty full-canvas clearRect and recycles a stale ghost frame.
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.004)';
-    ctx.fillRect(0, 0, 1, 1);
 
     const dragIds = pointerHandler.getSelectDragExcludedIds(pageIndex);
     const layout = viewportManager.getLayout(pageIndex);
@@ -2211,6 +2206,42 @@ class VeditorApp {
     const fullH = layout ? Math.round((layout.height / Math.max(store.zoom, 0.0001)) * scale) : chunk.height;
 
     ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    if (dirtyPageBox && store.selectedAnnotationIds.size === 0) {
+      const dx = Math.max(0, Math.floor(dirtyPageBox.x * scale - ox * dpr) - 6);
+      const dy = Math.max(0, Math.floor(dirtyPageBox.y * scale - oy * dpr) - 6);
+      const dr = Math.min(chunk.width, Math.ceil((dirtyPageBox.x + dirtyPageBox.width) * scale - ox * dpr) + 6);
+      const db = Math.min(chunk.height, Math.ceil((dirtyPageBox.y + dirtyPageBox.height) * scale - oy * dpr) + 6);
+      const dw = dr - dx;
+      const dh = db - dy;
+      if (dw <= 0 || dh <= 0) {
+        ctx.restore();
+        return;
+      }
+      ctx.beginPath();
+      ctx.rect(dx, dy, dw, dh);
+      ctx.clip();
+      ctx.clearRect(dx, dy, dw, dh);
+      ctx.translate(-ox * dpr, -oy * dpr);
+      annotationEngine.renderBackgroundPattern(
+        ctx,
+        fullW,
+        fullH,
+        notebookController.isNotebook() ? 'none' : store.appSettings.backgroundPattern,
+        scale
+      );
+      annotationEngine.renderAnnotationsToCanvas(ctx, pageIndex, scale, dragIds, dirtyPageBox);
+      ctx.restore();
+      return;
+    }
+
+    ctx.clearRect(0, 0, chunk.width, chunk.height);
+    // Commit a 1x1 imperceptible pixel so Blink/Skia's deferred Canvas2D swapchain
+    // never discards an empty full-canvas clearRect and recycles a stale ghost frame.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.004)';
+    ctx.fillRect(0, 0, 1, 1);
+
     ctx.translate(-ox * dpr, -oy * dpr);
 
     annotationEngine.renderBackgroundPattern(
@@ -2856,12 +2887,13 @@ class VeditorApp {
       annotCanvas: HTMLCanvasElement;
       annotChunkCanvas?: HTMLCanvasElement;
       scratchCanvas: HTMLCanvasElement;
-    }
+    },
+    dirtyPageBox?: { x: number; y: number; width: number; height: number } | null
   ) {
     // When the High-DPI Viewport Annotation Chunk is active, skip rendering onto
     // the hidden full-page annotCanvas underneath (saves 50% CPU and 100% full-page annotCanvas VRAM).
     if (p.annotChunkCanvas && p.annotChunkCanvas.style.display === 'block' && p.annotChunkCanvas.width > 1) {
-      this.repaintAnnotationChunk(pageIndex, p);
+      this.repaintAnnotationChunk(pageIndex, p, dirtyPageBox);
       return;
     }
 
@@ -2875,6 +2907,34 @@ class VeditorApp {
     const annCtx = p.annotCanvas.getContext('2d');
     if (annCtx && p.annotCanvas.width > 1 && p.annotCanvas.height > 1) {
       const dragIds = pointerHandler.getSelectDragExcludedIds(pageIndex);
+
+      if (dirtyPageBox && store.selectedAnnotationIds.size === 0) {
+        const dx = Math.max(0, Math.floor(dirtyPageBox.x * scale) - 6);
+        const dy = Math.max(0, Math.floor(dirtyPageBox.y * scale) - 6);
+        const dr = Math.min(p.annotCanvas.width, Math.ceil((dirtyPageBox.x + dirtyPageBox.width) * scale) + 6);
+        const db = Math.min(p.annotCanvas.height, Math.ceil((dirtyPageBox.y + dirtyPageBox.height) * scale) + 6);
+        const dw = dr - dx;
+        const dh = db - dy;
+        if (dw > 0 && dh > 0) {
+          annCtx.save();
+          annCtx.setTransform(1, 0, 0, 1, 0, 0);
+          annCtx.beginPath();
+          annCtx.rect(dx, dy, dw, dh);
+          annCtx.clip();
+          annCtx.clearRect(dx, dy, dw, dh);
+          annotationEngine.renderBackgroundPattern(
+            annCtx,
+            p.annotCanvas.width,
+            p.annotCanvas.height,
+            notebookController.isNotebook() ? 'none' : store.appSettings.backgroundPattern,
+            scale
+          );
+          annotationEngine.renderAnnotationsToCanvas(annCtx, pageIndex, scale, dragIds, dirtyPageBox);
+          annCtx.restore();
+        }
+        return;
+      }
+
       annCtx.clearRect(0, 0, p.annotCanvas.width, p.annotCanvas.height);
       annCtx.fillStyle = 'rgba(0, 0, 0, 0.004)';
       annCtx.fillRect(0, 0, 1, 1);
@@ -2930,9 +2990,9 @@ class VeditorApp {
   }
 
   private bindPointerEvents(canvas: HTMLCanvasElement, pageIndex: number) {
-    const onRepaint = () => {
+    const onRepaint = (dirtyPageBox?: { x: number; y: number; width: number; height: number } | null) => {
       const pageEls = this._renderedPages.get(pageIndex);
-      if (pageEls) this.repaintPageAnnotations(pageIndex, pageEls);
+      if (pageEls) this.repaintPageAnnotations(pageIndex, pageEls, dirtyPageBox);
     };
 
     // Suppress the browser's middle-click autoscroll affordance; the app pans.
@@ -2945,7 +3005,10 @@ class VeditorApp {
 
     // Pre-warm this page's GPU scratchpad surface the moment the pointer/stylus
     // enters the page so the very first stroke starts with 0ms texture stall.
-    canvas.addEventListener('pointerenter', () => {
+    canvas.addEventListener('pointerenter', (e) => {
+      if (!pointerHandler.isPointerDown) {
+        pointerHandler.syncStylusEraserCursor(e, canvas);
+      }
       if (this._isFastScrolling || this._isZoomGestureActive || pointerHandler.isPointerDown) return;
       const tool = store.activeTool;
       if (tool !== 'hand') {
@@ -2994,8 +3057,8 @@ class VeditorApp {
         return;
       }
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      // Hand tool: drag pans the page like a trackpad — never draws.
-      if (store.activeTool === 'hand') {
+      // Hand tool: drag pans the page like a trackpad — never draws (except stylus eraser button).
+      if (store.activeTool === 'hand' && !pointerHandler.isStylusEraserEvent(e)) {
         // Double-press quick-select. Detected manually on pointerdown because
         // `dblclick` is unreliable here: canceled pointerdowns and touch
         // double-taps don't produce it consistently across browsers.
@@ -3246,7 +3309,10 @@ class VeditorApp {
       const handled = this._annotationMenu.handleCanvasContextMenu(e, {
         pageIndex,
         point: pointerHandler.pagePointForEvent(e, canvas),
-        onRepaint
+        onRepaint: (pi: number) => {
+          const els = this._renderedPages.get(pi);
+          if (els) this.repaintPageAnnotations(pi, els);
+        }
       });
       if (handled) {
         e.preventDefault();
@@ -3427,7 +3493,7 @@ class VeditorApp {
 
     const ts = store.toolSettings;
     const cursorStyle = ts.drawingCursor || 'pen';
-    const sig = `${store.activeTool}|${cursorStyle}|${store.zoom.toFixed(3)}|${ts.penWidth}|${ts.eraserWidth}|${ts.highlighterWidth}`;
+    const sig = `${store.activeTool}|${cursorStyle}|${store.zoom.toFixed(3)}|${ts.penWidth}|${ts.eraserWidth}|${ts.eraserCursor || 'circle'}|${ts.highlighterWidth}|${ts.highlighterCursor || 'rectangle'}`;
     if (force || sig !== this._lastCursorSig || !this._lastCursorValue) {
       this._lastCursorSig = sig;
       this._lastCursorValue = drawingCursorValue(
@@ -3438,6 +3504,7 @@ class VeditorApp {
     }
     const cursor = this._lastCursorValue;
     for (const [, p] of this._renderedPages) {
+      if (pointerHandler.isStylusEraserCursorCanvas(p.scratchCanvas)) continue;
       if (p.scratchCanvas.style.cursor !== cursor) {
         p.scratchCanvas.style.cursor = cursor;
       }

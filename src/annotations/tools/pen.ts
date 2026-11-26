@@ -70,22 +70,11 @@ export class PenTool {
 
     const prev = this._activePoints[len - 1];
     const effZoom = Math.max(0.25, zoom);
-    // Filter redundant sub-pixel hardware jitter while updating _liveTip so
-    // the visible ink nib tracks slow micro-movements with zero delay.
     const minDist = Math.min(0.18, 0.24 / Math.max(1, effZoom));
     const rawDist = Math.hypot(point.x - prev.x, point.y - prev.y);
     if (rawDist < minDist) {
-      prev.pressure = prev.pressure * 0.55 + (point.pressure ?? 0.5) * 0.45;
-      if (rawDist > 0.01) {
-        this._liveTip = {
-          x: point.x,
-          y: point.y,
-          pressure: prev.pressure,
-          tiltX: point.tiltX,
-          tiltY: point.tiltY,
-          time: point.time
-        };
-      }
+      // Keep already-rendered settled points strictly immutable so lifting the pen
+      // never alters the committed width or tail relative to the live stroke.
       return;
     }
 
