@@ -47,6 +47,7 @@ const MIME_TYPES = {
   '.wasm': 'application/wasm',
   '.bcmap': 'application/octet-stream',
   '.pfb': 'application/octet-stream',
+  '.icc': 'application/vnd.iccprofile',
   '.pdf': 'application/pdf'
 };
 
@@ -279,7 +280,10 @@ function registerIpcHandlers() {
   ipcMain.handle('fs:write-file', async (_event, filePath, bytes) => {
     if (typeof filePath !== 'string' || !filePath || !bytes) return false;
     try {
-      const buffer = Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      const buffer =
+        bytes instanceof Uint8Array
+          ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+          : Buffer.from(new Uint8Array(bytes));
       await fsp.writeFile(filePath, buffer);
       return true;
     } catch (err) {

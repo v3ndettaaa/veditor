@@ -7,6 +7,14 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which builds to run'
+        type: choice
+        default: all
+        options:
+          - all
+          - electron-only
 
 permissions:
   contents: write
@@ -15,7 +23,81 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  prepare-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pkg_version.outputs.VERSION }}
+      tag: ${{ steps.pkg_version.outputs.TAG }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version & ensure GitHub Release exists
+        id: pkg_version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION=$(node -e "const fs = require('fs'); console.log(JSON.parse(fs.readFileSync('./package.json', 'utf8')).version);")
+          TAG="v${VERSION}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Creating release $TAG..."
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "veditor $TAG" --notes "See the assets below to download and install veditor for Windows, macOS, Linux (Tauri & Electron), Chrome & Firefox."
+          fi
+
+  build-electron-linux:
+    needs: prepare-release
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm ci || npm install --legacy-peer-deps
+
+      - name: Build desktop frontend bundle
+        run: npm run build:desktop
+
+      - name: Install Electron packaging dependencies
+        run: npm --prefix electron install
+
+      - name: Build Electron Linux packages (AppImage & deb)
+        run: npm --prefix electron run build:linux
+
+      - name: Upload Linux Electron packages to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+          ASSETS=(dist/electron/*electron*.AppImage dist/electron/*electron*.deb)
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No Electron Linux artifacts found in dist/electron!"
+            ls -la dist/electron || true
+            exit 1
+          fi
+          echo "Uploading Electron Linux artifacts to release $TAG with --clobber:"
+          printf '  - %s\n' "${ASSETS[@]}"
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber
+
   build-tauri:
+    needs: prepare-release
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
     permissions:
       contents: write
     strategy:
@@ -71,7 +153,8 @@ jobs:
           args: ${{ matrix.args }}
 
   package-extensions:
-    needs: build-tauri
+    needs: prepare-release
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'all' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -91,81 +174,15 @@ jobs:
       - name: Package browser extensions
         run: npm run package
 
-      - name: Read version from package.json
-        id: pkg_version
-        shell: bash
-        run: |
-          VERSION=$(node -e "import fs from 'fs'; console.log(JSON.parse(fs.readFileSync('./package.json', 'utf8')).version);")
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Upload extension zips to GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v${{ steps.pkg_version.outputs.VERSION }}"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG does not exist yet; creating it..."
-            gh release create "$TAG" --title "veditor $TAG" --notes "See the assets below to download and install veditor for Windows, macOS, Linux, Chrome & Firefox."
-          fi
+          TAG="${{ needs.prepare-release.outputs.tag }}"
           echo "Uploading extension archives to release $TAG with --clobber..."
           gh release upload "$TAG" dist/veditor-chrome.zip dist/veditor-firefox.zip --clobber
 
-  build-electron-linux:
-    needs: build-tauri
-    if: ${{ !cancelled() }}
-    permissions:
-      contents: write
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install frontend dependencies
-        run: npm ci || npm install --legacy-peer-deps
-
-      - name: Build desktop frontend bundle
-        run: npm run build:desktop
-
-      - name: Install Electron packaging dependencies
-        run: npm --prefix electron install
-
-      - name: Build Electron Linux packages (AppImage & deb)
-        run: npm --prefix electron run build:linux
-
-      - name: Read version from package.json
-        id: pkg_version
-        shell: bash
-        run: |
-          VERSION=$(node -e "import fs from 'fs'; console.log(JSON.parse(fs.readFileSync('./package.json', 'utf8')).version);")
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Upload Linux Electron packages to GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          shopt -s nullglob
-          TAG="v${{ steps.pkg_version.outputs.VERSION }}"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG does not exist yet; creating it..."
-            gh release create "$TAG" --title "veditor $TAG" --notes "See the assets below to download and install veditor for Windows, macOS, Linux (Tauri & Electron), Chrome & Firefox."
-          fi
-          ASSETS=(dist/electron/*electron*.AppImage dist/electron/*electron*.deb)
-          if [ ${#ASSETS[@]} -eq 0 ]; then
-            echo "No Electron Linux artifacts found in dist/electron!"
-            ls -la dist/electron || true
-            exit 1
-          fi
-          echo "Uploading Electron Linux artifacts to release $TAG with --clobber:"
-          printf '  - %s\n' "${ASSETS[@]}"
-          gh release upload "$TAG" "${ASSETS[@]}" --clobber
 
 
 
