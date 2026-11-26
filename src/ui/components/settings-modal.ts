@@ -15,7 +15,7 @@ import { clearAllStorage } from '../../io/storage';
 import { getToolShortLabel } from './toolbar';
 import { shortcutManager, type ShortcutAction } from '../../input/shortcuts';
 import { getAppVersion } from '../../core/app-version';
-import { isDesktop } from '../../core/platform';
+import { isDesktop, isElectron } from '../../core/platform';
 import { showToast } from './toast';
 import { nativeConfirm } from '../../io/native-fs';
 import {
@@ -579,9 +579,11 @@ export class SettingsModalComponent {
     const versionEl = this._container.querySelector('#about-version-text');
     const copyVersionBtn = this._container.querySelector<HTMLButtonElement>('#about-copy-version-btn');
     let resolvedVersion = '';
-    const platformLabel = isDesktop()
-      ? tr('Desktop App', 'نسخه دسکتاپ')
-      : tr('Web & Extension', 'وب و اکستنشن');
+    const platformLabel = isElectron()
+      ? tr('Desktop App (Electron)', 'نسخه دسکتاپ (الکترون)')
+      : isDesktop()
+        ? tr('Desktop App', 'نسخه دسکتاپ')
+        : tr('Web & Extension', 'وب و اکستنشن');
     if (versionEl) {
       void getAppVersion().then((version) => {
         resolvedVersion = version.replace(/^v/i, '').trim();

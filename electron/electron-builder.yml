@@ -1,0 +1,44 @@
+appId: com.v3ndettaaa.veditor.electron
+productName: veditor
+executableName: veditor-electron
+asar: true
+
+directories:
+  output: ../dist/electron
+
+files:
+  - main.cjs
+  - preload.cjs
+  - package.json
+
+extraResources:
+  - from: ../dist/desktop
+    to: web
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: ../src-tauri/icons/icon.png
+  category: Office
+  maintainer: v3ndettaaa <v3ndettaaa@users.noreply.github.com>
+  artifactName: veditor-electron-${version}-linux-${arch}.${ext}
+  mimeTypes:
+    - application/pdf
+  desktop:
+    entry:
+      Name: veditor (Electron)
+      Comment: PDF reader and annotation studio
+      Categories: Office;Utility;Viewer;
+      MimeType: application/pdf;
+      StartupWMClass: veditor-electron
+
+appImage:
+  artifactName: veditor-electron-${version}-linux-${arch}.${ext}
+
+deb:
+  artifactName: veditor-electron-${version}-linux-${arch}.${ext}

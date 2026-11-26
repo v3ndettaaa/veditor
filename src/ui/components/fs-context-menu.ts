@@ -5,6 +5,7 @@
  * Prevents XSS by escaping file names before DOM insertion.
  */
 
+import { getElectronBridge } from '../../core/platform';
 import { nativeRenameFile, nativeRemoveFile, FileNode } from '../../io/native-fs';
 import { showToast } from './toast';
 
@@ -75,8 +76,14 @@ export class FSContextMenu {
     menu.querySelector('#ctx-action-reveal')?.addEventListener('click', async () => {
       this.dismiss();
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('plugin:shell|open', { path: node.path });
+        const electron = getElectronBridge();
+        if (electron) {
+          const revealed = await electron.revealPath(node.path);
+          if (!revealed) throw new Error('Reveal failed');
+        } else {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('plugin:shell|open', { path: node.path });
+        }
       } catch (err) {
         showToast(`Could not reveal path: ${node.path}`, 'info');
       }

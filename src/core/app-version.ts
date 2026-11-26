@@ -6,7 +6,7 @@
  * (dev server, tests) falls back to the build-time constant Vite injects
  * from `package.json`.
  */
-import { isDesktop } from './platform';
+import { getElectronBridge, isDesktop } from './platform';
 
 declare const __APP_VERSION__: string;
 
@@ -23,7 +23,15 @@ let cached: string | null = null;
 export async function getAppVersion(): Promise<string> {
   if (cached) return cached;
 
-  if (isDesktop()) {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      cached = await electron.getVersion();
+      return cached;
+    } catch (e) {
+      console.warn('Could not read Electron app version:', e);
+    }
+  } else if (isDesktop()) {
     try {
       const { getVersion } = await import('@tauri-apps/api/app');
       cached = await getVersion();

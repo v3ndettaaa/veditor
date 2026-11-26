@@ -1,0 +1,17 @@
+{
+  "name": "veditor-electron",
+  "version": "5.0.0",
+  "description": "veditor PDF reader and annotation studio (Electron Linux build)",
+  "author": "v3ndettaaa",
+  "homepage": "https://github.com/v3ndettaaa/veditor",
+  "license": "MIT",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build:linux": "node build-linux.mjs"
+  },
+  "devDependencies": {
+    "electron": "^35.1.5",
+    "electron-builder": "^25.1.8"
+  }
+}

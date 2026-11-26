@@ -1,10 +1,10 @@
 /**
- * Thin wrapper around Tauri's native dialog/fs/app/window APIs.
+ * Thin wrapper around native desktop dialog/fs/app/window APIs (Tauri & Electron).
  * Every export is a safe no-op (returns null/false) outside the desktop
  * shell, so callers can use these unconditionally without duplicating
  * `isDesktop()` checks.
  */
-import { isDesktop } from '../core/platform';
+import { getElectronBridge, isDesktop } from '../core/platform';
 
 export interface FileNode {
   id: string;
@@ -35,7 +35,24 @@ export function sanitizePath(inputPath: string): string {
   return safeParts.join('/');
 }
 
+function toUint8Array(raw: unknown): Uint8Array | null {
+  if (raw instanceof Uint8Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (ArrayBuffer.isView(raw)) {
+    return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  }
+  if (Array.isArray(raw)) return new Uint8Array(raw);
+  return null;
+}
+
 export async function nativeOpenPdfDialog(): Promise<{ path: string; bytes: Uint8Array } | null> {
+  const electron = getElectronBridge();
+  if (electron) {
+    const picked = await electron.openPdfDialog();
+    if (!picked) return null;
+    const bytes = toUint8Array(picked.bytes);
+    return bytes ? { path: picked.path, bytes } : null;
+  }
   if (!isDesktop()) return null;
   const { open } = await import('@tauri-apps/plugin-dialog');
   const path = await open({
@@ -49,13 +66,22 @@ export async function nativeOpenPdfDialog(): Promise<{ path: string; bytes: Uint
 }
 
 export async function nativeReadFile(path: string): Promise<Uint8Array | null> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      const raw = await electron.readFile(path);
+      return toUint8Array(raw);
+    } catch (e) {
+      console.warn('Electron read failed:', e);
+      return null;
+    }
+  }
   if (!isDesktop()) return null;
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     const raw = await invoke<ArrayBuffer | Uint8Array | number[]>('native_read_pdf_fast', { path });
-    if (raw instanceof Uint8Array) return raw;
-    if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
-    if (Array.isArray(raw)) return new Uint8Array(raw);
+    const bytes = toUint8Array(raw);
+    if (bytes) return bytes;
   } catch {
     // Fallback to plugin-fs below
   }
@@ -69,6 +95,15 @@ export async function nativeReadFile(path: string): Promise<Uint8Array | null> {
 }
 
 export async function nativeWriteFile(path: string, bytes: Uint8Array): Promise<boolean> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.writeFile(path, bytes);
+    } catch (e) {
+      console.warn('Electron write failed:', e);
+      return false;
+    }
+  }
   if (!isDesktop()) return false;
   try {
     const { writeFile } = await import('@tauri-apps/plugin-fs');
@@ -88,6 +123,10 @@ export async function nativeWriteFile(path: string, bytes: Uint8Array): Promise<
 }
 
 export async function nativeSaveAsDialog(suggestedName: string): Promise<string | null> {
+  const electron = getElectronBridge();
+  if (electron) {
+    return await electron.savePdfDialog(suggestedName);
+  }
   if (!isDesktop()) return null;
   const { save } = await import('@tauri-apps/plugin-dialog');
   const path = await save({
@@ -98,6 +137,14 @@ export async function nativeSaveAsDialog(suggestedName: string): Promise<string 
 }
 
 export async function nativeConfirm(message: string, title = 'veditor'): Promise<boolean> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.confirmDialog(message, title);
+    } catch {
+      return window.confirm(message);
+    }
+  }
   if (!isDesktop()) return window.confirm(message);
   try {
     const { confirm } = await import('@tauri-apps/plugin-dialog');
@@ -108,6 +155,10 @@ export async function nativeConfirm(message: string, title = 'veditor'): Promise
 }
 
 export async function nativePickDirectory(): Promise<string | null> {
+  const electron = getElectronBridge();
+  if (electron) {
+    return await electron.pickDirectory();
+  }
   if (!isDesktop()) return null;
   const { open } = await import('@tauri-apps/plugin-dialog');
   const path = await open({ directory: true, multiple: false });
@@ -116,6 +167,15 @@ export async function nativePickDirectory(): Promise<string | null> {
 }
 
 export async function nativeReadDir(path: string): Promise<NativeDirEntry[]> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.readDir(path);
+    } catch (e) {
+      console.warn('Electron readDir failed:', e);
+      return [];
+    }
+  }
   if (!isDesktop()) return [];
   try {
     const { readDir } = await import('@tauri-apps/plugin-fs');
@@ -134,10 +194,19 @@ export async function nativeReadDir(path: string): Promise<NativeDirEntry[]> {
 
 /**
  * PIPE_5: Recursive crawl of directory tree filtering .pdf files.
- * Uses single-pass native Rust command when available, with JS fallback.
+ * Uses single-pass native command when available, with JS fallback.
  * Sorted [dirs_first: true, alpha: asc].
  */
 export async function nativeBuildFileTree(rootPath: string): Promise<FileNode | null> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.buildFileTree(rootPath);
+    } catch (e) {
+      console.warn('Electron buildFileTree failed:', e);
+      return null;
+    }
+  }
   if (!isDesktop()) return null;
   try {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -193,6 +262,15 @@ export async function nativeBuildFileTree(rootPath: string): Promise<FileNode | 
 }
 
 export async function nativeRenameFile(oldPath: string, newPath: string): Promise<boolean> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.renameFile(oldPath, newPath);
+    } catch (e) {
+      console.warn('Electron rename failed:', e);
+      return false;
+    }
+  }
   if (!isDesktop()) return false;
   try {
     const { rename } = await import('@tauri-apps/plugin-fs');
@@ -205,6 +283,15 @@ export async function nativeRenameFile(oldPath: string, newPath: string): Promis
 }
 
 export async function nativeRemoveFile(path: string): Promise<boolean> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.removeFile(path);
+    } catch (e) {
+      console.warn('Electron remove failed:', e);
+      return false;
+    }
+  }
   if (!isDesktop()) return false;
   try {
     const { remove } = await import('@tauri-apps/plugin-fs');
@@ -217,6 +304,14 @@ export async function nativeRemoveFile(path: string): Promise<boolean> {
 }
 
 export async function takeStartupFilePath(): Promise<string | null> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      return await electron.takeStartupFile();
+    } catch {
+      return null;
+    }
+  }
   if (!isDesktop()) return null;
   try {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -227,6 +322,11 @@ export async function takeStartupFilePath(): Promise<string | null> {
 }
 
 export function onNativeOpenFilePath(handler: (path: string) => void): void {
+  const electron = getElectronBridge();
+  if (electron) {
+    electron.onOpenFilePath(handler);
+    return;
+  }
   if (!isDesktop()) return;
   void import('@tauri-apps/api/event').then(({ listen }) => {
     void listen<string>('open-file-path', (event) => handler(event.payload));
@@ -234,6 +334,11 @@ export function onNativeOpenFilePath(handler: (path: string) => void): void {
 }
 
 export async function onWindowCloseRequested(handler: () => Promise<boolean>): Promise<void> {
+  const electron = getElectronBridge();
+  if (electron) {
+    electron.onCloseRequested(handler);
+    return;
+  }
   if (!isDesktop()) return;
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
   const win = getCurrentWindow();
@@ -244,6 +349,15 @@ export async function onWindowCloseRequested(handler: () => Promise<boolean>): P
 }
 
 export async function nativeCloseWindow(): Promise<void> {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      await electron.closeWindow();
+    } catch (e) {
+      console.warn('Could not close window via Electron API:', e);
+    }
+    return;
+  }
   if (!isDesktop()) return;
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -252,3 +366,4 @@ export async function nativeCloseWindow(): Promise<void> {
     console.warn('Could not close window via Tauri window API:', e);
   }
 }
+

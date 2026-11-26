@@ -5,7 +5,7 @@
  * and Desktop AppImage builds.
  */
 
-import { isDesktop } from '../core/platform';
+import { getElectronBridge, isDesktop } from '../core/platform';
 
 let cachedDesktopFullscreen = false;
 let fullscreenSyncInitialized = false;
@@ -107,7 +107,19 @@ export function initFullscreenSync(): void {
   window.addEventListener('mousemove', onPointerOrMouseMove, { passive: true });
   window.addEventListener('pointermove', onPointerOrMouseMove, { passive: true });
 
-  if (isDesktop()) {
+  const electron = getElectronBridge();
+  if (electron) {
+    void electron
+      .isFullscreen()
+      .then((initial) => {
+        if (initial) setFullscreenBodyState(true);
+      })
+      .catch(() => {});
+    electron.onFullscreenChanged((fs) => {
+      const domFs = Boolean(document.fullscreenElement);
+      setFullscreenBodyState(fs || domFs);
+    });
+  } else if (isDesktop()) {
     import('@tauri-apps/api/window')
       .then(async ({ getCurrentWindow }) => {
         const win = getCurrentWindow();
@@ -126,7 +138,17 @@ export function initFullscreenSync(): void {
 export async function toggleFullscreen(): Promise<void> {
   if (typeof document === 'undefined') return;
 
-  if (isDesktop()) {
+  const electron = getElectronBridge();
+  if (electron) {
+    try {
+      const current = await electron.isFullscreen();
+      await electron.setFullscreen(!current);
+      setFullscreenBodyState(!current);
+      return;
+    } catch {
+      // Fall back to DOM fullscreen API below if Electron window API fails
+    }
+  } else if (isDesktop()) {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const win = getCurrentWindow();

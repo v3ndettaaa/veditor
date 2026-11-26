@@ -13,7 +13,7 @@ import { DEFAULT_ACCENT } from '../theme';
 import { resolveRenderDpr, clampRenderMultiplier } from '../../utils/dpi';
 import { getToolShortLabel } from './toolbar';
 import { type ShortcutAction } from '../../input/shortcuts';
-import { isDesktop } from '../../core/platform';
+import { isDesktop, isElectron } from '../../core/platform';
 
 export type SettingsTab =
   | 'appearance'
@@ -1435,9 +1435,11 @@ function renderLanguageTab(app: AppSettings): string {
  * 9. ABOUT (Swiss Editorial Studio Colophon)
  * -------------------------------------------------------------------------- */
 function renderAboutTab(): string {
-  const platformLabel = isDesktop()
-    ? tr('Desktop App', 'نسخه دسکتاپ')
-    : tr('Web & Extension', 'وب و اکستنشن');
+  const platformLabel = isElectron()
+    ? tr('Desktop App (Electron)', 'نسخه دسکتاپ (الکترون)')
+    : isDesktop()
+      ? tr('Desktop App', 'نسخه دسکتاپ')
+      : tr('Web & Extension', 'وب و اکستنشن');
 
   return `
     <div class="about-pane">

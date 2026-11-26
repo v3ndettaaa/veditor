@@ -12,6 +12,7 @@
     "build": "npm run build:chrome && npm run build:firefox",
     "tauri": "tauri",
     "build:app": "tauri build",
+    "build:electron:linux": "npm run build:desktop && npm --prefix electron run build:linux",
     "package": "npm run build && python3 scripts/package-extensions.py",
     "test": "vitest run"
   },
