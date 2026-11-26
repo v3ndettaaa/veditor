@@ -829,68 +829,141 @@ export class SettingsModalComponent {
     }
 
     if (this._activeTab === 'about') {
+      const platformLabel = isDesktop()
+        ? tr('Desktop App', 'نسخه دسکتاپ')
+        : tr('Web & Extension', 'وب و اکستنشن');
+
       return `
         <div class="about-pane">
-          <div class="about-hero-card">
-            <div class="about-mark">
-              ${getIconSvg('pen', 28)}
+          <!-- Editorial Studio Masthead -->
+          <section class="about-masthead">
+            <div class="about-masthead-top">
+              <div class="about-emblem" aria-hidden="true">
+                <img src="icons/icon-128.png" alt="${t('appName')}" class="about-emblem-img" width="56" height="56" />
+              </div>
+              <div class="about-masthead-identity">
+                <h2 class="about-wordmark">${t('appName')}</h2>
+                <div class="about-meta-line">
+                  <span class="about-version-val" id="about-version-text">v…</span>
+                  <button
+                    type="button"
+                    id="about-copy-version-btn"
+                    class="about-copy-btn"
+                    title="${tr('Copy version info', 'کپی مشخصات نسخه')}"
+                    aria-label="${tr('Copy version info', 'کپی مشخصات نسخه')}"
+                  >
+                    ${getIconSvg('copy', 12)}
+                  </button>
+                  <span class="about-meta-sep" aria-hidden="true">·</span>
+                  <span class="about-meta-item" id="about-platform-text">${platformLabel}</span>
+                  <span class="about-meta-sep" aria-hidden="true">·</span>
+                  <span class="about-meta-item">${tr('MIT License', 'مجوز MIT')}</span>
+                </div>
+              </div>
             </div>
-            <div class="about-identity">
-              <div class="about-name">${t('appName')}</div>
-              <div class="about-version" id="about-version-text">${tr('Version …', 'نسخه …')}</div>
-            </div>
-            <p class="about-blurb">
-              ${tr(
-                'Ultra-fast, professional offline PDF annotator and document editor. Engineered for high performance, sub-millisecond drawing latency, and complete local privacy.',
-                'ویرایشگر و حاشیه‌نویس حرفه‌ای، فوق‌سریع و کاملاً آفلاین PDF؛ طراحی‌شده برای نوشتن روان با قلم نوری، کمترین تأخیر و حفظ کامل حریم خصوصی روی دستگاه شما.'
-              )}
-            </p>
-            <div class="about-badges-row">
-              <span class="about-feature-pill">
-                ${getIconSvg('shieldCheck', 13)}
-                <span>${tr('100% Local & Private', '۱۰۰٪ محلی و خصوصی')}</span>
-              </span>
-              <span class="about-feature-pill">
-                ${getIconSvg('zap', 13)}
-                <span>${tr('120 Hz Vector Engine', 'موتور برداری ۱۲۰ هرتز')}</span>
-              </span>
-              <span class="about-feature-pill">
-                ${getIconSvg('code', 13)}
-                <span>${tr('MIT Open Source', 'متن‌باز با مجوز MIT')}</span>
-              </span>
-            </div>
-          </div>
 
-          <div class="about-update-card">
+            <div class="about-masthead-body">
+              <p class="about-lead">
+                ${tr(
+                  'Built for zero-latency ink, crisp typography, and complete local ownership.',
+                  'ساخته‌شده برای نگارش بی‌تأخیر، تایپوگرافی دقیق و مالکیت کامل فایل‌ها روی دستگاه شما.'
+                )}
+              </p>
+              <p class="about-blurb">
+                ${tr(
+                  'An offline-first PDF editor and notebook studio engineered to feel as immediate as paper—with pressure-aware vector strokes, multi-tab workflows, and zero cloud tracking.',
+                  'ویرایشگر آفلاین PDF و دفتر یادداشت دیجیتال که حس طبیعی کاغذ را با قلم حساس به فشار، مدیریت چندزبانه اسناد و بدون ارسال هیچ داده‌ای به سرور ارائه می‌دهد.'
+                )}
+              </p>
+            </div>
+          </section>
+
+          <!-- Architectural Spec Ledger -->
+          <section class="about-specs" aria-label="${tr('Core specifications', 'مشخصات کلیدی')}">
+            <div class="about-spec-cell">
+              <div class="about-spec-figure">100%</div>
+              <div class="about-spec-label">${tr('Local & Private', 'محلی و خصوصی')}</div>
+              <div class="about-spec-note">${tr('Stored solely in IndexedDB', 'ذخیره‌سازی صرفاً روی دستگاه')}</div>
+            </div>
+            <div class="about-spec-cell">
+              <div class="about-spec-figure is-accent">120 Hz</div>
+              <div class="about-spec-label">${tr('Vector Ink', 'موتور برداری')}</div>
+              <div class="about-spec-note">${tr('WYSIWYG pressure strokes', 'خطوط روان حساس به فشار')}</div>
+            </div>
+            <div class="about-spec-cell">
+              <div class="about-spec-figure">MIT</div>
+              <div class="about-spec-label">${tr('Open Source', 'متن‌باز')}</div>
+              <div class="about-spec-note">${tr('Auditable, zero telemetry', 'شفاف و بدون ردیابی')}</div>
+            </div>
+          </section>
+
+          <!-- Software Updates Strip -->
+          <section class="about-update-card">
             <div class="about-update-row">
               <div class="about-update-info">
                 <div class="about-update-title">${tr('Software Updates', 'بروزرسانی برنامه')}</div>
-                <div class="about-update-desc">${tr('Check GitHub Releases for the latest version', 'بررسی انتشار نسخه جدید در مخزن رسمی گیت‌هاب')}</div>
+                <div class="about-update-desc">${tr('Check GitHub Releases for the latest build', 'بررسی انتشار آخرین نسخه در مخزن رسمی گیت‌هاب')}</div>
               </div>
               <button type="button" id="check-updates-btn" class="secondary-btn about-update-btn">
-                ${getIconSvg('refresh', 14)}
+                ${getIconSvg('refresh', 13)}
                 <span>${tr('Check for Updates', 'بررسی نسخه جدید')}</span>
               </button>
             </div>
             <div id="update-status-box" class="about-update-status" aria-live="polite"></div>
-          </div>
+          </section>
 
-          <div class="about-actions-grid">
-            <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" class="secondary-btn about-action-btn">
-              ${getIconSvg('github', 16)}
-              <span>${tr('GitHub Repository', 'مخزن گیت‌هاب')}</span>
-              ${getIconSvg('externalLink', 12)}
-            </a>
-            <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" class="secondary-btn about-action-btn">
-              ${getIconSvg('info', 15)}
-              <span>${tr('Report an Issue', 'گزارش مشکل یا پیشنهاد')}</span>
-              ${getIconSvg('externalLink', 12)}
-            </a>
-            <button type="button" id="about-shortcuts-btn" class="primary-btn about-action-btn is-full-span">
-              ${getIconSvg('command', 15)}
-              <span>${tr('View Keyboard Shortcuts (?)', 'مشاهده کلیدهای میانبر (؟)')}</span>
+          <!-- Action Index -->
+          <nav class="about-links-list" aria-label="${tr('Resources & shortcuts', 'منابع و میانبرها')}">
+            <button type="button" id="about-shortcuts-btn" class="about-link-row is-featured">
+              <span class="about-link-icon">${getIconSvg('command', 16)}</span>
+              <span class="about-link-text">
+                <span class="about-link-title">${tr('Keyboard Shortcuts', 'کلیدهای میانبر')}</span>
+                <span class="about-link-sub">${tr('Master every tool and navigation keystroke', 'آشنایی با تمام میانبرهای ابزارها و پیمایش')}</span>
+              </span>
+              <span class="about-link-trailing">
+                <kbd class="about-kbd">?</kbd>
+                <span class="about-link-arrow">${getIconSvg('arrowRight', 14)}</span>
+              </span>
             </button>
-          </div>
+
+            <div class="about-links-pair">
+              <a href="https://github.com/v3ndettaaa/veditor" target="_blank" rel="noopener noreferrer" class="about-link-row">
+                <span class="about-link-icon">${getIconSvg('github', 15)}</span>
+                <span class="about-link-text">
+                  <span class="about-link-title">${tr('GitHub Repository', 'مخزن گیت‌هاب')}</span>
+                  <span class="about-link-sub about-link-mono">v3ndettaaa/veditor</span>
+                </span>
+                <span class="about-link-trailing">
+                  <span class="about-link-arrow is-ext">${getIconSvg('externalLink', 13)}</span>
+                </span>
+              </a>
+
+              <a href="https://github.com/v3ndettaaa/veditor/issues" target="_blank" rel="noopener noreferrer" class="about-link-row">
+                <span class="about-link-icon">${getIconSvg('info', 15)}</span>
+                <span class="about-link-text">
+                  <span class="about-link-title">${tr('Report an Issue', 'گزارش مشکل')}</span>
+                  <span class="about-link-sub">${tr('Bugs & feature ideas', 'خطاها و پیشنهادها')}</span>
+                </span>
+                <span class="about-link-trailing">
+                  <span class="about-link-arrow is-ext">${getIconSvg('externalLink', 13)}</span>
+                </span>
+              </a>
+            </div>
+          </nav>
+
+          <!-- Typeface Colophon -->
+          <footer class="about-colophon">
+            <span class="about-colophon-label">${tr('Typeset in', 'تایپوگرافی')}</span>
+            <span class="about-colophon-faces">
+              <span class="about-font-sample is-jakarta">Plus Jakarta Sans</span>
+              <span class="about-meta-sep" aria-hidden="true">·</span>
+              <span class="about-font-sample is-manrope">Manrope</span>
+              <span class="about-meta-sep" aria-hidden="true">·</span>
+              <span class="about-font-sample is-mono">JetBrains Mono</span>
+              <span class="about-meta-sep" aria-hidden="true">·</span>
+              <span class="about-font-sample is-vazir">وزیرمتن</span>
+            </span>
+          </footer>
         </div>
       `;
     }
@@ -1190,14 +1263,43 @@ export class SettingsModalComponent {
     // instead of a string hand-copied here, so it never drifts from the
     // actual build.
     const versionEl = this._container.querySelector('#about-version-text');
+    const copyVersionBtn = this._container.querySelector<HTMLButtonElement>('#about-copy-version-btn');
+    let resolvedVersion = '';
+    const platformLabel = isDesktop()
+      ? tr('Desktop App', 'نسخه دسکتاپ')
+      : tr('Web & Extension', 'وب و اکستنشن');
     if (versionEl) {
-      const platformLabel = isDesktop()
-        ? tr('Desktop App', 'نسخه دسکتاپ')
-        : tr('Manifest V3 & WebExtensions', 'اکستنشن مرورگر و وب');
       void getAppVersion().then(version => {
-        versionEl.textContent = `${tr('Version', 'نسخه')} ${version} \u2022 ${platformLabel}`;
+        resolvedVersion = version.replace(/^v/i, '').trim();
+        versionEl.textContent = `v${resolvedVersion}`;
       });
     }
+    copyVersionBtn?.addEventListener('click', async () => {
+      const ver = resolvedVersion || (await getAppVersion()).replace(/^v/i, '').trim();
+      const summary = `veditor v${ver} (${platformLabel})`;
+      try {
+        await navigator.clipboard.writeText(summary);
+      } catch (_) {
+        // Fallback for restricted clipboard contexts
+        const ta = document.createElement('textarea');
+        ta.value = summary;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        ta.remove();
+      }
+      copyVersionBtn.classList.add('is-copied');
+      copyVersionBtn.innerHTML = getIconSvg('check', 12);
+      showToast(tr(`Copied ${summary}`, `مشخصات نسخه کپی شد: v${ver}`), 'success');
+      window.setTimeout(() => {
+        if (copyVersionBtn.isConnected) {
+          copyVersionBtn.classList.remove('is-copied');
+          copyVersionBtn.innerHTML = getIconSvg('copy', 12);
+        }
+      }, 1600);
+    });
 
     // Manual update checker (queries GitHub Releases API only when clicked)
     const checkUpdatesBtn = this._container.querySelector<HTMLButtonElement>('#check-updates-btn');

@@ -15,7 +15,7 @@
 [dir="rtl"] .sidebar-empty-title,
 [dir="rtl"] .print-inspector-title,
 [dir="rtl"] .crop-modal-title,
-[dir="rtl"] .about-name,
+[dir="rtl"] .about-wordmark,
 [dir="rtl"] .gn-card-title,
 [dir="rtl"] .landing-title,
 [dir="rtl"] .landing-section-title,
@@ -51,10 +51,18 @@
 [dir="rtl"] .header-docs-item-meta,
 [dir="rtl"] .dpi-chip,
 [dir="rtl"] .dpi-number-input,
-[dir="rtl"] .print-seg-btn {
+[dir="rtl"] .print-seg-btn,
+[dir="rtl"] .about-version-val,
+[dir="rtl"] .about-spec-figure,
+[dir="rtl"] .about-kbd,
+[dir="rtl"] .about-link-mono {
   font-family: var(--font-mono);
   direction: ltr;
   unicode-bidi: isolate;
+}
+
+[dir="rtl"] .about-link-mono {
+  text-align: right;
 }
 
 [dir="rtl"] .header-logo {
