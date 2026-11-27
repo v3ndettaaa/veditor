@@ -13,6 +13,7 @@
 
 import { store } from '../core/store';
 import { DrawingCursorType, ToolType } from '../core/types';
+import { isElectron } from '../core/platform';
 
 /** Largest cursor image a browser will accept, in CSS px. */
 const MAX_CURSOR_PX = 128;
@@ -188,6 +189,11 @@ export function drawingCursorValue(
 
   if (tool === 'eraser') {
     const eraserCursor = store.toolSettings.eraserCursor || 'circle';
+    if (isElectron() && eraserCursor !== 'crosshair') {
+      // Chromium Ozone/Wayland on Hyprland drops custom bitmap/SVG cursor surfaces
+      // (especially >32px rings); Electron renders a 0ms GPU floating cursor instead.
+      return 'none';
+    }
     switch (eraserCursor) {
       case 'circle':
         return ringCursor(onScreen);

@@ -65,6 +65,7 @@ import {
 import { floatingPropsBar } from '../ui/components/floating-props';
 import { openInlineEditor } from '../ui/components/inline-editor';
 import { drawingCursorValue } from '../ui/cursor';
+import { isElectron } from '../core/platform';
 
 export class PointerHandler {
   private _isPointerDown: boolean = false;
@@ -1461,6 +1462,9 @@ export class PointerHandler {
 
       case 'polygon': {
         const polySnap = e.shiftKey || this.toolOpt('polygon', 'snapAngle15');
+        if (isElectron() && !this._cachedShapeVertices) {
+          this._cachedShapeVertices = this.collectShapeVertices(pageIndex);
+        }
         if (shapesTool.isPolygonActive()) {
           const placed = this.snapToVertex(pt, pageIndex);
           // move() records the snap-angle flag that addPolygonVertex reads.
@@ -1472,38 +1476,51 @@ export class PointerHandler {
               history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
             }
             this._snapTarget = null;
-          if (this._pageScratchCtx && this._pageScratchCanvas) {
-            this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+            this._cachedShapeVertices = null;
+            if (this._pageScratchCtx && this._pageScratchCanvas) {
+              this.clearScratchpadDirty(this._pageScratchCtx, this._pageScratchCanvas);
+              this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+            }
+            onNeedRepaint();
+            return;
           }
-          onNeedRepaint();
+          if (this._pageScratchCtx && this._pageScratchCanvas) {
+            const c = this._pageScratchCtx;
+            const cv = this._pageScratchCanvas;
+            const rs = store.zoom * this.renderDpr();
+            if (isElectron()) {
+              this.clearScratchpadDirty(c, cv);
+            } else {
+              c.clearRect(0, 0, cv.width, cv.height);
+            }
+            this.withScratchOffset(c, cv, () => {
+              shapesTool.renderScratchpad(c, rs);
+            });
+            if (isElectron()) {
+              this.setScratchpadDirtyFromPageBox(shapesTool.getLiveBoundingBox(), rs);
+            }
+          }
           return;
         }
-        if (this._pageScratchCtx && this._pageScratchCanvas) {
-          const c = this._pageScratchCtx;
-          const cv = this._pageScratchCanvas;
-          c.clearRect(0, 0, cv.width, cv.height);
-          this.withScratchOffset(c, cv, () => {
-            shapesTool.renderScratchpad(c, store.zoom * this.renderDpr());
-          });
-        }
-        return;
-      }
 
-      this._snapTarget = null;
-      shapesTool.start(
-        pt,
-        pageIndex,
-        'polygon',
-        tSettings.shapeColor,
-        tSettings.shapeFillColor,
-        this.lensWidth(tSettings.shapeWidth),
-        tSettings.shapeStyle,
-        tSettings.shapeOutline !== false,
-        tSettings.shapeFillOpacity ?? 1.0,
-        tSettings.shapeCornerRadius ?? 0
-      );
-      break;
-    }
+        this._snapTarget = null;
+        if (isElectron()) {
+          this._cachedShapeVertices = this.collectShapeVertices(pageIndex);
+        }
+        shapesTool.start(
+          pt,
+          pageIndex,
+          'polygon',
+          tSettings.shapeColor,
+          tSettings.shapeFillColor,
+          this.lensWidth(tSettings.shapeWidth),
+          tSettings.shapeStyle,
+          tSettings.shapeOutline !== false,
+          tSettings.shapeFillOpacity ?? 1.0,
+          tSettings.shapeCornerRadius ?? 0
+        );
+        break;
+      }
 
       case 'rectangle':
       case 'ellipse':
@@ -1716,7 +1733,11 @@ export class PointerHandler {
         if (ann) {
           store.setTextSelection(null);
           store.selectAnnotation(ann.id, additive);
-          onNeedRepaint();
+          // On Electron, `store.selectAnnotation()` already notifies VeditorApp to
+          // repaint visible pages — avoid a duplicate synchronous full-page repaint.
+          if (!isElectron()) {
+            onNeedRepaint();
+          }
         } else if ((e as MouseEvent).altKey === true) {
           // 3a. Alt+drag: freehand lasso loop around arbitrary ink/shapes.
           store.setTextSelection(null);
@@ -1831,6 +1852,9 @@ export class PointerHandler {
       shiftKey: false,
       hasLifted: false
     };
+    if (isElectron()) {
+      floatingPropsBar?.hideForProgrammaticSelection();
+    }
     if (mode === 'resize') {
       const targetPt = resolveDraggedHandleTargetPoint(selected[0], hit, pt);
       this._activeLoupeTarget = targetPt;
@@ -1866,6 +1890,48 @@ export class PointerHandler {
       shapesTool.isPolygonActive() &&
       shapesTool.activePageIndex === pageIndex
     ) {
+      if (isElectron()) {
+        const renderCanvas = this.resolveRenderScratchCanvas(scratchCanvas);
+        const ctx = getLowLatency2DContext(renderCanvas);
+        if (!ctx) return;
+        this._pageScratchCanvas = renderCanvas;
+        this._pageScratchCtx = ctx;
+        if (!this._cachedShapeVertices) {
+          this._cachedShapeVertices = this.collectShapeVertices(pageIndex);
+        }
+        const hoverPt = this.getPointInPage(e, scratchCanvas);
+        const shiftKey = e.shiftKey;
+        const snapAngle = shiftKey || this.toolOpt('polygon', 'snapAngle15');
+        this.scheduleLiveInkPaint(() => {
+          if (this._isPointerDown || store.activeTool !== 'polygon' || !shapesTool.isPolygonActive() || shapesTool.activePageIndex !== pageIndex) {
+            return;
+          }
+          const polyNote = this._activeStickyPolygonNoteId
+            ? store.activeDocument?.annotations[pageIndex]?.find(
+                (a): a is StickyNoteAnnotation => a.id === this._activeStickyPolygonNoteId && a.type === 'sticky-note'
+              )
+            : undefined;
+          const placed = polyNote
+            ? stickyNoteTool.clampPointToNote(polyNote, hoverPt, 2)
+            : this.snapToVertex(hoverPt, pageIndex);
+          shapesTool.move(placed, shiftKey, snapAngle);
+          const rs = store.zoom * this.renderDpr();
+          this.clearScratchpadDirty(ctx, renderCanvas);
+          this.withScratchOffset(ctx, renderCanvas, () => {
+            if (polyNote) {
+              stickyNoteTool.withNoteClip(ctx, polyNote, rs, () => {
+                shapesTool.renderScratchpad(ctx, rs);
+              });
+            } else {
+              shapesTool.renderScratchpad(ctx, rs);
+              this.renderSnapTarget(ctx, rs);
+            }
+          });
+          this.setScratchpadDirtyFromPageBox(shapesTool.getLiveBoundingBox(), rs);
+        });
+        return;
+      }
+
       const renderCanvas = this.resolveRenderScratchCanvas(scratchCanvas);
       const ctx = renderCanvas.getContext('2d');
       if (ctx) {
@@ -1902,6 +1968,38 @@ export class PointerHandler {
       measureTool.isMultiPointActive() &&
       measureTool.activePageIndex === pageIndex
     ) {
+      if (isElectron()) {
+        const renderCanvas = this.resolveRenderScratchCanvas(scratchCanvas);
+        const ctx = getLowLatency2DContext(renderCanvas);
+        if (!ctx) return;
+        this._pageScratchCanvas = renderCanvas;
+        this._pageScratchCtx = ctx;
+        this._activePageIndex = pageIndex;
+        const hoverPt = this.getPointInPage(e, scratchCanvas);
+        this.scheduleLiveInkPaint(() => {
+          if (this._isPointerDown || !measureTool.isMultiPointActive() || measureTool.activePageIndex !== pageIndex) return;
+          const measureNote = this._activeStickyMeasureNoteId
+            ? store.activeDocument?.annotations[pageIndex]?.find(
+                (a): a is StickyNoteAnnotation => a.id === this._activeStickyMeasureNoteId && a.type === 'sticky-note'
+              )
+            : undefined;
+          const placed = measureNote ? stickyNoteTool.clampPointToNote(measureNote, hoverPt, 4) : hoverPt;
+          measureTool.move(placed);
+          ctx.clearRect(0, 0, renderCanvas.width, renderCanvas.height);
+          const rs = store.zoom * this.renderDpr();
+          this.withScratchOffset(ctx, renderCanvas, () => {
+            if (measureNote) {
+              stickyNoteTool.withNoteClip(ctx, measureNote, rs, () => {
+                measureTool.renderScratchpad(ctx, rs);
+              });
+            } else {
+              measureTool.renderScratchpad(ctx, rs);
+            }
+          });
+        });
+        return;
+      }
+
       const renderCanvas = this.resolveRenderScratchCanvas(scratchCanvas);
       const ctx = renderCanvas.getContext('2d');
       if (ctx) {
@@ -3267,6 +3365,8 @@ export class PointerHandler {
         }
         this._pageScratchCanvas = null;
         this._pageScratchCtx = null;
+        this._scratchDirtyRect = null;
+        this._cachedShapeVertices = null;
         onNeedRepaint?.();
         return true;
       }
@@ -3274,6 +3374,8 @@ export class PointerHandler {
       if (this._pageScratchCtx && this._pageScratchCanvas) {
         this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
       }
+      this._scratchDirtyRect = null;
+      this._cachedShapeVertices = null;
       return false;
     }
     if (shapesTool.isPolygonActive()) {
@@ -3303,6 +3405,8 @@ export class PointerHandler {
         }
         this._pageScratchCanvas = null;
         this._pageScratchCtx = null;
+        this._scratchDirtyRect = null;
+        this._cachedShapeVertices = null;
         onNeedRepaint?.();
         return true;
       }
@@ -3626,10 +3730,13 @@ export class PointerHandler {
     ctx.restore();
 
     // 2. Outer drop shadow & opaque backing disc for the lens
+    //    Avoid expensive Skia per-frame shadowBlur on Electron Linux during resize drags.
     ctx.save();
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.32)';
-    ctx.shadowBlur = 14 * invZoom;
-    ctx.shadowOffsetY = 4 * invZoom;
+    if (!isElectron()) {
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.32)';
+      ctx.shadowBlur = 14 * invZoom;
+      ctx.shadowOffsetY = 4 * invZoom;
+    }
     ctx.beginPath();
     ctx.arc(loupeCenter.x, loupeCenter.y, radiusPage, 0, Math.PI * 2);
     ctx.fillStyle = isDarkPdf ? '#14171f' : '#ffffff';
@@ -3840,6 +3947,8 @@ export class PointerHandler {
       }
       this._pageScratchCanvas = null;
       this._pageScratchCtx = null;
+      this._scratchDirtyRect = null;
+      this._cachedShapeVertices = null;
     }
   }
 

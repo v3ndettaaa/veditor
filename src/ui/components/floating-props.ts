@@ -18,6 +18,7 @@ import { showToast } from './toast';
 import { tr } from '../i18n';
 import { enhanceRangeSliders, isSliderDragging } from '../slider-scrub';
 import { DEFAULT_APP_FONT, PERSIAN_APP_FONT, resolveAnnotationFontFamily } from '../../core/fonts';
+import { isElectron } from '../../core/platform';
 
 export let floatingPropsBar: FloatingPropsBarComponent | null = null;
 
@@ -54,6 +55,7 @@ export class FloatingPropsBarComponent {
     // Track scroll and zoom to keep toolbar anchored to the selected annotation
     const scroller = document.getElementById('document-scroll-container');
     scroller?.addEventListener('scroll', () => {
+      if (isElectron() && scroller.dataset.kineticScrolling === '1') return;
       if (this._isVisible) this.updatePosition();
     }, { passive: true });
 
@@ -66,6 +68,24 @@ export class FloatingPropsBarComponent {
    * Called from pointer-handler / canvas when hovering over the selected item.
    */
   public setHoverState(isHovered: boolean): void {
+    if (isElectron()) {
+      if (isHovered && pointerHandler.isPointerDown) return;
+      this._isHoveredOverItem = isHovered;
+      if (isHovered && store.suppressAutoPanels) return;
+      if (isHovered) {
+        if (this._hoverTimeout !== null) {
+          window.clearTimeout(this._hoverTimeout);
+          this._hoverTimeout = null;
+        }
+        if (this._isVisible) return;
+        this.show();
+      } else {
+        if (!this._isVisible && this._hoverTimeout === null) return;
+        this.scheduleHide();
+      }
+      return;
+    }
+
     this._isHoveredOverItem = isHovered;
     // Programmatic selection after creation must not summon the contextual
     // bar; hovering remains the only implicit trigger.

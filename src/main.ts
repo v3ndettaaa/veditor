@@ -152,6 +152,20 @@ class VeditorApp {
   /** Memoized cursor signature & string to avoid regenerating SVG data-URI cursors on unrelated store.notify() calls. */
   private _lastCursorSig: string = '';
   private _lastCursorValue: string = '';
+  /** Electron-only GPU floating eraser cursor (Wayland/Hyprland drops custom SVG cursor surfaces). */
+  private _electronEraserEl: HTMLDivElement | null = null;
+  private _electronEraserSig: string = '';
+  private _electronEraserHotspotX: number = 0;
+  private _electronEraserHotspotY: number = 0;
+  private _electronEraserLastClient: { x: number; y: number } | null = null;
+  private _electronEraserVisible: boolean = false;
+  /** Electron-only rAF coalescer for unpressed pointermove hover work (240–1000Hz Linux mice). */
+  private _electronHoverRafId: number | null = null;
+  private _electronPendingHover: {
+    event: PointerEvent;
+    pageIndex: number;
+    canvas: HTMLCanvasElement;
+  } | null = null;
 
   /**
    * Hand-tool pan drag: pointer id + grab point + scroll origin. While set,
@@ -204,6 +218,9 @@ class VeditorApp {
     signatureTool.onImageLoaded(() => this.repaintAllRenderedAnnotations());
     window.addEventListener('blur', () => {
       store.clearInternalClipboardPreference();
+      if (isElectron()) {
+        this.hideElectronEraserCursor();
+      }
     });
 
     // 1. Reflect saved theme, accent, density, direction & focus mode onto the
@@ -221,6 +238,9 @@ class VeditorApp {
     }
     if (isDesktop()) {
       document.documentElement.classList.add('platform-desktop');
+    }
+    if (isElectron()) {
+      this.initElectronEraserCursor();
     }
 
     // 2. Initialize Components
@@ -1493,7 +1513,10 @@ class VeditorApp {
     if (this._zoomCommitTimer !== null) window.clearTimeout(this._zoomCommitTimer);
     // Commit right after the last tick/finger move so zoom snaps immediately
     // back to full native resolution with zero lingering blur.
-    this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), 65);
+    // Electron touchpad pinch delivers lower-frequency Wayland bursts, so a 160ms
+    // settle window prevents choppy mid-pinch re-rasterization.
+    const commitDelayMs = isElectron() ? 160 : 65;
+    this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), commitDelayMs);
   }
 
   /** Drops any in-flight pinch/trackpad preview so a tab switch starts 1:1. */
@@ -2312,7 +2335,14 @@ class VeditorApp {
         e.preventDefault();
         // Normalize line/page wheel deltas & clamp libinput/Wayland spikes
         const normDeltaY = normalizeWheelDeltaY(e.deltaY, e.deltaMode);
-        const factor = Math.exp(-normDeltaY * 0.0035);
+        // Chromium's touchpad pinch encodes scale s as deltaY = -100 * ln(s),
+        // whose exact 1:1 inverse is exp(-deltaY * 0.01). Keep 0.0035 for
+        // discrete mouse-wheel Ctrl+Scroll notches and all non-Electron builds.
+        const isElectronTouchpadPinch =
+          isElectron() &&
+          e.deltaMode === 0 &&
+          (!Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 48);
+        const factor = Math.exp(-normDeltaY * (isElectronTouchpadPinch ? 0.01 : 0.0035));
         this.previewZoomBy(factor, { x: e.clientX, y: e.clientY });
       } else if (this._isZoomGestureActive) {
         this.commitZoomPreview();
@@ -3139,6 +3169,14 @@ class VeditorApp {
         canvas.style.cursor = 'grabbing';
         return;
       }
+      if (isElectron()) {
+        this.cancelPendingElectronHover();
+        if (e.pointerType !== 'touch') {
+          this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
+        } else {
+          this.hideElectronEraserCursor();
+        }
+      }
       e.preventDefault();
       try {
         canvas.setPointerCapture(e.pointerId);
@@ -3147,6 +3185,12 @@ class VeditorApp {
       // scratchpad backing store BEFORE pointerHandler starts the stroke.
       this.preparePageForPointerDown(pageIndex);
       pointerHandler.handlePointerDown(e, pageIndex, canvas, onRepaint);
+    });
+
+    canvas.addEventListener('pointerenter', (e) => {
+      if (isElectron() && e.pointerType !== 'touch') {
+        this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
+      }
     });
 
     canvas.addEventListener('pointermove', (e) => {
@@ -3158,6 +3202,9 @@ class VeditorApp {
           return;
         }
       }
+      if (isElectron() && e.pointerType !== 'touch') {
+        this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
+      }
       if (this._handPan && e.pointerId === this._handPan.pointerId) {
         e.preventDefault();
         this._scrollContainer.scrollLeft = this._handPan.scrollL - (e.clientX - this._handPan.startX);
@@ -3165,6 +3212,41 @@ class VeditorApp {
         return;
       }
       if (!pointerHandler.isPointerDown) {
+        if (isElectron()) {
+          if (
+            (store.activeTool === 'polygon' || store.activeTool === 'measure-area' || store.activeTool === 'measure-angle') &&
+            pointerHandler.isPolygonActiveOnPage(pageIndex)
+          ) {
+            const p = this._renderedPages.get(pageIndex);
+            const scratchReady = Boolean(
+              p && (p.scratchCanvas.width > 1 || (p.scratchChunkCanvas && p.scratchChunkCanvas.width > 1))
+            );
+            if (!scratchReady) {
+              this.preparePageForPointerDown(pageIndex);
+            }
+            pointerHandler.handlePointerMove(e, pageIndex, canvas, onRepaint);
+            return;
+          }
+          // Coalesce unpressed hover hit-testing/cursor updates to 1x per frame
+          // so high-polling Linux mice (240–1000Hz) never flood the main thread.
+          this._electronPendingHover = { event: e, pageIndex, canvas };
+          if (this._electronHoverRafId === null) {
+            this._electronHoverRafId = window.requestAnimationFrame(() => {
+              this._electronHoverRafId = null;
+              const pending = this._electronPendingHover;
+              this._electronPendingHover = null;
+              if (!pending || pointerHandler.isPointerDown || !pending.canvas.isConnected) return;
+              const hoverPt = pointerHandler.pagePointForEvent(pending.event, pending.canvas);
+              this._lastCanvasPointer = {
+                pageIndex: pending.pageIndex,
+                point: hoverPt,
+                inside: true
+              };
+              pointerHandler.handleHover(pending.event, pending.pageIndex, pending.canvas, hoverPt);
+            });
+          }
+          return;
+        }
         const hoverPt = pointerHandler.pagePointForEvent(e, canvas);
         this._lastCanvasPointer = {
           pageIndex,
@@ -3189,6 +3271,10 @@ class VeditorApp {
     });
 
     canvas.addEventListener('pointerleave', () => {
+      if (isElectron()) {
+        this.cancelPendingElectronHover();
+        this.hideElectronEraserCursor();
+      }
       if (this._lastCanvasPointer?.pageIndex === pageIndex) {
         this._lastCanvasPointer.inside = false;
       }
@@ -3225,9 +3311,20 @@ class VeditorApp {
       // A notebook grows once the stroke is committed, so there is always
       // blank paper below what you just wrote.
       void notebookController.autoExtend(pageIndex);
+      if (isElectron()) {
+        if (e.pointerType !== 'touch') {
+          this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
+        } else {
+          this.hideElectronEraserCursor();
+        }
+      }
     });
 
     canvas.addEventListener('pointercancel', (e) => {
+      if (isElectron()) {
+        this.cancelPendingElectronHover();
+        this.hideElectronEraserCursor();
+      }
       if (e.pointerType === 'touch') {
         const wasGesture = gestureEngine.isGestureActive;
         gestureEngine.handlePointerUp(e);
@@ -3559,6 +3656,137 @@ class VeditorApp {
       this._renderedPages.has(store.activePageIndex)
     ) {
       this.scheduleScratchpadPrewarm(store.activePageIndex, 0);
+    }
+    if (isElectron()) {
+      this.syncElectronEraserCursorAppearance();
+    }
+  }
+
+  private cancelPendingElectronHover(): void {
+    if (this._electronHoverRafId !== null) {
+      window.cancelAnimationFrame(this._electronHoverRafId);
+      this._electronHoverRafId = null;
+    }
+    this._electronPendingHover = null;
+  }
+
+  private initElectronEraserCursor(): void {
+    if (!isElectron() || this._electronEraserEl) return;
+    const el = document.createElement('div');
+    el.id = 'electron-eraser-cursor';
+    el.setAttribute('aria-hidden', 'true');
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.zIndex = '99999';
+    el.style.pointerEvents = 'none';
+    el.style.display = 'none';
+    el.style.willChange = 'transform';
+    el.style.lineHeight = '0';
+    document.body.appendChild(el);
+    this._electronEraserEl = el;
+  }
+
+  private syncElectronEraserCursorAppearance(forceStylusEraser: boolean = false): boolean {
+    if (!isElectron()) return false;
+    if (!this._electronEraserEl) this.initElectronEraserCursor();
+    const el = this._electronEraserEl;
+    if (!el) return false;
+
+    const ts = store.toolSettings;
+    const eraserCursor = ts.eraserCursor || 'circle';
+    const shouldUseOverlay =
+      Boolean(store.activeDocument) &&
+      (store.activeTool === 'eraser' || forceStylusEraser) &&
+      eraserCursor !== 'crosshair';
+
+    if (!shouldUseOverlay) {
+      if (this._electronEraserVisible) {
+        this._electronEraserVisible = false;
+        el.style.display = 'none';
+      }
+      return false;
+    }
+
+    const onScreen = Math.max(1, (ts.eraserWidth || 24) * (store.zoom || 1));
+    const sig = `${eraserCursor}|${Math.round(onScreen * 2)}`;
+    if (sig !== this._electronEraserSig) {
+      this._electronEraserSig = sig;
+      if (eraserCursor === 'dot') {
+        const d = Math.min(24, Math.max(6, onScreen * 0.35));
+        const size = Math.ceil(d) + 6;
+        const c = size / 2;
+        const r = d / 2;
+        this._electronEraserHotspotX = c;
+        this._electronEraserHotspotY = c;
+        el.innerHTML =
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+          `<circle cx="${c}" cy="${c}" r="${r}" fill="rgba(239,68,68,0.85)" stroke="#ffffff" stroke-width="1.5"/>` +
+          `</svg>`;
+      } else if (eraserCursor === 'eraser') {
+        this._electronEraserHotspotX = 4;
+        this._electronEraserHotspotY = 19;
+        el.innerHTML =
+          `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">` +
+          `<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" fill="#ffffff" stroke="#0f172a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` +
+          `<path d="m5 11 9 9" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round"/>` +
+          `<circle cx="4" cy="19" r="1.4" fill="#ef4444"/>` +
+          `</svg>`;
+      } else {
+        const d = Math.max(7, onScreen);
+        const size = Math.ceil(d) + 6;
+        const c = size / 2;
+        const r = d / 2;
+        this._electronEraserHotspotX = c;
+        this._electronEraserHotspotY = c;
+        el.innerHTML =
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+          `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.85"/>` +
+          `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#0f172a" stroke-width="1.25"/>` +
+          `<circle cx="${c}" cy="${c}" r="1" fill="#0f172a"/>` +
+          `</svg>`;
+      }
+      if (this._electronEraserVisible && this._electronEraserLastClient) {
+        const tx = Math.round(this._electronEraserLastClient.x - this._electronEraserHotspotX);
+        const ty = Math.round(this._electronEraserLastClient.y - this._electronEraserHotspotY);
+        el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+      }
+    }
+    return true;
+  }
+
+  private updateElectronEraserCursor(
+    clientX: number,
+    clientY: number,
+    visible: boolean,
+    forceStylusEraser: boolean = false
+  ): void {
+    if (!isElectron()) return;
+    this._electronEraserLastClient = { x: clientX, y: clientY };
+    const shouldShow = visible && this.syncElectronEraserCursorAppearance(forceStylusEraser);
+    const el = this._electronEraserEl;
+    if (!el) return;
+    if (!shouldShow) {
+      if (this._electronEraserVisible) {
+        this._electronEraserVisible = false;
+        el.style.display = 'none';
+      }
+      return;
+    }
+    if (!this._electronEraserVisible) {
+      this._electronEraserVisible = true;
+      el.style.display = 'block';
+    }
+    const tx = Math.round(clientX - this._electronEraserHotspotX);
+    const ty = Math.round(clientY - this._electronEraserHotspotY);
+    el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+  }
+
+  private hideElectronEraserCursor(): void {
+    if (!isElectron() || !this._electronEraserEl) return;
+    if (this._electronEraserVisible) {
+      this._electronEraserVisible = false;
+      this._electronEraserEl.style.display = 'none';
     }
   }
 

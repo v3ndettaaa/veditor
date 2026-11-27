@@ -175,6 +175,18 @@ export class ShapesTool {
     return false;
   }
 
+  /** Page-space bounding box of the live shape/polygon preview (including vertex handles). */
+  public getLiveBoundingBox(): BoundingBox | null {
+    const cp = this.effectiveCurrent();
+    if (!this._startPoint || !cp) return null;
+    const pad = Math.max(18, this._strokeWidth * 2 + 12);
+    if (this._type === 'polygon' || this._type === 'freeform-shape') {
+      const pts = this._polygonPoints.length > 0 ? [...this._polygonPoints, cp] : [this._startPoint, cp];
+      return computePointsBoundingBox(pts, pad);
+    }
+    return computePointsBoundingBox([this._startPoint, cp], pad);
+  }
+
   public renderScratchpad(ctx: CanvasRenderingContext2D, scale: number): void {
     const cp = this.effectiveCurrent();
     if (!this._startPoint || !cp) return;

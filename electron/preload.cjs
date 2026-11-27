@@ -90,11 +90,15 @@ window.addEventListener('DOMContentLoaded', () => {
     { passive: true, capture: true }
   );
 
+  let lastTrustedCtrlWheelAt = 0;
+
   // Fallback bridge if Chromium delivers pinch zoom via WebContents `zoom-changed`
   ipcRenderer.on('native:pinch-zoom-fallback', (_event, direction) => {
+    // Never fight or double-step real smooth touchpad ctrl+wheel pinch events
+    if (performance.now() - lastTrustedCtrlWheelAt < 600) return;
     const scroller = document.getElementById('document-scroll-container');
     if (!scroller) return;
-    const deltaY = direction === 'in' ? -45 : 45;
+    const deltaY = direction === 'in' ? -16 : 16;
     scroller.dispatchEvent(
       new WheelEvent('wheel', {
         deltaY,
@@ -115,6 +119,9 @@ window.addEventListener('DOMContentLoaded', () => {
     'wheel',
     (e) => {
       if (e.ctrlKey || e.metaKey) {
+        if (e.isTrusted) {
+          lastTrustedCtrlWheelAt = performance.now();
+        }
         const alreadyHandled = e.defaultPrevented;
         e.preventDefault();
         if (!alreadyHandled && e.target instanceof Node) {
@@ -148,10 +155,11 @@ window.addEventListener('DOMContentLoaded', () => {
   if (process.platform !== 'linux') return;
 
   const FRICTION_PER_MS = 0.00185; // Smooth APZ-like deceleration curve
-  const LIFT_DETECT_MS = 48;       // Gap indicating fingers lifted from touchpad
+  const LIFT_DETECT_MS = 56;       // Gap indicating fingers lifted from touchpad
+  const NATIVE_FLING_IDLE_MS = 72; // Idle gap after Chromium native Wayland fling finishes
   const SWIPE_RESET_GAP_MS = 180;  // Tolerate brief main-thread stalls mid-swipe
   const SAMPLE_WINDOW_MS = 110;    // Sliding window anchored to last wheel sample
-  const MIN_FLING_SPEED = 0.25;    // px/ms threshold (~250 px/s) to engage coast
+  const MIN_FLING_SPEED = 0.45;    // px/ms threshold (~450 px/s) to engage fallback coast
   const BRISK_SWIPE_SPEED = 0.3;   // px/ms threshold to defer heavy page renders mid-swipe
   const BRISK_SWIPE_DIST = 90;     // px cumulative swipe threshold to defer renders
   const MAX_FLING_SPEED = 24;      // px/ms safety clamp
@@ -161,7 +169,18 @@ window.addEventListener('DOMContentLoaded', () => {
   /** @type {Array<{ t: number, dx: number, dy: number }>} */
   let samples = [];
   let gestureTravelPx = 0;
+  let gesturePeakSpeed = 0;
+  let lastInstSpeed = 0;
+  let decelStreak = 0;
+  let hasNativeCompositorFling = false;
   let liftTimer = null;
+  let nativeSnapRaf = null;
+  let nativeFlingTimer = null;
+  let nativeFlingScroller = null;
+  let nativeFlingScrollListener = null;
+  let postWheelScrollTop = 0;
+  let postWheelScrollLeft = 0;
+  let hasPostWheelSnap = false;
   let coastRaf = null;
   let coastVx = 0;
   let coastVy = 0;
@@ -172,6 +191,14 @@ window.addEventListener('DOMContentLoaded', () => {
   let lastCoastTime = 0;
   let activeScroller = null;
   let kineticMarkedScroller = null;
+
+  function resetGestureMetrics() {
+    samples = [];
+    gestureTravelPx = 0;
+    gesturePeakSpeed = 0;
+    lastInstSpeed = 0;
+    decelStreak = 0;
+  }
 
   function markKineticScrolling(scroller) {
     if (!scroller) return;
@@ -185,7 +212,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function clearKineticScrolling(emitSettled = true) {
-    const scroller = kineticMarkedScroller || activeScroller;
+    const scroller = kineticMarkedScroller || activeScroller || nativeFlingScroller;
     kineticMarkedScroller = null;
     if (!scroller) return;
     if (scroller.dataset.kineticScrolling === '1') {
@@ -194,6 +221,47 @@ window.addEventListener('DOMContentLoaded', () => {
         scroller.dispatchEvent(new CustomEvent('veditor:kinetic-scroll-end'));
       }
     }
+  }
+
+  function stopNativeFlingWatch(emitSettled = false) {
+    if (nativeFlingTimer !== null) {
+      window.clearTimeout(nativeFlingTimer);
+      nativeFlingTimer = null;
+    }
+    if (nativeFlingScroller && nativeFlingScrollListener) {
+      nativeFlingScroller.removeEventListener('scroll', nativeFlingScrollListener);
+    }
+    nativeFlingScroller = null;
+    nativeFlingScrollListener = null;
+    if (emitSettled) {
+      clearKineticScrolling(true);
+    }
+  }
+
+  function startNativeFlingWatch(scroller) {
+    stopNativeFlingWatch(false);
+    nativeFlingScroller = scroller;
+    markKineticScrolling(scroller);
+
+    const scheduleSettle = () => {
+      if (nativeFlingTimer !== null) {
+        window.clearTimeout(nativeFlingTimer);
+      }
+      nativeFlingTimer = window.setTimeout(() => {
+        nativeFlingTimer = null;
+        stopNativeFlingWatch(true);
+      }, NATIVE_FLING_IDLE_MS);
+    };
+
+    nativeFlingScrollListener = () => {
+      if (!scroller.isConnected) {
+        stopNativeFlingWatch(false);
+        return;
+      }
+      scheduleSettle();
+    };
+    scroller.addEventListener('scroll', nativeFlingScrollListener, { passive: true });
+    scheduleSettle();
   }
 
   function stopCoast(preserveCarry = false) {
@@ -214,6 +282,7 @@ window.addEventListener('DOMContentLoaded', () => {
     carryY = 0;
     lastCoastTime = 0;
     if (!preserveCarry) {
+      stopNativeFlingWatch(false);
       clearKineticScrolling(true);
     }
     activeScroller = null;
@@ -224,9 +293,15 @@ window.addEventListener('DOMContentLoaded', () => {
       window.clearTimeout(liftTimer);
       liftTimer = null;
     }
+    if (nativeSnapRaf !== null) {
+      window.cancelAnimationFrame(nativeSnapRaf);
+      nativeSnapRaf = null;
+    }
+    hasPostWheelSnap = false;
   }
 
   function startCoast(scroller, vx, vy) {
+    stopNativeFlingWatch(false);
     stopCoast(true);
     carriedVx = 0;
     carriedVy = 0;
@@ -304,6 +379,13 @@ window.addEventListener('DOMContentLoaded', () => {
       recent.every((s) => s.dx === 0 && Math.abs(s.dy) >= 96 && Math.abs(s.dy) % 10 === 0);
     if (looksLikeMouseWheel) return null;
 
+    // Detect native Wayland fling decay tail OR deliberate user braking before lift:
+    // If wheel events smoothly decelerated from a higher peak, momentum already played out
+    // natively — launching JS coast afterward would cause abnormal post-momentum page drift.
+    if (decelStreak >= 4) return null;
+    if (lastInstSpeed < MIN_FLING_SPEED) return null;
+    if (gesturePeakSpeed > 0 && lastInstSpeed < gesturePeakSpeed * 0.55) return null;
+
     // Use the final samples right before lift so deliberate braking before lift stops cleanly
     const tailStart = Math.max(0, recent.length - 5);
     const tail = recent.slice(tailStart);
@@ -341,19 +423,18 @@ window.addEventListener('DOMContentLoaded', () => {
     'wheel',
     (e) => {
       clearLiftTimer();
+      stopNativeFlingWatch(false);
 
       if (e.ctrlKey || e.metaKey || e.deltaMode !== 0) {
         stopCoast(false);
-        samples = [];
-        gestureTravelPx = 0;
+        resetGestureMetrics();
         return;
       }
 
       const scroller = document.getElementById('document-scroll-container');
       if (!scroller || !(e.target instanceof Node) || !scroller.contains(e.target)) {
         stopCoast(false);
-        samples = [];
-        gestureTravelPx = 0;
+        resetGestureMetrics();
         return;
       }
 
@@ -365,8 +446,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const opposingX = coastVx !== 0 && e.deltaX !== 0 && Math.sign(e.deltaX) !== Math.sign(coastVx);
         if (opposingY || opposingX) {
           stopCoast(false);
-          samples = [];
-          gestureTravelPx = 0;
+          resetGestureMetrics();
           return;
         }
         stopCoast(true);
@@ -374,8 +454,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
       const now = performance.now();
       if (samples.length > 0 && now - samples[samples.length - 1].t > SWIPE_RESET_GAP_MS) {
-        samples = [];
-        gestureTravelPx = 0;
+        resetGestureMetrics();
         carriedVx = 0;
         carriedVy = 0;
       }
@@ -392,19 +471,51 @@ window.addEventListener('DOMContentLoaded', () => {
       if (prevSample) {
         const dt = Math.max(4, now - prevSample.t);
         const instSpeed = Math.hypot(e.deltaX, e.deltaY) / dt;
+        if (instSpeed > gesturePeakSpeed) {
+          gesturePeakSpeed = instSpeed;
+        }
+        if (lastInstSpeed > 0 && instSpeed < lastInstSpeed * 0.96) {
+          decelStreak += 1;
+        } else {
+          decelStreak = 0;
+        }
+        lastInstSpeed = instSpeed;
         if (instSpeed >= BRISK_SWIPE_SPEED || gestureTravelPx >= BRISK_SWIPE_DIST) {
           markKineticScrolling(scroller);
         }
       }
 
+      // Snapshot scroll position after the browser applies this wheel event so we
+      // can detect whether Chromium's native Wayland compositor fling is already
+      // gliding on its own (avoiding double-scrolling / post-fling drift).
+      nativeSnapRaf = window.requestAnimationFrame(() => {
+        nativeSnapRaf = null;
+        if (!scroller.isConnected) return;
+        postWheelScrollTop = scroller.scrollTop;
+        postWheelScrollLeft = scroller.scrollLeft;
+        hasPostWheelSnap = true;
+      });
+
       liftTimer = window.setTimeout(() => {
         liftTimer = null;
         const velocity = computeReleaseVelocity();
-        samples = [];
-        gestureTravelPx = 0;
+        const nativeMoved =
+          hasPostWheelSnap &&
+          Math.hypot(scroller.scrollTop - postWheelScrollTop, scroller.scrollLeft - postWheelScrollLeft) > 2;
+        hasPostWheelSnap = false;
+        resetGestureMetrics();
         carriedVx = 0;
         carriedVy = 0;
-        if (velocity) {
+
+        if (nativeMoved) {
+          // Native Wayland compositor fling is already gliding smoothly:
+          // remember this capability so we never inject JS coast on top of native flings.
+          hasNativeCompositorFling = true;
+          startNativeFlingWatch(scroller);
+          return;
+        }
+
+        if (!hasNativeCompositorFling && velocity) {
           startCoast(scroller, velocity.vx, velocity.vy);
         } else {
           clearKineticScrolling(true);
@@ -418,8 +529,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const cancelAll = () => {
     stopCoast(false);
     clearLiftTimer();
-    samples = [];
-    gestureTravelPx = 0;
+    resetGestureMetrics();
   };
   window.addEventListener('pointerdown', cancelAll, { passive: true, capture: true });
   window.addEventListener('keydown', cancelAll, { passive: true, capture: true });
