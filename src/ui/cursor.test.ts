@@ -1,5 +1,4 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, it, expect } from 'vitest';
 import { computeWheelZoomFactor } from '../core/viewport';
 import {
   shouldUseFloatingToolCursor,
@@ -25,98 +24,100 @@ function withWindowElectron(enabled: boolean, fn: () => void): void {
   }
 }
 
-test('computeWheelZoomFactor keeps exact extension 0.0035 sensitivity on non-Electron', () => {
-  const f1 = computeWheelZoomFactor(-10, 0, false);
-  const f2 = computeWheelZoomFactor(25, 0, false);
-  assert.ok(Math.abs(f1 - Math.exp(10 * 0.0035)) < 1e-12);
-  assert.ok(Math.abs(f2 - Math.exp(-25 * 0.0035)) < 1e-12);
-});
+describe('computeWheelZoomFactor & floating tool cursors', () => {
+  it('keeps exact extension 0.0035 sensitivity on non-Electron', () => {
+    const f1 = computeWheelZoomFactor(-10, 0, false);
+    const f2 = computeWheelZoomFactor(25, 0, false);
+    expect(Math.abs(f1 - Math.exp(10 * 0.0035))).toBeLessThan(1e-12);
+    expect(Math.abs(f2 - Math.exp(-25 * 0.0035))).toBeLessThan(1e-12);
+  });
 
-test('computeWheelZoomFactor on Electron is strictly continuous with no cliff and clamps Wayland spikes', () => {
-  const f47 = computeWheelZoomFactor(-47, 0, true);
-  const f48 = computeWheelZoomFactor(-48, 0, true);
-  const f485 = computeWheelZoomFactor(-48.5, 0, true);
-  const f49 = computeWheelZoomFactor(-49, 0, true);
+  it('on Electron is strictly continuous with no cliff and clamps Wayland spikes', () => {
+    const f47 = computeWheelZoomFactor(-47, 0, true);
+    const f48 = computeWheelZoomFactor(-48, 0, true);
+    const f485 = computeWheelZoomFactor(-48.5, 0, true);
+    const f49 = computeWheelZoomFactor(-49, 0, true);
 
-  // Strictly monotonic across the old 48px boundary — zero 2.86x discontinuity cliff!
-  assert.ok(f47 < f48 && f48 < f485 && f485 < f49);
-  assert.ok(Math.abs(f48 - Math.exp(48 * 0.0055)) < 1e-12);
+    expect(f47).toBeLessThan(f48);
+    expect(f48).toBeLessThan(f485);
+    expect(f485).toBeLessThan(f49);
+    expect(Math.abs(f48 - Math.exp(48 * 0.0055))).toBeLessThan(1e-12);
 
-  // Wayland/libinput single-event spikes are clamped at ±50px (~1.316x max per event)
-  const f50 = computeWheelZoomFactor(-50, 0, true);
-  const f160 = computeWheelZoomFactor(-160, 0, true);
-  assert.equal(f160, f50);
-  assert.ok(f160 < 1.35 && f160 > 1.25);
+    const f50 = computeWheelZoomFactor(-50, 0, true);
+    const f160 = computeWheelZoomFactor(-160, 0, true);
+    expect(f160).toBe(f50);
+    expect(f160).toBeGreaterThan(1.25);
+    expect(f160).toBeLessThan(1.35);
 
-  const fOut = computeWheelZoomFactor(160, 0, true);
-  assert.equal(fOut, computeWheelZoomFactor(50, 0, true));
-  assert.ok(fOut > 0.72 && fOut < 0.8);
-});
+    const fOut = computeWheelZoomFactor(160, 0, true);
+    expect(fOut).toBe(computeWheelZoomFactor(50, 0, true));
+    expect(fOut).toBeGreaterThan(0.72);
+    expect(fOut).toBeLessThan(0.8);
+  });
 
-test('Extension / non-Electron uses floating cursor ONLY for Eraser (circle/dot/icon), preserving Pen/Highlighter CSS cursors', () => {
-  const prevEraserCursor = store.toolSettings.eraserCursor;
-  try {
-    store.toolSettings.eraserCursor = 'circle';
-    assert.equal(shouldUseFloatingToolCursor('eraser', 'pen', false), true);
-    const eraserSpec = buildFloatingToolCursorSpec('eraser', 'pen', 1.5, false);
-    assert.ok(eraserSpec !== null);
-    assert.ok(eraserSpec.svg.includes('<circle'));
-    assert.ok(eraserSpec.sig.startsWith('eraser|circle|'));
-
-    // Crosshair eraser keeps native crosshair CSS cursor
-    store.toolSettings.eraserCursor = 'crosshair';
-    assert.equal(shouldUseFloatingToolCursor('eraser', 'pen', false), false);
-
-    // Non-Electron Pen & Highlighter keep native CSS cursors (not floating overlay)
-    assert.equal(shouldUseFloatingToolCursor('pen', 'pen', false), false);
-    assert.equal(shouldUseFloatingToolCursor('highlighter', 'pen', false), false);
-    assert.equal(shouldUseFloatingToolCursor('select', 'pen', false), false);
-    assert.equal(shouldUseFloatingToolCursor('hand', 'pen', false), false);
-
-    withWindowElectron(false, () => {
+  it('uses floating cursor ONLY for Eraser (circle/dot/icon) on non-Electron, preserving Pen/Highlighter CSS cursors', () => {
+    const prevEraserCursor = store.toolSettings.eraserCursor;
+    try {
       store.toolSettings.eraserCursor = 'circle';
-      assert.equal(drawingCursorValue('eraser', 'pen', 1.0), 'none');
-      assert.ok(drawingCursorValue('pen', 'pen', 1.0).startsWith('url("data:image/svg+xml,'));
-    });
-  } finally {
-    store.toolSettings.eraserCursor = prevEraserCursor;
-  }
-});
+      expect(shouldUseFloatingToolCursor('eraser', 'pen', false)).toBe(true);
+      const eraserSpec = buildFloatingToolCursorSpec('eraser', 'pen', 1.5, false);
+      expect(eraserSpec).not.toBeNull();
+      expect(eraserSpec!.svg).toContain('<circle');
+      expect(eraserSpec!.sig.startsWith('eraser|circle|')).toBe(true);
 
-test('Electron uses floating GPU cursor for Pen, Highlighter, and Eraser so Wayland never reverts to OS arrow', () => {
-  const prevEraserCursor = store.toolSettings.eraserCursor;
-  const prevHlCursor = store.toolSettings.highlighterCursor;
-  try {
-    store.toolSettings.eraserCursor = 'circle';
-    store.toolSettings.highlighterCursor = 'rectangle';
+      store.toolSettings.eraserCursor = 'crosshair';
+      expect(shouldUseFloatingToolCursor('eraser', 'pen', false)).toBe(false);
 
-    assert.equal(shouldUseFloatingToolCursor('pen', 'pen', true), true);
-    assert.equal(shouldUseFloatingToolCursor('pen', 'circle', true), true);
-    assert.equal(shouldUseFloatingToolCursor('pen', 'crosshair', true), false);
-    assert.equal(shouldUseFloatingToolCursor('highlighter', 'pen', true), true);
-    assert.equal(shouldUseFloatingToolCursor('eraser', 'pen', true), true);
-    assert.equal(shouldUseFloatingToolCursor('select', 'pen', true), false);
-    assert.equal(shouldUseFloatingToolCursor('hand', 'pen', true), false);
+      expect(shouldUseFloatingToolCursor('pen', 'pen', false)).toBe(false);
+      expect(shouldUseFloatingToolCursor('highlighter', 'pen', false)).toBe(false);
+      expect(shouldUseFloatingToolCursor('select', 'pen', false)).toBe(false);
+      expect(shouldUseFloatingToolCursor('hand', 'pen', false)).toBe(false);
 
-    const penSpec = buildFloatingToolCursorSpec('pen', 'pen', 1.0, true);
-    assert.ok(penSpec !== null);
-    assert.equal(penSpec.sig, 'pen|nib');
-    assert.equal(penSpec.hotspotX, 2);
-    assert.equal(penSpec.hotspotY, 22);
+      withWindowElectron(false, () => {
+        store.toolSettings.eraserCursor = 'circle';
+        expect(drawingCursorValue('eraser', 'pen', 1.0)).toBe('none');
+        expect(drawingCursorValue('pen', 'pen', 1.0).startsWith('url("data:image/svg+xml,')).toBe(true);
+      });
+    } finally {
+      store.toolSettings.eraserCursor = prevEraserCursor;
+    }
+  });
 
-    const hlSpec = buildFloatingToolCursorSpec('highlighter', 'pen', 1.25, true);
-    assert.ok(hlSpec !== null);
-    assert.ok(hlSpec.svg.includes('<rect'));
+  it('uses floating GPU cursor for Pen, Highlighter, and Eraser on Electron so Wayland never reverts to OS arrow', () => {
+    const prevEraserCursor = store.toolSettings.eraserCursor;
+    const prevHlCursor = store.toolSettings.highlighterCursor;
+    try {
+      store.toolSettings.eraserCursor = 'circle';
+      store.toolSettings.highlighterCursor = 'rectangle';
 
-    withWindowElectron(true, () => {
-      assert.equal(drawingCursorValue('pen', 'pen', 1.0), 'none');
-      assert.equal(drawingCursorValue('highlighter', 'pen', 1.0), 'none');
-      assert.equal(drawingCursorValue('eraser', 'pen', 1.0), 'none');
-      assert.equal(drawingCursorValue('select', 'pen', 1.0), 'default');
-      assert.equal(drawingCursorValue('hand', 'pen', 1.0), 'grab');
-    });
-  } finally {
-    store.toolSettings.eraserCursor = prevEraserCursor;
-    store.toolSettings.highlighterCursor = prevHlCursor;
-  }
+      expect(shouldUseFloatingToolCursor('pen', 'pen', true)).toBe(true);
+      expect(shouldUseFloatingToolCursor('pen', 'circle', true)).toBe(true);
+      expect(shouldUseFloatingToolCursor('pen', 'crosshair', true)).toBe(false);
+      expect(shouldUseFloatingToolCursor('highlighter', 'pen', true)).toBe(true);
+      expect(shouldUseFloatingToolCursor('eraser', 'pen', true)).toBe(true);
+      expect(shouldUseFloatingToolCursor('select', 'pen', true)).toBe(false);
+      expect(shouldUseFloatingToolCursor('hand', 'pen', true)).toBe(false);
+
+      const penSpec = buildFloatingToolCursorSpec('pen', 'pen', 1.0, true);
+      expect(penSpec).not.toBeNull();
+      expect(penSpec!.sig).toBe('pen|nib');
+      expect(penSpec!.hotspotX).toBe(2);
+      expect(penSpec!.hotspotY).toBe(22);
+
+      const hlSpec = buildFloatingToolCursorSpec('highlighter', 'pen', 1.25, true);
+      expect(hlSpec).not.toBeNull();
+      expect(hlSpec!.svg).toContain('<rect');
+
+      withWindowElectron(true, () => {
+        expect(drawingCursorValue('pen', 'pen', 1.0)).toBe('none');
+        expect(drawingCursorValue('highlighter', 'pen', 1.0)).toBe('none');
+        expect(drawingCursorValue('eraser', 'pen', 1.0)).toBe('none');
+        expect(drawingCursorValue('select', 'pen', 1.0)).toBe('default');
+        expect(drawingCursorValue('hand', 'pen', 1.0)).toBe('grab');
+      });
+    } finally {
+      store.toolSettings.eraserCursor = prevEraserCursor;
+      store.toolSettings.highlighterCursor = prevHlCursor;
+    }
+  });
 });

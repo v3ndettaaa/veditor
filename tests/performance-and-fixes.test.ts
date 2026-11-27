@@ -384,6 +384,6 @@ describe('Fix 6: Seamless Placeholder Scroll, Zero Black Blinks, & Electron Linu
     expect(mainCjs).toContain('setVisualZoomLevelLimits(1, 3)');
     expect(preloadCjs).toContain('setVisualZoomLevelLimits(1, 3)');
     expect(preloadCjs).toContain('kineticScrolling');
-    expect(preloadCjs).toContain('Math.trunc(moveY)');
+    expect(preloadCjs).toContain('Math.trunc(carryY)');
   });
 });
