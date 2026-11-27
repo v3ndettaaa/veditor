@@ -112,6 +112,18 @@ window.addEventListener('DOMContentLoaded', () => {
     );
   });
 
+  // Capture-phase timestamp so native:pinch-zoom-fallback never double-fires on the
+  // opening frame of a real touchpad pinch before the bubbling listener executes.
+  window.addEventListener(
+    'wheel',
+    (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.isTrusted) {
+        lastTrustedCtrlWheelAt = performance.now();
+      }
+    },
+    { passive: true, capture: true }
+  );
+
   // Bubbling-phase guard: runs AFTER veditor's `#document-scroll-container` wheel zoom
   // listener. Keeps UI chrome locked at 1:1 while forwarding any viewport-area pinch
   // events that missed `#document-scroll-container` (e.g. gaps or overlays) to it.

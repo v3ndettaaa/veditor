@@ -45,6 +45,26 @@ export function normalizeWheelDeltaY(deltaY: number, deltaMode: number = 0): num
 }
 
 /**
+ * Computes the multiplicative zoom step for a `ctrl+wheel` / touchpad pinch
+ * event. Non-Electron platforms keep the exact `exp(-normDeltaY * 0.0035)`
+ * response; Electron Linux uses a single continuous `0.0055` curve with a
+ * safe `±50px` per-event clamp (eliminating both discontinuity cliffs and
+ * sudden Wayland/libinput zoom explosions while matching the extension's hand feel).
+ */
+export function computeWheelZoomFactor(
+  deltaY: number,
+  deltaMode: number = 0,
+  electron: boolean = isElectron()
+): number {
+  const normDeltaY = normalizeWheelDeltaY(deltaY, deltaMode);
+  if (!electron) {
+    return Math.exp(-normDeltaY * 0.0035);
+  }
+  const clampedDelta = Math.max(-50, Math.min(50, normDeltaY));
+  return Math.exp(-clampedDelta * 0.0055);
+}
+
+/**
  * Computes the inclusive page-index range `[start, end]` that should keep
  * lightweight zero-VRAM placeholder shells mounted in the DOM so even extreme
  * compositor-thread fast scrolling never outruns the DOM into an empty dark void.

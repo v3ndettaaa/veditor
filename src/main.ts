@@ -9,7 +9,7 @@ import { getWordOrMathRangeAtPoint } from './core/pdf-text-layout';
 import {
   viewportManager,
   rotatedPageSize,
-  normalizeWheelDeltaY,
+  computeWheelZoomFactor,
   computePlaceholderShellRange,
   stepZoomGestureTransform,
   computeZoomCommitTarget,
@@ -56,7 +56,7 @@ import { getIconSvg } from './utils/icons';
 import { t, tr } from './ui/i18n';
 import { LandingPageComponent } from './ui/components/landing-page';
 import { initAppearanceSync } from './ui/theme';
-import { drawingCursorValue } from './ui/cursor';
+import { drawingCursorValue, buildFloatingToolCursorSpec } from './ui/cursor';
 import { history, AddAnnotationCommand, BulkAddAnnotationsCommand, DeleteAnnotationsCommand, ModifyAnnotationCommand, BulkModifyCommand } from './core/history';
 import { stampTool } from './annotations/tools/stamp';
 import { signatureTool } from './annotations/tools/signature';
@@ -152,13 +152,18 @@ class VeditorApp {
   /** Memoized cursor signature & string to avoid regenerating SVG data-URI cursors on unrelated store.notify() calls. */
   private _lastCursorSig: string = '';
   private _lastCursorValue: string = '';
-  /** Electron-only GPU floating eraser cursor (Wayland/Hyprland drops custom SVG cursor surfaces). */
-  private _electronEraserEl: HTMLDivElement | null = null;
-  private _electronEraserSig: string = '';
-  private _electronEraserHotspotX: number = 0;
-  private _electronEraserHotspotY: number = 0;
-  private _electronEraserLastClient: { x: number; y: number } | null = null;
-  private _electronEraserVisible: boolean = false;
+  /**
+   * 0ms GPU floating tool cursor overlay (`#veditor-tool-cursor`).
+   * Used for Eraser on all platforms (prevents missing eraser ring in browser
+   * extensions and Wayland) and for Pen/Highlighter on Electron (prevents
+   * Wayland/Hyprland from reverting custom SVG cursors to the OS arrow).
+   */
+  private _floatingCursorEl: HTMLDivElement | null = null;
+  private _floatingCursorSig: string = '';
+  private _floatingCursorHotspotX: number = 0;
+  private _floatingCursorHotspotY: number = 0;
+  private _floatingCursorLastClient: { x: number; y: number } | null = null;
+  private _floatingCursorVisible: boolean = false;
   /** Electron-only rAF coalescer for unpressed pointermove hover work (240–1000Hz Linux mice). */
   private _electronHoverRafId: number | null = null;
   private _electronPendingHover: {
@@ -218,10 +223,28 @@ class VeditorApp {
     signatureTool.onImageLoaded(() => this.repaintAllRenderedAnnotations());
     window.addEventListener('blur', () => {
       store.clearInternalClipboardPreference();
-      if (isElectron()) {
-        this.hideElectronEraserCursor();
-      }
+      this.hideFloatingToolCursor();
     });
+    document.documentElement.addEventListener('mouseleave', () => {
+      this.hideFloatingToolCursor();
+    });
+    window.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'touch') {
+        this.hideFloatingToolCursor();
+        return;
+      }
+      this._floatingCursorLastClient = { x: e.clientX, y: e.clientY };
+      if (this._floatingCursorVisible && !pointerHandler.isPointerDown) {
+        const target = e.target;
+        if (
+          !(target instanceof HTMLCanvasElement) ||
+          !target.classList.contains('scratchpad-canvas') ||
+          target.style.cursor !== 'none'
+        ) {
+          this.hideFloatingToolCursor();
+        }
+      }
+    }, { passive: true, capture: true });
 
     // 1. Reflect saved theme, accent, density, direction & focus mode onto the
     //    document, and keep them in sync for the rest of the session.
@@ -241,8 +264,8 @@ class VeditorApp {
     }
     if (isElectron()) {
       document.documentElement.classList.add('platform-electron');
-      this.initElectronEraserCursor();
     }
+    this.initFloatingToolCursor();
 
     // 2. Initialize Components
     new HeaderComponent(
@@ -2352,16 +2375,7 @@ class VeditorApp {
     this._scrollContainer.addEventListener('wheel', (e) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        // Normalize line/page wheel deltas & clamp libinput/Wayland spikes
-        const normDeltaY = normalizeWheelDeltaY(e.deltaY, e.deltaMode);
-        // Chromium's touchpad pinch encodes scale s as deltaY = -100 * ln(s),
-        // whose exact 1:1 inverse is exp(-deltaY * 0.01). Keep 0.0035 for
-        // discrete mouse-wheel Ctrl+Scroll notches and all non-Electron builds.
-        const isElectronTouchpadPinch =
-          isElectron() &&
-          e.deltaMode === 0 &&
-          (!Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 48);
-        const factor = Math.exp(-normDeltaY * (isElectronTouchpadPinch ? 0.01 : 0.0035));
+        const factor = computeWheelZoomFactor(e.deltaY, e.deltaMode);
         this.previewZoomBy(factor, { x: e.clientX, y: e.clientY });
       } else if (this._isZoomGestureActive) {
         this.commitZoomPreview();
@@ -2584,6 +2598,7 @@ class VeditorApp {
     const onScreenSet = viewportManager.getOnScreenPages();
 
     // 2. Mount: upgrade placeholder shells for visible + preload pages with canvas stacks.
+    let mountedAnyPage = false;
     for (const pageIndex of visibleIndices) {
       if (!docStillCurrent()) return;
       if (!viewportManager.getLayout(pageIndex)) continue;
@@ -2674,6 +2689,7 @@ class VeditorApp {
 
         // Bind Pointer Events to scratchpad canvas
         this.bindPointerEvents(scratchCanvas, pageIndex);
+        mountedAnyPage = true;
       }
     }
 
@@ -2691,6 +2707,9 @@ class VeditorApp {
         continue;
       }
       this.applyPageGeometry(pageIndex, p, layout, docId);
+    }
+    if (mountedAnyPage) {
+      this.syncFloatingToolCursorAppearance();
     }
 
     // While an interactive wheel/pinch zoom gesture is in flight, existing
@@ -3206,15 +3225,16 @@ class VeditorApp {
           canvas
         };
         canvas.style.cursor = 'grabbing';
+        this.hideFloatingToolCursor();
         return;
       }
       if (isElectron()) {
         this.cancelPendingElectronHover();
-        if (e.pointerType !== 'touch') {
-          this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
-        } else {
-          this.hideElectronEraserCursor();
-        }
+      }
+      if (e.pointerType !== 'touch') {
+        this.updateFloatingToolCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e), canvas);
+      } else {
+        this.hideFloatingToolCursor();
       }
       e.preventDefault();
       try {
@@ -3227,22 +3247,22 @@ class VeditorApp {
     });
 
     canvas.addEventListener('pointerenter', (e) => {
-      if (isElectron() && e.pointerType !== 'touch') {
-        this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
+      if (e.pointerType !== 'touch') {
+        this.updateFloatingToolCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e), canvas);
       }
     });
 
     canvas.addEventListener('pointermove', (e) => {
       // While a two-finger gesture is active, moves only zoom/pan — never draw.
       if (e.pointerType === 'touch') {
+        this.hideFloatingToolCursor();
         const consumed = gestureEngine.handlePointerMove(e, this.gestureCallbacks());
         if (consumed || gestureEngine.isGestureActive) {
           e.preventDefault();
           return;
         }
-      }
-      if (isElectron() && e.pointerType !== 'touch') {
-        this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
+      } else if (!this._handPan) {
+        this.updateFloatingToolCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e), canvas);
       }
       if (this._handPan && e.pointerId === this._handPan.pointerId) {
         e.preventDefault();
@@ -3282,6 +3302,7 @@ class VeditorApp {
                 inside: true
               };
               pointerHandler.handleHover(pending.event, pending.pageIndex, pending.canvas, hoverPt);
+              this.syncFloatingCursorVisibilityForCanvas(pending.canvas);
             });
           }
           return;
@@ -3293,6 +3314,7 @@ class VeditorApp {
           inside: true
         };
         pointerHandler.handleHover(e, pageIndex, canvas, hoverPt);
+        this.syncFloatingCursorVisibilityForCanvas(canvas);
         // Polygon vertices are placed on click, so its elastic edge must also
         // receive unpressed moves. `handlePointerMove` returns immediately for
         // every other inactive tool.
@@ -3312,8 +3334,8 @@ class VeditorApp {
     canvas.addEventListener('pointerleave', () => {
       if (isElectron()) {
         this.cancelPendingElectronHover();
-        this.hideElectronEraserCursor();
       }
+      this.hideFloatingToolCursor();
       if (this._lastCanvasPointer?.pageIndex === pageIndex) {
         this._lastCanvasPointer.inside = false;
       }
@@ -3353,20 +3375,18 @@ class VeditorApp {
       // A notebook grows once the stroke is committed, so there is always
       // blank paper below what you just wrote.
       void notebookController.autoExtend(pageIndex);
-      if (isElectron()) {
-        if (e.pointerType !== 'touch') {
-          this.updateElectronEraserCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e));
-        } else {
-          this.hideElectronEraserCursor();
-        }
+      if (e.pointerType !== 'touch') {
+        this.updateFloatingToolCursor(e.clientX, e.clientY, true, pointerHandler.isStylusEraserEvent(e), canvas);
+      } else {
+        this.hideFloatingToolCursor();
       }
     });
 
     canvas.addEventListener('pointercancel', (e) => {
       if (isElectron()) {
         this.cancelPendingElectronHover();
-        this.hideElectronEraserCursor();
       }
+      this.hideFloatingToolCursor();
       if (e.pointerType === 'touch') {
         const wasGesture = gestureEngine.isGestureActive;
         gestureEngine.handlePointerUp(e);
@@ -3699,9 +3719,7 @@ class VeditorApp {
     ) {
       this.scheduleScratchpadPrewarm(store.activePageIndex, 0);
     }
-    if (isElectron()) {
-      this.syncElectronEraserCursorAppearance();
-    }
+    this.syncFloatingToolCursorAppearance();
   }
 
   private cancelPendingElectronHover(): void {
@@ -3712,10 +3730,10 @@ class VeditorApp {
     this._electronPendingHover = null;
   }
 
-  private initElectronEraserCursor(): void {
-    if (!isElectron() || this._electronEraserEl) return;
+  private initFloatingToolCursor(): void {
+    if (this._floatingCursorEl) return;
     const el = document.createElement('div');
-    el.id = 'electron-eraser-cursor';
+    el.id = 'veditor-tool-cursor';
     el.setAttribute('aria-hidden', 'true');
     el.style.position = 'fixed';
     el.style.left = '0';
@@ -3726,109 +3744,124 @@ class VeditorApp {
     el.style.willChange = 'transform';
     el.style.lineHeight = '0';
     document.body.appendChild(el);
-    this._electronEraserEl = el;
+    this._floatingCursorEl = el;
   }
 
-  private syncElectronEraserCursorAppearance(forceStylusEraser: boolean = false): boolean {
-    if (!isElectron()) return false;
-    if (!this._electronEraserEl) this.initElectronEraserCursor();
-    const el = this._electronEraserEl;
+  private syncFloatingToolCursorAppearance(
+    forceStylusEraser: boolean = false,
+    targetCanvas?: HTMLCanvasElement
+  ): boolean {
+    if (!this._floatingCursorEl) this.initFloatingToolCursor();
+    const el = this._floatingCursorEl;
     if (!el) return false;
 
-    const ts = store.toolSettings;
-    const eraserCursor = ts.eraserCursor || 'circle';
-    const shouldUseOverlay =
-      Boolean(store.activeDocument) &&
-      (store.activeTool === 'eraser' || forceStylusEraser) &&
-      eraserCursor !== 'crosshair';
+    const effectiveTool: ToolType = forceStylusEraser ? 'eraser' : store.activeTool;
+    const spec = store.activeDocument
+      ? buildFloatingToolCursorSpec(
+          effectiveTool,
+          store.toolSettings.drawingCursor || 'pen',
+          store.zoom || 1
+        )
+      : null;
 
-    if (!shouldUseOverlay) {
-      if (this._electronEraserVisible) {
-        this._electronEraserVisible = false;
+    if (!spec || this._handPan || (targetCanvas && targetCanvas.style.cursor !== 'none')) {
+      if (this._floatingCursorVisible) {
+        this._floatingCursorVisible = false;
         el.style.display = 'none';
       }
       return false;
     }
 
-    const onScreen = Math.max(1, (ts.eraserWidth || 24) * (store.zoom || 1));
-    const sig = `${eraserCursor}|${Math.round(onScreen * 2)}`;
-    if (sig !== this._electronEraserSig) {
-      this._electronEraserSig = sig;
-      if (eraserCursor === 'dot') {
-        const d = Math.min(24, Math.max(6, onScreen * 0.35));
-        const size = Math.ceil(d) + 6;
-        const c = size / 2;
-        const r = d / 2;
-        this._electronEraserHotspotX = c;
-        this._electronEraserHotspotY = c;
-        el.innerHTML =
-          `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
-          `<circle cx="${c}" cy="${c}" r="${r}" fill="rgba(239,68,68,0.85)" stroke="#ffffff" stroke-width="1.5"/>` +
-          `</svg>`;
-      } else if (eraserCursor === 'eraser') {
-        this._electronEraserHotspotX = 4;
-        this._electronEraserHotspotY = 19;
-        el.innerHTML =
-          `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">` +
-          `<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" fill="#ffffff" stroke="#0f172a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` +
-          `<path d="m5 11 9 9" stroke="#ef4444" stroke-width="1.6" stroke-linecap="round"/>` +
-          `<circle cx="4" cy="19" r="1.4" fill="#ef4444"/>` +
-          `</svg>`;
-      } else {
-        const d = Math.max(7, onScreen);
-        const size = Math.ceil(d) + 6;
-        const c = size / 2;
-        const r = d / 2;
-        this._electronEraserHotspotX = c;
-        this._electronEraserHotspotY = c;
-        el.innerHTML =
-          `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
-          `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.85"/>` +
-          `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#0f172a" stroke-width="1.25"/>` +
-          `<circle cx="${c}" cy="${c}" r="1" fill="#0f172a"/>` +
-          `</svg>`;
-      }
-      if (this._electronEraserVisible && this._electronEraserLastClient) {
-        const tx = Math.round(this._electronEraserLastClient.x - this._electronEraserHotspotX);
-        const ty = Math.round(this._electronEraserLastClient.y - this._electronEraserHotspotY);
+    if (spec.sig !== this._floatingCursorSig) {
+      this._floatingCursorSig = spec.sig;
+      this._floatingCursorHotspotX = spec.hotspotX;
+      this._floatingCursorHotspotY = spec.hotspotY;
+      el.innerHTML = spec.svg;
+    }
+
+    // When invoked from updateCanvasCursors() (e.g. right after opening a PDF,
+    // switching tools, or committing a zoom while the pointer is stationary over
+    // the canvas), verify the pointer is actually over a `cursor: none` canvas
+    // and show/reposition immediately so the OS arrow never appears.
+    if (!targetCanvas && this._floatingCursorLastClient) {
+      const { x, y } = this._floatingCursorLastClient;
+      const elUnder = !pointerHandler.isPointerDown
+        ? document.elementFromPoint(x, y)
+        : null;
+      const overHiddenCanvas =
+        pointerHandler.isPointerDown ||
+        (elUnder instanceof HTMLCanvasElement &&
+          elUnder.classList.contains('scratchpad-canvas') &&
+          elUnder.style.cursor === 'none');
+      if (overHiddenCanvas) {
+        if (!this._floatingCursorVisible) {
+          this._floatingCursorVisible = true;
+          el.style.display = 'block';
+        }
+        const tx = Math.round(x - this._floatingCursorHotspotX);
+        const ty = Math.round(y - this._floatingCursorHotspotY);
         el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+      } else if (this._floatingCursorVisible) {
+        this._floatingCursorVisible = false;
+        el.style.display = 'none';
       }
+    } else if (this._floatingCursorVisible && this._floatingCursorLastClient) {
+      const tx = Math.round(this._floatingCursorLastClient.x - this._floatingCursorHotspotX);
+      const ty = Math.round(this._floatingCursorLastClient.y - this._floatingCursorHotspotY);
+      el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
     }
     return true;
   }
 
-  private updateElectronEraserCursor(
+  private syncFloatingCursorVisibilityForCanvas(canvas: HTMLCanvasElement): void {
+    if (canvas.style.cursor !== 'none') {
+      this.hideFloatingToolCursor();
+      return;
+    }
+    if (this._floatingCursorLastClient) {
+      this.updateFloatingToolCursor(
+        this._floatingCursorLastClient.x,
+        this._floatingCursorLastClient.y,
+        true,
+        pointerHandler.isStylusEraserCursorCanvas(canvas),
+        canvas
+      );
+    }
+  }
+
+  private updateFloatingToolCursor(
     clientX: number,
     clientY: number,
     visible: boolean,
-    forceStylusEraser: boolean = false
+    forceStylusEraser: boolean = false,
+    targetCanvas?: HTMLCanvasElement
   ): void {
-    if (!isElectron()) return;
-    this._electronEraserLastClient = { x: clientX, y: clientY };
-    const shouldShow = visible && this.syncElectronEraserCursorAppearance(forceStylusEraser);
-    const el = this._electronEraserEl;
+    this._floatingCursorLastClient = { x: clientX, y: clientY };
+    const shouldShow =
+      visible && this.syncFloatingToolCursorAppearance(forceStylusEraser, targetCanvas);
+    const el = this._floatingCursorEl;
     if (!el) return;
     if (!shouldShow) {
-      if (this._electronEraserVisible) {
-        this._electronEraserVisible = false;
+      if (this._floatingCursorVisible) {
+        this._floatingCursorVisible = false;
         el.style.display = 'none';
       }
       return;
     }
-    if (!this._electronEraserVisible) {
-      this._electronEraserVisible = true;
+    if (!this._floatingCursorVisible) {
+      this._floatingCursorVisible = true;
       el.style.display = 'block';
     }
-    const tx = Math.round(clientX - this._electronEraserHotspotX);
-    const ty = Math.round(clientY - this._electronEraserHotspotY);
+    const tx = Math.round(clientX - this._floatingCursorHotspotX);
+    const ty = Math.round(clientY - this._floatingCursorHotspotY);
     el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
   }
 
-  private hideElectronEraserCursor(): void {
-    if (!isElectron() || !this._electronEraserEl) return;
-    if (this._electronEraserVisible) {
-      this._electronEraserVisible = false;
-      this._electronEraserEl.style.display = 'none';
+  private hideFloatingToolCursor(): void {
+    if (!this._floatingCursorEl) return;
+    if (this._floatingCursorVisible) {
+      this._floatingCursorVisible = false;
+      this._floatingCursorEl.style.display = 'none';
     }
   }
 
