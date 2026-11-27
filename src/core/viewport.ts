@@ -6,6 +6,7 @@
 import { store } from './store';
 import { JumpHistoryItem, PageInfo, ViewMode, MIN_ZOOM, MAX_ZOOM } from './types';
 import { persistDocPosition } from '../io/storage';
+import { isElectron } from './platform';
 
 export interface ViewportPageRect {
   pageIndex: number;
@@ -195,9 +196,15 @@ export class ViewportManager {
   }
 
   private scheduleScrollCheck(): void {
+    if (isElectron() && this._scrollContainer?.dataset.kineticScrolling === '1') {
+      return;
+    }
     if (this._scrollRafId !== null) return;
     this._scrollRafId = requestAnimationFrame(() => {
       this._scrollRafId = null;
+      if (isElectron() && this._scrollContainer?.dataset.kineticScrolling === '1') {
+        return;
+      }
       this.handleScroll();
     });
   }

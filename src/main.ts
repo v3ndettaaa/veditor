@@ -69,7 +69,7 @@ import { notebookController } from './core/notebook';
 import { onPageStructureChanged } from './core/page-ops';
 import { gestureEngine } from './input/gestures';
 import { shortcutManager } from './input/shortcuts';
-import { isDesktop } from './core/platform';
+import { isDesktop, isElectron } from './core/platform';
 import {
   nativeOpenPdfDialog,
   nativeReadFile,
@@ -212,7 +212,8 @@ class VeditorApp {
 
     // 1b. Tag Linux desktop/WebKitGTK environments so CSS can disable expensive
     //     per-frame backdrop-filter blurs over the scrolling canvas.
-    if (typeof navigator !== 'undefined') {
+    //     Exclude Chromium Electron so GPU compositor layer promotion stays active.
+    if (typeof navigator !== 'undefined' && !isElectron()) {
       const ua = `${navigator.userAgent || ''} ${navigator.platform || ''}`;
       if (/Linux/i.test(ua) && !/Android/i.test(ua)) {
         document.documentElement.classList.add('platform-linux');
@@ -2339,6 +2340,15 @@ class VeditorApp {
     // pages glide by smoothly with zero black GPU tile flashes.
     this._scrollContainer.addEventListener('scroll', () => {
       if (!this._isZoomGestureActive && store.activeDocument) {
+        if (isElectron() && this._scrollContainer.dataset.kineticScrolling === '1') {
+          this._isFastScrolling = true;
+          if (this._fastScrollTimer !== null) {
+            window.clearTimeout(this._fastScrollTimer);
+            this._fastScrollTimer = null;
+          }
+          return;
+        }
+
         const now = performance.now();
         const st = this._scrollContainer.scrollTop;
         const sl = this._scrollContainer.scrollLeft;
@@ -2385,6 +2395,20 @@ class VeditorApp {
         }
       }
     }, { passive: true });
+
+    if (isElectron()) {
+      this._scrollContainer.addEventListener('veditor:kinetic-scroll-end', () => {
+        if (this._fastScrollTimer !== null) {
+          window.clearTimeout(this._fastScrollTimer);
+          this._fastScrollTimer = null;
+        }
+        this._isFastScrolling = false;
+        if (store.activeDocument && !store.isDocSwitching && !this._isZoomGestureActive) {
+          viewportManager.handleScroll(true);
+          this.updateVisiblePageChunks(true, false);
+        }
+      });
+    }
 
     // Keyboard shortcuts for zoom
     window.addEventListener('keydown', (e) => {

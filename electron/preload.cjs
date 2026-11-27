@@ -109,12 +109,37 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   // Bubbling-phase guard: runs AFTER veditor's `#document-scroll-container` wheel zoom
-  // listener, preventing Chromium visual/page zoom anywhere outside the PDF canvas.
+  // listener. Keeps UI chrome locked at 1:1 while forwarding any viewport-area pinch
+  // events that missed `#document-scroll-container` (e.g. gaps or overlays) to it.
   window.addEventListener(
     'wheel',
     (e) => {
       if (e.ctrlKey || e.metaKey) {
+        const alreadyHandled = e.defaultPrevented;
         e.preventDefault();
+        if (!alreadyHandled && e.target instanceof Node) {
+          const viewport = document.getElementById('app-viewport-container');
+          const scroller = document.getElementById('document-scroll-container');
+          const overChrome =
+            e.target instanceof Element &&
+            e.target.closest(
+              '#app-floating-toolbar, #app-view-controls, #app-properties-panel, #app-sidebar, #app-header'
+            );
+          if (!overChrome && viewport && scroller && viewport.contains(e.target) && !scroller.contains(e.target)) {
+            scroller.dispatchEvent(
+              new WheelEvent('wheel', {
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                deltaMode: e.deltaMode,
+                ctrlKey: true,
+                clientX: e.clientX,
+                clientY: e.clientY,
+                bubbles: true,
+                cancelable: true
+              })
+            );
+          }
+        }
       }
     },
     { passive: false }
@@ -124,15 +149,18 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const FRICTION_PER_MS = 0.00185; // Smooth APZ-like deceleration curve
   const LIFT_DETECT_MS = 48;       // Gap indicating fingers lifted from touchpad
-  const SWIPE_RESET_GAP_MS = 180;  // Tolerate brief main-thread page-render stalls mid-swipe
+  const SWIPE_RESET_GAP_MS = 180;  // Tolerate brief main-thread stalls mid-swipe
   const SAMPLE_WINDOW_MS = 110;    // Sliding window anchored to last wheel sample
   const MIN_FLING_SPEED = 0.25;    // px/ms threshold (~250 px/s) to engage coast
+  const BRISK_SWIPE_SPEED = 0.3;   // px/ms threshold to defer heavy page renders mid-swipe
+  const BRISK_SWIPE_DIST = 90;     // px cumulative swipe threshold to defer renders
   const MAX_FLING_SPEED = 24;      // px/ms safety clamp
-  const STOP_SPEED = 0.03;         // px/ms rest threshold
-  const MAX_FRAME_DT_MS = 24;      // Cap dt so page-load frame spikes consume zero energy
+  const STOP_SPEED = 0.04;         // px/ms rest threshold (~0.33px/frame @ 120Hz)
+  const MAX_FRAME_DT_MS = 24;      // Cap dt so frame spikes consume zero momentum energy
 
   /** @type {Array<{ t: number, dx: number, dy: number }>} */
   let samples = [];
+  let gestureTravelPx = 0;
   let liftTimer = null;
   let coastRaf = null;
   let coastVx = 0;
@@ -143,6 +171,30 @@ window.addEventListener('DOMContentLoaded', () => {
   let carriedVy = 0;
   let lastCoastTime = 0;
   let activeScroller = null;
+  let kineticMarkedScroller = null;
+
+  function markKineticScrolling(scroller) {
+    if (!scroller) return;
+    if (kineticMarkedScroller && kineticMarkedScroller !== scroller) {
+      delete kineticMarkedScroller.dataset.kineticScrolling;
+    }
+    kineticMarkedScroller = scroller;
+    if (scroller.dataset.kineticScrolling !== '1') {
+      scroller.dataset.kineticScrolling = '1';
+    }
+  }
+
+  function clearKineticScrolling(emitSettled = true) {
+    const scroller = kineticMarkedScroller || activeScroller;
+    kineticMarkedScroller = null;
+    if (!scroller) return;
+    if (scroller.dataset.kineticScrolling === '1') {
+      delete scroller.dataset.kineticScrolling;
+      if (emitSettled && scroller.isConnected) {
+        scroller.dispatchEvent(new CustomEvent('veditor:kinetic-scroll-end'));
+      }
+    }
+  }
 
   function stopCoast(preserveCarry = false) {
     if (preserveCarry) {
@@ -161,6 +213,9 @@ window.addEventListener('DOMContentLoaded', () => {
     carryX = 0;
     carryY = 0;
     lastCoastTime = 0;
+    if (!preserveCarry) {
+      clearKineticScrolling(true);
+    }
     activeScroller = null;
   }
 
@@ -172,8 +227,11 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function startCoast(scroller, vx, vy) {
-    stopCoast(false);
+    stopCoast(true);
+    carriedVx = 0;
+    carriedVy = 0;
     activeScroller = scroller;
+    markKineticScrolling(scroller);
     coastVx = Math.max(-MAX_FLING_SPEED, Math.min(MAX_FLING_SPEED, vx));
     coastVy = Math.max(-MAX_FLING_SPEED, Math.min(MAX_FLING_SPEED, vy));
     carryX = 0;
@@ -186,8 +244,8 @@ window.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // Clamp frame delta so a synchronous PDF page render stall NEVER drains scroll
-      // energy or stops the glide prematurely.
+      // Clamp frame delta so any main-thread spike NEVER drains scroll energy
+      // or stops the glide prematurely.
       const dt = Math.min(MAX_FRAME_DT_MS, Math.max(1, now - lastCoastTime));
       lastCoastTime = now;
 
@@ -250,7 +308,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const tailStart = Math.max(0, recent.length - 5);
     const tail = recent.slice(tailStart);
 
-    // Compute per-interval velocity while clamping anomalous page-load stall gaps
+    // Compute per-interval velocity while clamping anomalous stall gaps
     let sumX = 0;
     let sumY = 0;
     let effectiveSpanMs = 0;
@@ -287,6 +345,7 @@ window.addEventListener('DOMContentLoaded', () => {
       if (e.ctrlKey || e.metaKey || e.deltaMode !== 0) {
         stopCoast(false);
         samples = [];
+        gestureTravelPx = 0;
         return;
       }
 
@@ -294,18 +353,20 @@ window.addEventListener('DOMContentLoaded', () => {
       if (!scroller || !(e.target instanceof Node) || !scroller.contains(e.target)) {
         stopCoast(false);
         samples = [];
+        gestureTravelPx = 0;
         return;
       }
 
       // If already coasting:
       // - Opposite direction scroll -> brake & stop immediately!
-      // - Same direction scroll -> preserve remaining momentum so consecutive flicks glide smoothly!
+      // - Same direction scroll -> preserve remaining momentum & keep kinetic flag active!
       if (coastRaf !== null) {
         const opposingY = coastVy !== 0 && e.deltaY !== 0 && Math.sign(e.deltaY) !== Math.sign(coastVy);
         const opposingX = coastVx !== 0 && e.deltaX !== 0 && Math.sign(e.deltaX) !== Math.sign(coastVx);
         if (opposingY || opposingX) {
           stopCoast(false);
           samples = [];
+          gestureTravelPx = 0;
           return;
         }
         stopCoast(true);
@@ -314,23 +375,39 @@ window.addEventListener('DOMContentLoaded', () => {
       const now = performance.now();
       if (samples.length > 0 && now - samples[samples.length - 1].t > SWIPE_RESET_GAP_MS) {
         samples = [];
+        gestureTravelPx = 0;
         carriedVx = 0;
         carriedVy = 0;
       }
 
+      const prevSample = samples.length > 0 ? samples[samples.length - 1] : null;
       samples.push({ t: now, dx: e.deltaX, dy: e.deltaY });
       if (samples.length > 18) {
         samples.shift();
+      }
+      gestureTravelPx += Math.hypot(e.deltaX, e.deltaY);
+
+      // As soon as a brisk touchpad swipe begins, set `kineticScrolling` so the
+      // renderer defers heavy canvas mounts/rasterization until the glide settles.
+      if (prevSample) {
+        const dt = Math.max(4, now - prevSample.t);
+        const instSpeed = Math.hypot(e.deltaX, e.deltaY) / dt;
+        if (instSpeed >= BRISK_SWIPE_SPEED || gestureTravelPx >= BRISK_SWIPE_DIST) {
+          markKineticScrolling(scroller);
+        }
       }
 
       liftTimer = window.setTimeout(() => {
         liftTimer = null;
         const velocity = computeReleaseVelocity();
         samples = [];
+        gestureTravelPx = 0;
         carriedVx = 0;
         carriedVy = 0;
         if (velocity) {
           startCoast(scroller, velocity.vx, velocity.vy);
+        } else {
+          clearKineticScrolling(true);
         }
       }, LIFT_DETECT_MS);
     },
@@ -342,6 +419,7 @@ window.addEventListener('DOMContentLoaded', () => {
     stopCoast(false);
     clearLiftTimer();
     samples = [];
+    gestureTravelPx = 0;
   };
   window.addEventListener('pointerdown', cancelAll, { passive: true, capture: true });
   window.addEventListener('keydown', cancelAll, { passive: true, capture: true });
