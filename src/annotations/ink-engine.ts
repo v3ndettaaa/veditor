@@ -607,13 +607,13 @@ export function buildUnifiedPenPathPlan(
 }
 
 /**
- * High-speed live ink renderer with 100% pixel-identical commit parity.
+ * High-speed live ink renderer with O(1) per-frame cost at any zoom level and
+ * exact geometric parity with committed `buildUnifiedPenPathPlan` strokes.
  *
- * Uses `UnifiedPenPlanBuilder` to append ONLY newly arrived segments in O(1)
- * onto persistent `Path2D` batches, then clears ONLY the stroke's tight dirty
- * rectangle and paints those exact single-pass `Path2D` batches (zero AA
- * double-blending at frame boundaries, zero width drift on lift). Falls back
- * to pure append-only for marathon strokes (>1200 pts) or headless test mocks.
+ * Paints ONLY newly arrived segments `[startIdx .. n - 1]` append-only directly
+ * onto the scratchpad canvas (ZERO per-frame `clearRect`, ZERO re-stroking of
+ * prior segments `0..startIdx-1`), using the exact same `computeStreamingQuadControl`
+ * and `quantizePenSegmentWidth` math as `UnifiedPenPlanBuilder`.
  */
 export class StreamingInkRenderer {
   private _drawnPointCount = 0;
@@ -627,7 +627,6 @@ export class StreamingInkRenderer {
   private _lastColor = '';
   private _lastBaseWidth = 0;
   private _lastPressureEnabled = false;
-  private _planBuilder = new UnifiedPenPlanBuilder();
 
   // Tight device-pixel dirty bounds painted on targetCanvas (for O(1) clear)
   private _dirtyMinX = Infinity;
@@ -643,7 +642,6 @@ export class StreamingInkRenderer {
     this._lastOffsetY = 0;
     this._lastColor = '';
     this._lastBaseWidth = 0;
-    this._planBuilder.reset();
     this._dirtyMinX = Infinity;
     this._dirtyMinY = Infinity;
     this._dirtyMaxX = -Infinity;
@@ -742,7 +740,6 @@ export class StreamingInkRenderer {
     if (geometryChanged) {
       this._drawnPointCount = 0;
       this._hasInitialDot = false;
-      this._planBuilder.reset();
       this._dirtyMinX = Infinity;
       this._dirtyMinY = Infinity;
       this._dirtyMaxX = -Infinity;
@@ -767,70 +764,10 @@ export class StreamingInkRenderer {
       );
 
     const hasNativeStroke = typeof targetCtx.stroke === 'function';
-    const hasPath2D = typeof Path2D !== 'undefined';
 
-    // Exact WYSIWYG single-pass Path2D mode (real browsers, strokes <= 1200 pts):
-    // Appends only the new points to `_planBuilder` in O(1), clears only the tight
-    // stroke dirty rect, and paints the EXACT same `fillPath` + `batches` as
-    // `renderSmoothStroke` on `annotCanvas` -> 0.00px & 0-alpha shift on pen lift!
-    if (hasNativeStroke && hasPath2D && n <= 1200) {
-      const prevDirty = this.getSettledDirtyRectPx();
-      const firstNew = Math.max(0, this._drawnPointCount - 1);
-      for (let i = firstNew; i < n; i++) {
-        const pt = points[i];
-        const pad = Math.max(INK_MIN_DOT_WIDTH, widthAt(pt)) * 0.5 + 3;
-        this.expandDirtyPx(pt.x, pt.y, pad, scale, offsetPxX, offsetPxY);
-      }
-
-      this._planBuilder.appendUpTo(
-        points,
-        baseWidth,
-        pressureCurve,
-        pressureEnabled,
-        strength,
-        calcWidth
-      );
-
-      targetCtx.save();
-      targetCtx.setTransform(1, 0, 0, 1, 0, 0);
-      if (prevDirty) {
-        const cx = Math.max(0, prevDirty.x - 4);
-        const cy = Math.max(0, prevDirty.y - 4);
-        const cw = Math.min(targetCanvas.width - cx, prevDirty.width + 8);
-        const ch = Math.min(targetCanvas.height - cy, prevDirty.height + 8);
-        if (cw > 0 && ch > 0) {
-          targetCtx.clearRect(cx, cy, cw, ch);
-        }
-      }
-      targetCtx.translate(-offsetPxX, -offsetPxY);
-      targetCtx.scale(scale, scale);
-      if (clipCallback) clipCallback(targetCtx);
-
-      targetCtx.lineCap = 'round';
-      targetCtx.lineJoin = 'round';
-      targetCtx.imageSmoothingEnabled = true;
-      if ('imageSmoothingQuality' in targetCtx) {
-        targetCtx.imageSmoothingQuality = 'high';
-      }
-      targetCtx.strokeStyle = color;
-      targetCtx.fillStyle = color;
-
-      if (this._planBuilder.fillPath) {
-        targetCtx.fill(this._planBuilder.fillPath, 'nonzero');
-      }
-      const batches = this._planBuilder.batches;
-      for (let i = 0; i < batches.length; i++) {
-        targetCtx.lineWidth = batches[i].width;
-        targetCtx.stroke(batches[i].path);
-      }
-      targetCtx.restore();
-
-      this._hasInitialDot = true;
-      this._drawnPointCount = n;
-      return;
-    }
-
-    // Append-only fallback for marathon strokes (>1200 pts) or headless test mocks
+    // Strict O(1) append-only live streaming (zero per-frame clearRect, zero
+    // re-stroking of prior segments) with exact curve & quantized-width parity
+    // to `buildUnifiedPenPathPlan` so zoomed-in writing stays <0.1ms/frame!
     if (!this._hasInitialDot) {
       const p0 = points[0];
       const r0 = Math.max(INK_MIN_DOT_WIDTH * 0.5, widthAt(p0) * 0.5);
@@ -864,6 +801,7 @@ export class StreamingInkRenderer {
       targetCtx.strokeStyle = color;
       targetCtx.lineCap = 'round';
       targetCtx.lineJoin = 'round';
+      targetCtx.imageSmoothingEnabled = true;
 
       if (!pressureEnabled) {
         const strokeW = Math.max(INK_MIN_WIDTH, baseWidth);

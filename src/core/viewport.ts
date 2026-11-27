@@ -51,10 +51,10 @@ export function normalizeWheelDeltaY(deltaY: number, deltaMode: number = 0): num
 export function computePlaceholderShellRange(
   centerPage: number,
   pageCount: number,
-  radius: number = 40
+  radius: number = 80
 ): { start: number; end: number } {
   if (pageCount <= 0) return { start: 0, end: -1 };
-  if (pageCount <= 120) return { start: 0, end: pageCount - 1 };
+  if (pageCount <= 240) return { start: 0, end: pageCount - 1 };
   const clampedCenter = Math.max(0, Math.min(pageCount - 1, Math.floor(centerPage)));
   const safeRadius = Math.max(8, Math.floor(radius));
   return {

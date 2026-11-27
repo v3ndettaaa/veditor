@@ -2328,16 +2328,19 @@ body.invert-pdf-document .pdf-ph-num {
   left: 0;
   pointer-events: none;
   z-index: 1;
+  opacity: 1;
+  transition: opacity 110ms ease-out;
 }
 
 .pdf-page-container:not(.is-page-rendered) .pdf-page-canvas {
   opacity: 0;
-  visibility: hidden;
+  transition: none;
 }
 
 .pdf-chunk-canvas {
   z-index: 2;
   display: none;
+  transition: none;
 }
 
 /* Dark Mode tones are pre-baked directly onto rendered PDF canvas bitmaps once per page/toggle

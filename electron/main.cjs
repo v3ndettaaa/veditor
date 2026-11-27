@@ -5,10 +5,26 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
-// Enable automatic Wayland/X11 selection and smooth scrolling on Linux.
+// Enable native Wayland (when active) and touchpad pinch / smooth scrolling on Linux.
 if (process.platform === 'linux') {
-  app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+  const hasExplicitOzone = process.argv.some((arg) => arg.startsWith('--ozone-platform'));
+  const isWaylandSession = Boolean(
+    process.env.WAYLAND_DISPLAY ||
+      (process.env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland'
+  );
+  if (!hasExplicitOzone) {
+    if (isWaylandSession) {
+      app.commandLine.appendSwitch('ozone-platform', 'wayland');
+    } else {
+      app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+    }
+  }
+  app.commandLine.appendSwitch('enable-pinch');
   app.commandLine.appendSwitch('enable-smooth-scrolling');
+  app.commandLine.appendSwitch(
+    'enable-features',
+    'UseOzonePlatform,TouchpadOverscrollHistoryNavigation'
+  );
 }
 
 // Register a stable privileged custom origin (`app://veditor`) BEFORE app is ready.
@@ -409,10 +425,22 @@ function createMainWindow() {
   // Allow Chromium visual zoom limits > 1 (like Chrome) so Wayland/touchpad pinch
   // gestures are synthesized into ctrl+wheel events for veditor's PDF canvas.
   // Preload prevents non-PDF UI chrome from zooming on unhandled ctrl+wheel events.
-  win.webContents.setVisualZoomLevelLimits(1, 3).catch(() => {});
-  win.webContents.on('did-finish-load', () => {
+  const applyVisualZoomLimits = () => {
+    if (win.isDestroyed()) return;
     win.webContents.setVisualZoomLevelLimits(1, 3).catch(() => {});
     win.webContents.setZoomFactor(1);
+  };
+  applyVisualZoomLimits();
+  win.webContents.on('dom-ready', applyVisualZoomLimits);
+  win.webContents.on('did-finish-load', applyVisualZoomLimits);
+
+  // Fallback: if Chromium routes a pinch/zoom gesture through WebContents zoom-changed
+  // instead of a cancelable wheel event, keep the app chrome at 1:1 and forward it to
+  // the PDF viewport in preload.
+  win.webContents.on('zoom-changed', (_event, zoomDirection) => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(1);
+    win.webContents.send('native:pinch-zoom-fallback', zoomDirection);
   });
 
   // Route external links (`target="_blank"`, `window.open`) safely to the OS browser.

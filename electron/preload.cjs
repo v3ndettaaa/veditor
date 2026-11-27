@@ -1,6 +1,14 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
+
+// Unlock Chromium's renderer-side visual pinch gesture synthesis immediately so
+// Wayland/touchpad two-finger pinches are delivered as ctrl+wheel events.
+try {
+  webFrame.setVisualZoomLevelLimits(1, 3);
+} catch {
+  // Ignore if unsupported in this environment
+}
 
 contextBridge.exposeInMainWorld('__VEDITOR_ELECTRON__', {
   isElectron: true,
@@ -59,12 +67,47 @@ contextBridge.exposeInMainWorld('__VEDITOR_ELECTRON__', {
 });
 
 // Electron-only UX enhancements (completely isolated from Web/Extension/Tauri builds):
-// 1. Keep toolbar/UI chrome at 1:1 when trackpad pinch (ctrl+wheel) happens outside
-//    the PDF viewport, while letting `#document-scroll-container` handle PDF zoom first.
-// 2. Add smooth kinetic/inertial trackpad coasting on Linux (where Wayland/libinput
-//    deliberately leaves post-lift scroll momentum up to the app and Chromium stops
-//    abruptly on finger lift).
+// 1. Enable touchpad pinch-to-zoom on the PDF canvas while keeping toolbar/UI chrome at 1:1.
+// 2. Provide stall-proof Linux kinetic trackpad scrolling that glides smoothly until
+//    momentum runs out or the user explicitly brakes (opposite scroll / click / key),
+//    without ever halting when new PDF pages load mid-scroll.
 window.addEventListener('DOMContentLoaded', () => {
+  try {
+    webFrame.setVisualZoomLevelLimits(1, 3);
+    webFrame.setZoomFactor(1);
+  } catch {
+    // Ignore
+  }
+
+  let lastPointerX = Math.round(window.innerWidth / 2);
+  let lastPointerY = Math.round(window.innerHeight / 2);
+  window.addEventListener(
+    'pointermove',
+    (e) => {
+      lastPointerX = e.clientX;
+      lastPointerY = e.clientY;
+    },
+    { passive: true, capture: true }
+  );
+
+  // Fallback bridge if Chromium delivers pinch zoom via WebContents `zoom-changed`
+  ipcRenderer.on('native:pinch-zoom-fallback', (_event, direction) => {
+    const scroller = document.getElementById('document-scroll-container');
+    if (!scroller) return;
+    const deltaY = direction === 'in' ? -45 : 45;
+    scroller.dispatchEvent(
+      new WheelEvent('wheel', {
+        deltaY,
+        deltaMode: 0,
+        ctrlKey: true,
+        clientX: lastPointerX,
+        clientY: lastPointerY,
+        bubbles: true,
+        cancelable: true
+      })
+    );
+  });
+
   // Bubbling-phase guard: runs AFTER veditor's `#document-scroll-container` wheel zoom
   // listener, preventing Chromium visual/page zoom anywhere outside the PDF canvas.
   window.addEventListener(
@@ -79,12 +122,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
   if (process.platform !== 'linux') return;
 
-  const FRICTION_PER_MS = 0.0023; // Natural APZ-like deceleration curve
-  const LIFT_DETECT_MS = 38;      // Gap indicating fingers lifted from touchpad
-  const SAMPLE_WINDOW_MS = 75;    // Sliding window for fling velocity estimation
-  const MIN_FLING_SPEED = 0.32;   // px/ms threshold (~320 px/s) to engage coast
-  const MAX_FLING_SPEED = 18;     // px/ms safety clamp
-  const STOP_SPEED = 0.035;       // px/ms rest threshold
+  const FRICTION_PER_MS = 0.00185; // Smooth APZ-like deceleration curve
+  const LIFT_DETECT_MS = 48;       // Gap indicating fingers lifted from touchpad
+  const SWIPE_RESET_GAP_MS = 180;  // Tolerate brief main-thread page-render stalls mid-swipe
+  const SAMPLE_WINDOW_MS = 110;    // Sliding window anchored to last wheel sample
+  const MIN_FLING_SPEED = 0.25;    // px/ms threshold (~250 px/s) to engage coast
+  const MAX_FLING_SPEED = 24;      // px/ms safety clamp
+  const STOP_SPEED = 0.03;         // px/ms rest threshold
+  const MAX_FRAME_DT_MS = 24;      // Cap dt so page-load frame spikes consume zero energy
 
   /** @type {Array<{ t: number, dx: number, dy: number }>} */
   let samples = [];
@@ -92,16 +137,29 @@ window.addEventListener('DOMContentLoaded', () => {
   let coastRaf = null;
   let coastVx = 0;
   let coastVy = 0;
+  let carryX = 0;
+  let carryY = 0;
+  let carriedVx = 0;
+  let carriedVy = 0;
   let lastCoastTime = 0;
   let activeScroller = null;
 
-  function stopCoast() {
+  function stopCoast(preserveCarry = false) {
+    if (preserveCarry) {
+      carriedVx = coastVx;
+      carriedVy = coastVy;
+    } else {
+      carriedVx = 0;
+      carriedVy = 0;
+    }
     if (coastRaf !== null) {
       window.cancelAnimationFrame(coastRaf);
       coastRaf = null;
     }
     coastVx = 0;
     coastVy = 0;
+    carryX = 0;
+    carryY = 0;
     lastCoastTime = 0;
     activeScroller = null;
   }
@@ -114,49 +172,59 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function startCoast(scroller, vx, vy) {
-    stopCoast();
+    stopCoast(false);
     activeScroller = scroller;
     coastVx = Math.max(-MAX_FLING_SPEED, Math.min(MAX_FLING_SPEED, vx));
     coastVy = Math.max(-MAX_FLING_SPEED, Math.min(MAX_FLING_SPEED, vy));
+    carryX = 0;
+    carryY = 0;
     lastCoastTime = performance.now();
 
     const step = (now) => {
       if (!activeScroller || !activeScroller.isConnected) {
-        stopCoast();
+        stopCoast(false);
         return;
       }
 
-      const dt = Math.min(32, Math.max(1, now - lastCoastTime));
+      // Clamp frame delta so a synchronous PDF page render stall NEVER drains scroll
+      // energy or stops the glide prematurely.
+      const dt = Math.min(MAX_FRAME_DT_MS, Math.max(1, now - lastCoastTime));
       lastCoastTime = now;
 
       const decay = Math.exp(-FRICTION_PER_MS * dt);
       const integral = (1 - decay) / FRICTION_PER_MS;
-      const moveX = coastVx * integral;
-      const moveY = coastVy * integral;
+      carryX += coastVx * integral;
+      carryY += coastVy * integral;
 
-      const prevTop = activeScroller.scrollTop;
-      const prevLeft = activeScroller.scrollLeft;
-
-      if (Math.abs(moveY) >= 0.1) {
-        activeScroller.scrollTop = prevTop + moveY;
+      // Apply integer pixels while keeping fractional remainder for smooth deceleration
+      const intY = Math.trunc(carryY);
+      const intX = Math.trunc(carryX);
+      if (intY !== 0) {
+        carryY -= intY;
+        activeScroller.scrollTop += intY;
       }
-      if (Math.abs(moveX) >= 0.1) {
-        activeScroller.scrollLeft = prevLeft + moveX;
+      if (intX !== 0) {
+        carryX -= intX;
+        activeScroller.scrollLeft += intX;
       }
 
-      // If we hit a scroll boundary, zero velocity along that axis
-      if (Math.abs(moveY) >= 0.5 && activeScroller.scrollTop === prevTop) {
+      // Only stop along an axis when we have truly reached the document's physical edge
+      const maxTop = Math.max(0, activeScroller.scrollHeight - activeScroller.clientHeight);
+      const maxLeft = Math.max(0, activeScroller.scrollWidth - activeScroller.clientWidth);
+      if ((coastVy < 0 && activeScroller.scrollTop <= 0) || (coastVy > 0 && activeScroller.scrollTop >= maxTop - 1)) {
         coastVy = 0;
+        carryY = 0;
       }
-      if (Math.abs(moveX) >= 0.5 && activeScroller.scrollLeft === prevLeft) {
+      if ((coastVx < 0 && activeScroller.scrollLeft <= 0) || (coastVx > 0 && activeScroller.scrollLeft >= maxLeft - 1)) {
         coastVx = 0;
+        carryX = 0;
       }
 
       coastVx *= decay;
       coastVy *= decay;
 
       if (Math.hypot(coastVx, coastVy) < STOP_SPEED) {
-        stopCoast();
+        stopCoast(false);
         return;
       }
 
@@ -167,62 +235,91 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function computeReleaseVelocity() {
-    if (samples.length < 3) return null;
+    if (samples.length < 2) return null;
     const lastT = samples[samples.length - 1].t;
     const recent = samples.filter((s) => lastT - s.t <= SAMPLE_WINDOW_MS);
-    if (recent.length < 3) return null;
+    if (recent.length < 2) return null;
 
-    // Filter out discrete mouse-wheel notches (typically exact multiples of 100/120px)
-    const looksLikeMouseWheel = recent.every(
-      (s) => s.dx === 0 && Math.abs(s.dy) >= 96 && Math.abs(s.dy) % 10 === 0
-    );
+    // Filter out single discrete mouse-wheel notches (exact multiples of 100/120px)
+    const looksLikeMouseWheel =
+      recent.length <= 2 &&
+      recent.every((s) => s.dx === 0 && Math.abs(s.dy) >= 96 && Math.abs(s.dy) % 10 === 0);
     if (looksLikeMouseWheel) return null;
 
-    // Use the final samples right before lift so braking before lift stops cleanly
+    // Use the final samples right before lift so deliberate braking before lift stops cleanly
     const tailStart = Math.max(0, recent.length - 5);
     const tail = recent.slice(tailStart);
-    const spanMs = Math.max(16, tail[tail.length - 1].t - tail[0].t);
 
+    // Compute per-interval velocity while clamping anomalous page-load stall gaps
     let sumX = 0;
     let sumY = 0;
+    let effectiveSpanMs = 0;
     for (let i = 1; i < tail.length; i++) {
+      const gap = Math.min(35, Math.max(4, tail[i].t - tail[i - 1].t));
+      effectiveSpanMs += gap;
       sumX += tail[i].dx;
       sumY += tail[i].dy;
     }
+    if (effectiveSpanMs <= 0) return null;
 
-    const vx = sumX / spanMs;
-    const vy = sumY / spanMs;
+    let vx = sumX / effectiveSpanMs;
+    let vy = sumY / effectiveSpanMs;
+
+    // Accumulate carried momentum when the user flicked again in the SAME direction
+    if (carriedVy !== 0 && Math.sign(vy) === Math.sign(carriedVy)) {
+      const sameDirBoost = Math.abs(carriedVy) * 0.72 + Math.abs(vy);
+      vy = Math.sign(vy) * Math.max(Math.abs(vy), sameDirBoost);
+    }
+    if (carriedVx !== 0 && Math.sign(vx) === Math.sign(carriedVx)) {
+      const sameDirBoost = Math.abs(carriedVx) * 0.72 + Math.abs(vx);
+      vx = Math.sign(vx) * Math.max(Math.abs(vx), sameDirBoost);
+    }
+
     if (Math.hypot(vx, vy) < MIN_FLING_SPEED) return null;
-
     return { vx, vy };
   }
 
   window.addEventListener(
     'wheel',
     (e) => {
-      // Any new wheel input or pinch cancels in-flight kinetic coast immediately
-      stopCoast();
       clearLiftTimer();
 
       if (e.ctrlKey || e.metaKey || e.deltaMode !== 0) {
+        stopCoast(false);
         samples = [];
         return;
       }
 
       const scroller = document.getElementById('document-scroll-container');
       if (!scroller || !(e.target instanceof Node) || !scroller.contains(e.target)) {
+        stopCoast(false);
         samples = [];
         return;
       }
 
+      // If already coasting:
+      // - Opposite direction scroll -> brake & stop immediately!
+      // - Same direction scroll -> preserve remaining momentum so consecutive flicks glide smoothly!
+      if (coastRaf !== null) {
+        const opposingY = coastVy !== 0 && e.deltaY !== 0 && Math.sign(e.deltaY) !== Math.sign(coastVy);
+        const opposingX = coastVx !== 0 && e.deltaX !== 0 && Math.sign(e.deltaX) !== Math.sign(coastVx);
+        if (opposingY || opposingX) {
+          stopCoast(false);
+          samples = [];
+          return;
+        }
+        stopCoast(true);
+      }
+
       const now = performance.now();
-      // Reset gesture buffer if there was a pause between swipes
-      if (samples.length > 0 && now - samples[samples.length - 1].t > 55) {
+      if (samples.length > 0 && now - samples[samples.length - 1].t > SWIPE_RESET_GAP_MS) {
         samples = [];
+        carriedVx = 0;
+        carriedVy = 0;
       }
 
       samples.push({ t: now, dx: e.deltaX, dy: e.deltaY });
-      if (samples.length > 16) {
+      if (samples.length > 18) {
         samples.shift();
       }
 
@@ -230,6 +327,8 @@ window.addEventListener('DOMContentLoaded', () => {
         liftTimer = null;
         const velocity = computeReleaseVelocity();
         samples = [];
+        carriedVx = 0;
+        carriedVy = 0;
         if (velocity) {
           startCoast(scroller, velocity.vx, velocity.vy);
         }
@@ -240,7 +339,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Stop kinetic glide immediately on click, touch, or keyboard navigation
   const cancelAll = () => {
-    stopCoast();
+    stopCoast(false);
     clearLiftTimer();
     samples = [];
   };
@@ -248,4 +347,5 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('keydown', cancelAll, { passive: true, capture: true });
   window.addEventListener('blur', cancelAll, { passive: true });
 });
+
 

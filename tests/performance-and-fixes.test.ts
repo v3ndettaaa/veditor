@@ -30,6 +30,7 @@ import {
   uint8ArrayToBase64,
   base64ToUint8Array
 } from '../src/utils/pdf-url';
+import { computePlaceholderShellRange } from '../src/core/viewport';
 import type { Annotation, PenAnnotation, StickyNoteAnnotation, TextAnnotation } from '../src/core/types';
 
 describe('Fix 2: Sticky Note Zero-Lag Eraser & Full Tool Parity', () => {
@@ -356,5 +357,33 @@ describe('Fix 5: Direct Web PDF Opening & Extension Permissions', () => {
     const firefoxManifest = JSON.parse(readFileSync(resolve(process.cwd(), 'manifest.firefox.json'), 'utf8'));
     expect(chromeManifest.host_permissions).toContain('<all_urls>');
     expect(firefoxManifest.host_permissions).toContain('<all_urls>');
+    expect(firefoxManifest.background?.type).toBe('module');
+  });
+});
+
+describe('Fix 6: Seamless Placeholder Scroll, Zero Black Blinks, & Electron Linux Wayland Pinch/Coast', () => {
+  it('pre-mounts all placeholder shells up to 240 pages and maintains a wide radius on large PDFs', () => {
+    expect(computePlaceholderShellRange(5, 200, 100)).toEqual({ start: 0, end: 199 });
+    expect(computePlaceholderShellRange(150, 500, 100)).toEqual({ start: 50, end: 250 });
+    expect(computePlaceholderShellRange(0, 500, 100)).toEqual({ start: 0, end: 100 });
+  });
+
+  it('uses opacity-only fade (no visibility:hidden) on unrendered PDF canvases to prevent cold GPU black flashes', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/styles/main.css'), 'utf8');
+    const ruleMatch = css.match(/\.pdf-page-container:not\(\.is-page-rendered\)\s+\.pdf-page-canvas\s*\{([^}]*)\}/);
+    expect(ruleMatch).not.toBeNull();
+    expect(ruleMatch![1]).toContain('opacity: 0');
+    expect(ruleMatch![1]).not.toContain('visibility: hidden');
+  });
+
+  it('configures Electron Linux main/preload with Wayland Ozone pinch and subpixel-safe kinetic coasting', () => {
+    const mainCjs = readFileSync(resolve(process.cwd(), 'electron/main.cjs'), 'utf8');
+    const preloadCjs = readFileSync(resolve(process.cwd(), 'electron/preload.cjs'), 'utf8');
+    expect(mainCjs).toContain("'ozone-platform', 'wayland'");
+    expect(mainCjs).toContain("'enable-pinch'");
+    expect(mainCjs).toContain('setVisualZoomLevelLimits(1, 3)');
+    expect(preloadCjs).toContain('setVisualZoomLevelLimits(1, 3)');
+    expect(preloadCjs).toContain('kineticScrolling');
+    expect(preloadCjs).toContain('Math.trunc(moveY)');
   });
 });

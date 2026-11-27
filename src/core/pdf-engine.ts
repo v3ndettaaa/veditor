@@ -79,7 +79,8 @@ function blitPdfBitmap(
   targetWidth: number,
   targetHeight: number,
   darkMode: boolean,
-  highQuality: boolean = false
+  highQuality: boolean = false,
+  revealContainer: boolean = true
 ): void {
   if (target.width !== targetWidth || target.height !== targetHeight) {
     target.width = targetWidth;
@@ -105,7 +106,24 @@ function blitPdfBitmap(
   }
   target.dataset.darkMode = darkMode ? '1' : '0';
   target.dataset.rendered = '1';
-  target.parentElement?.classList.add('is-page-rendered');
+
+  if (revealContainer) {
+    const parent = target.parentElement;
+    if (parent && !parent.classList.contains('is-page-rendered')) {
+      // Wait 1 compositor frame while the canvas sits at `opacity: 0` above the
+      // designed loading placeholder so the GPU finishes uploading the bitmap
+      // before fading in — eliminating 1-frame black texture blinks on Firefox/Chromium.
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          if (target.isConnected && target.dataset.rendered === '1') {
+            target.parentElement?.classList.add('is-page-rendered');
+          }
+        });
+      } else {
+        parent.classList.add('is-page-rendered');
+      }
+    }
+  }
 }
 
 function resolveAssetUrl(path: string): string {
@@ -1261,7 +1279,7 @@ export class PDFEngine {
       chunkCanvas.dataset.baseWidth = String(rect.width);
       chunkCanvas.dataset.baseHeight = String(rect.height);
 
-      blitPdfBitmap(offscreen, chunkCanvas, chunkPixelW, chunkPixelH, darkMode, false);
+      blitPdfBitmap(offscreen, chunkCanvas, chunkPixelW, chunkPixelH, darkMode, false, false);
       chunkCanvas.style.display = 'block';
     } catch (err: any) {
       if (err?.name !== 'RenderingCancelledException') {

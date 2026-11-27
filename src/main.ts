@@ -268,9 +268,9 @@ class VeditorApp {
       if (this._isZoomGestureActive || store.isDocSwitching || store.isZoomAdjusting) return;
       const doc = store.activeDocument;
       if (!doc) return;
-      // For <=120-page docs all shells are already mounted on layout; only
+      // For <=240-page docs all shells are already mounted on layout; only
       // slide the shell pool on scroll for huge PDFs or incomplete pools.
-      if (doc.pageCount > 120 || this._pageShells.size < doc.pageCount) {
+      if (doc.pageCount > 240 || this._pageShells.size < doc.pageCount) {
         const centerPage = viewportManager.findCenterPageForScroll(scrollTop, viewH);
         this.syncPlaceholderShells(centerPage);
       }
@@ -287,20 +287,27 @@ class VeditorApp {
     });
 
     // Background dimension fills (true page sizes arriving after first paint)
-    // correct the layout so mixed-size docs stop overlapping. Preserve the
-    // user's scroll offset across the correction.
+    // correct the layout so mixed-size docs stop overlapping. Defer while actively
+    // scrolling/coasting so layout recalculation never stalls or snaps momentum.
     pdfEngine.onDimensionsUpdated((docId) => {
-      if (store.activeDocument?.id !== docId) return;
-      if (store.isDocSwitching) return;
-      const top = this._scrollContainer.scrollTop;
-      const left = this._scrollContainer.scrollLeft;
-      viewportManager.updateLayout(true);
-      // updateLayout's handleScroll may have nudged activePage; restore exact
-      // pixel offset so the correction doesn't visibly jump.
-      if (Math.abs(this._scrollContainer.scrollTop - top) > 2) {
-        this._scrollContainer.scrollTop = top;
-        this._scrollContainer.scrollLeft = left;
-      }
+      const applyDims = () => {
+        if (store.activeDocument?.id !== docId) return;
+        if (store.isDocSwitching) return;
+        if (this._isFastScrolling || this._scrollContainer.dataset.kineticScrolling === '1') {
+          window.setTimeout(applyDims, 160);
+          return;
+        }
+        const top = this._scrollContainer.scrollTop;
+        const left = this._scrollContainer.scrollLeft;
+        viewportManager.updateLayout(true);
+        // updateLayout's handleScroll may have nudged activePage; restore exact
+        // pixel offset so the correction doesn't visibly jump.
+        if (Math.abs(this._scrollContainer.scrollTop - top) > 2) {
+          this._scrollContainer.scrollTop = top;
+          this._scrollContainer.scrollLeft = left;
+        }
+      };
+      applyDims();
     });
 
     // Rebuilding a notebook replaces its PDF bytes, so invalidate mounted pages
@@ -1014,7 +1021,7 @@ class VeditorApp {
       targetIndices = layouts.map(l => l.pageIndex);
       keepSet = new Set(targetIndices);
     } else {
-      const { start, end } = computePlaceholderShellRange(centerPage, doc.pageCount, 40);
+      const { start, end } = computePlaceholderShellRange(centerPage, doc.pageCount, 100);
       targetIndices = [];
       for (let i = start; i <= end; i++) targetIndices.push(i);
       keepSet = null;
@@ -2348,21 +2355,30 @@ class VeditorApp {
           return;
         }
 
-        // Fast-scroll detection: engage on brisk wheel flicks / scrollbar drags
-        // (>220px/event or >2200px/s) so GPU textures aren't thrashed mid-flight.
-        if (dist > 220 || (dt < 60 && dist / dt > 2.2)) {
+        // Fast/kinetic scroll detection: keep heavy canvas mounts, GPU teardowns,
+        // and PDF.js renders deferred until scroll momentum naturally settles (or
+        // the user stops/reverses), so gliding across unrendered pages never hitches.
+        const isKineticCoast = this._scrollContainer.dataset.kineticScrolling === '1';
+        if (isKineticCoast || dist > 90 || (dt < 90 && dist / dt > 0.65)) {
           this._isFastScrolling = true;
           if (this._fastScrollTimer !== null) {
             window.clearTimeout(this._fastScrollTimer);
           }
-          this._fastScrollTimer = window.setTimeout(() => {
-            this._fastScrollTimer = null;
-            this._isFastScrolling = false;
-            if (store.activeDocument && !store.isDocSwitching) {
-              viewportManager.handleScroll(true);
-              this.updateVisiblePageChunks(true, false);
-            }
-          }, 70);
+          const scheduleSettle = () => {
+            this._fastScrollTimer = window.setTimeout(() => {
+              if (this._scrollContainer.dataset.kineticScrolling === '1') {
+                scheduleSettle();
+                return;
+              }
+              this._fastScrollTimer = null;
+              this._isFastScrolling = false;
+              if (store.activeDocument && !store.isDocSwitching) {
+                viewportManager.handleScroll(true);
+                this.updateVisiblePageChunks(true, false);
+              }
+            }, 120);
+          };
+          scheduleSettle();
         } else if (!this._isFastScrolling) {
           this.updateVisiblePageChunks(false, false);
           this.scheduleChunkUpdate(75);
@@ -2431,10 +2447,19 @@ class VeditorApp {
 
     // Keep lightweight zero-VRAM placeholder shells mounted and positioned
     // ahead of the viewport so fast scrolls always glide over designed pages.
-    this.syncPlaceholderShells(store.activePageIndex);
+    this.syncPlaceholderShells(visibleIndices[0] ?? store.activePageIndex);
 
     // PIPE_4: Cancel in-flight render tasks for pages outside the visible + preload window
     pdfEngine.cancelOutdatedRenderTasks(new Set(visibleIndices));
+
+    // During fast or kinetic scrolling, skip BOTH GPU canvas teardown and new
+    // <canvas> allocations altogether so Chromium/Firefox's compositor glides over
+    // the pre-mounted designed placeholder pages at full refresh rate with zero
+    // mid-scroll stalls or black GPU tile flashes. Eviction + fresh mount run in
+    // one clean pass as soon as scroll momentum settles.
+    if (this._isFastScrolling || this._scrollContainer.dataset.kineticScrolling === '1') {
+      return;
+    }
 
     // PIPE_3: VRAM Pool Guard - Retain pages within the preload window + 1 warm margin.
     // Evicted pages downgrade cleanly back to their lightweight placeholder shell
@@ -2478,13 +2503,6 @@ class VeditorApp {
         }
         this._renderedPages.delete(pageIndex);
       }
-    }
-
-    // During fast scrolling, skip allocating new <canvas> stacks and PDF renders
-    // altogether so Chromium's compositor glides over the pre-mounted designed
-    // placeholder pages at 120fps with zero GPU texture upload stalls / black blinks.
-    if (this._isFastScrolling) {
-      return;
     }
 
     const docStillCurrent = () => store.activeDocument?.id === docId && !store.isDocSwitching;

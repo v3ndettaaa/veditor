@@ -6,6 +6,7 @@ import {
   sampleCentripetalPenSpline,
   renderSmoothStroke
 } from '../src/annotations/spline';
+import { StreamingInkRenderer } from '../src/annotations/ink-engine';
 import { PressureEngine } from '../src/input/pressure';
 
 describe('Spline & Pressure Engine', () => {
@@ -206,6 +207,65 @@ describe('Spline & Pressure Engine', () => {
     expect(arcSpy).toHaveBeenCalledTimes(1);
     expect(fillSpy).toHaveBeenCalledTimes(1);
     expect(strokeSpy).not.toHaveBeenCalled();
+  });
+
+  it('streams live pen strokes strictly O(1) append-only with zero per-frame clearRect at high zoom', () => {
+    const clearRectSpy = vi.fn();
+    const moveToSpy = vi.fn();
+    const lineToSpy = vi.fn();
+    const quadSpy = vi.fn();
+    const strokeSpy = vi.fn();
+    const fillSpy = vi.fn();
+    const mockCanvas = { width: 3200, height: 2400 } as unknown as HTMLCanvasElement;
+    const mockCtx = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      clearRect: clearRectSpy,
+      beginPath: vi.fn(),
+      moveTo: moveToSpy,
+      lineTo: lineToSpy,
+      quadraticCurveTo: quadSpy,
+      arc: vi.fn(),
+      fill: fillSpy,
+      stroke: strokeSpy,
+      lineCap: 'round',
+      lineJoin: 'round',
+      strokeStyle: '#000',
+      fillStyle: '#000',
+      lineWidth: 1,
+      imageSmoothingEnabled: true
+    } as unknown as CanvasRenderingContext2D;
+
+    const renderer = new StreamingInkRenderer();
+    const points: Array<{ x: number; y: number; pressure: number }> = [];
+
+    // Simulate 200 streaming frames at 4x zoom (scale = 8.0 with 2x DPR)
+    for (let i = 0; i < 200; i++) {
+      points.push({ x: 10 + i * 1.2, y: 20 + Math.sin(i * 0.2) * 8, pressure: 0.55 });
+      renderer.render(
+        mockCtx,
+        mockCanvas,
+        points,
+        '#111827',
+        2.5,
+        'linear',
+        true,
+        'balanced',
+        8.0,
+        0,
+        0,
+        calculateStrokeWidth
+      );
+    }
+
+    // Must NEVER clear the scratchpad mid-stroke and must draw each segment exactly once (O(1)/frame)
+    expect(clearRectSpy).not.toHaveBeenCalled();
+    expect(fillSpy).toHaveBeenCalledTimes(1); // Only initial dot once
+    expect(quadSpy.mock.calls.length + lineToSpy.mock.calls.length).toBe(199);
+    expect(strokeSpy.mock.calls.length).toBeLessThanOrEqual(200);
   });
 });
 

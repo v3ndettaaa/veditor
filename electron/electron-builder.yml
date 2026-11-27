@@ -27,6 +27,10 @@ linux:
   category: Office
   maintainer: v3ndettaaa <v3ndettaaa@users.noreply.github.com>
   artifactName: veditor-electron-${version}-linux-${arch}.${ext}
+  executableArgs:
+    - --ozone-platform-hint=auto
+    - --enable-pinch
+    - --enable-smooth-scrolling
   mimeTypes:
     - application/pdf
   desktop:
