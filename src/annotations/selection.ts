@@ -7,6 +7,7 @@ import { Point, BoundingBox, Annotation, ShapeAnnotation, MeasurementAnnotation,
 import { isPointInBox, isPointInPolygon, distance, distanceToSegment, polygonArea, mergeBoundingBoxes, boxesIntersect, computePointsBoundingBox } from '../utils/geometry';
 import { stickyNoteTool, getStickyNoteContentRect } from './tools/sticky-note';
 import { computeMeasurementValue } from './tools/measure';
+import { isElectron } from '../core/platform';
 
 /**
  * Recomputes `measuredValue` and formatted `label` for distance, angle, and area
@@ -1731,9 +1732,11 @@ export class SelectionManager {
       ctx.stroke();
 
       ctx.save();
-      ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
-      ctx.shadowBlur = 4;
-      ctx.shadowOffsetY = 1;
+      if (!isElectron()) {
+        ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetY = 1;
+      }
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
       ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
@@ -1978,9 +1981,11 @@ export class SelectionManager {
     ctx.stroke();
 
     ctx.save();
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
-    ctx.shadowBlur = 4;
-    ctx.shadowOffsetY = 1;
+    if (!isElectron()) {
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.25)';
+      ctx.shadowBlur = 4;
+      ctx.shadowOffsetY = 1;
+    }
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(cx, box.y - rotDist, (hs + 1) / 2, 0, Math.PI * 2);
@@ -2015,9 +2020,11 @@ export class SelectionManager {
     }
 
     ctx.save();
-    ctx.shadowColor = 'rgba(15, 23, 42, 0.2)';
-    ctx.shadowBlur = 4;
-    ctx.shadowOffsetY = 1;
+    if (!isElectron()) {
+      ctx.shadowColor = 'rgba(15, 23, 42, 0.2)';
+      ctx.shadowBlur = 4;
+      ctx.shadowOffsetY = 1;
+    }
 
     for (const h of handles) {
       ctx.fillStyle = '#ffffff';

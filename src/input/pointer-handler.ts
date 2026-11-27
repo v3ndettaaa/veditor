@@ -1472,11 +1472,30 @@ export class PointerHandler {
           const closed = shapesTool.addPolygonVertex(placed);
           if (closed) {
             const polyAnn = shapesTool.finish(defaultLayerId);
+            this._snapTarget = null;
+            this._cachedShapeVertices = null;
+            if (isElectron()) {
+              if (polyAnn) {
+                history.execute(
+                  new AddAnnotationCommand(pageIndex, polyAnn),
+                  { kind: 'incremental-annotation', pageIndex, annotation: polyAnn }
+                );
+              }
+              if (this._pageScratchCtx && this._pageScratchCanvas) {
+                this.clearScratchpadDirty(this._pageScratchCtx, this._pageScratchCanvas);
+              }
+              this._isPointerDown = false;
+              this._strokeTool = null;
+              this._activePageIndex = -1;
+              this._pageScratchCanvas = null;
+              this._pageScratchCtx = null;
+              this._scratchDirtyRect = null;
+              this._predictedPtsBuffer.length = 0;
+              return;
+            }
             if (polyAnn) {
               history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
             }
-            this._snapTarget = null;
-            this._cachedShapeVertices = null;
             if (this._pageScratchCtx && this._pageScratchCanvas) {
               this.clearScratchpadDirty(this._pageScratchCtx, this._pageScratchCanvas);
               this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
@@ -1497,7 +1516,17 @@ export class PointerHandler {
               shapesTool.renderScratchpad(c, rs);
             });
             if (isElectron()) {
-              this.setScratchpadDirtyFromPageBox(shapesTool.getLiveBoundingBox(), rs);
+              let dirtyBox = shapesTool.getLiveBoundingBox();
+              if (this._snapTarget) {
+                const snapBox: BoundingBox = {
+                  x: this._snapTarget.x - 16,
+                  y: this._snapTarget.y - 16,
+                  width: 32,
+                  height: 32
+                };
+                dirtyBox = dirtyBox ? mergeBoundingBoxes([dirtyBox, snapBox]) : snapBox;
+              }
+              this.setScratchpadDirtyFromPageBox(dirtyBox, rs);
             }
           }
           return;
@@ -1855,7 +1884,7 @@ export class PointerHandler {
     if (isElectron()) {
       floatingPropsBar?.hideForProgrammaticSelection();
     }
-    if (mode === 'resize') {
+    if (mode === 'resize' && !isElectron()) {
       const targetPt = resolveDraggedHandleTargetPoint(selected[0], hit, pt);
       this._activeLoupeTarget = targetPt;
       if (this._pageScratchCtx && this._pageScratchCanvas && scratchCanvas) {
@@ -1927,7 +1956,17 @@ export class PointerHandler {
               this.renderSnapTarget(ctx, rs);
             }
           });
-          this.setScratchpadDirtyFromPageBox(shapesTool.getLiveBoundingBox(), rs);
+          let polyDirty = shapesTool.getLiveBoundingBox();
+          if (this._snapTarget) {
+            const snapBox: BoundingBox = {
+              x: this._snapTarget.x - 16,
+              y: this._snapTarget.y - 16,
+              width: 32,
+              height: 32
+            };
+            polyDirty = polyDirty ? mergeBoundingBoxes([polyDirty, snapBox]) : snapBox;
+          }
+          this.setScratchpadDirtyFromPageBox(polyDirty, rs);
         });
         return;
       }
@@ -2031,20 +2070,31 @@ export class PointerHandler {
 
     if (!this._isPointerDown || this._activePageIndex !== pageIndex) return;
 
-    const coalescedEvents: PointerEvent[] =
-      typeof (e as any).getCoalescedEvents === 'function' ? (e as any).getCoalescedEvents() : [e];
     const tool = this._strokeTool ?? store.activeTool;
     const ctx = this._pageScratchCtx;
     if (!ctx) return;
 
     const pts = this._movePtsBuffer;
     pts.length = 0;
-    const evCount = coalescedEvents.length;
-    if (evCount === 0) {
+    const skipCoalesced =
+      isElectron() &&
+      (tool === 'select' ||
+        tool === 'rectangle' ||
+        tool === 'ellipse' ||
+        tool === 'line' ||
+        tool === 'arrow');
+    if (skipCoalesced) {
       pts.push(this.getPointInPage(e, scratchCanvas));
     } else {
-      for (let i = 0; i < evCount; i++) {
-        pts.push(this.getPointInPage(coalescedEvents[i], scratchCanvas));
+      const coalescedEvents: PointerEvent[] =
+        typeof (e as any).getCoalescedEvents === 'function' ? (e as any).getCoalescedEvents() : [e];
+      const evCount = coalescedEvents.length;
+      if (evCount === 0) {
+        pts.push(this.getPointInPage(e, scratchCanvas));
+      } else {
+        for (let i = 0; i < evCount; i++) {
+          pts.push(this.getPointInPage(coalescedEvents[i], scratchCanvas));
+        }
       }
     }
     if (pts.length === 0) return;
@@ -2419,6 +2469,25 @@ export class PointerHandler {
           const drag = this._selectDrag;
           drag.lastPt = { x: lastPt.x, y: lastPt.y };
           drag.shiftKey = shiftKey;
+          if (
+            isElectron() &&
+            drag.hasLifted &&
+            this._dragOverlay &&
+            this._dragOverlay.pageIndex === pageIndex &&
+            (drag.mode === 'move' || drag.mode === 'rotate')
+          ) {
+            if (drag.mode === 'move') {
+              const dx = drag.lastPt.x - drag.startPt.x;
+              const dy = drag.lastPt.y - drag.startPt.y;
+              const zoom = Math.max(store.zoom || 1, 0.05);
+              this._dragOverlay.canvas.style.transform = `translate3d(${dx * zoom}px, ${dy * zoom}px, 0)`;
+            } else {
+              const delta = this.computeRotationDelta(drag, drag.lastPt, drag.shiftKey);
+              this._dragOverlay.canvas.style.transformOrigin = `${this._dragOverlay.centerCssX}px ${this._dragOverlay.centerCssY}px`;
+              this._dragOverlay.canvas.style.transform = `rotate(${delta}rad)`;
+            }
+            break;
+          }
           this.scheduleLiveInkPaint(() => {
             if (!this._isPointerDown || this._selectDrag !== drag) return;
             const doc = store.activeDocument;
@@ -2436,7 +2505,11 @@ export class PointerHandler {
                   this.createStickyResizeContentSprite(origNote);
                 }
               }
-              onNeedRepaint();
+              if (isElectron()) {
+                onNeedRepaint(this.computeSelectionDirtyBox(drag.merged, drag.originalsList, true));
+              } else {
+                onNeedRepaint();
+              }
             }
 
             if (drag.mode === 'move') {
@@ -2606,14 +2679,22 @@ export class PointerHandler {
               const updatedList = this.applyResizeOrVertexTransform(drag, drag.lastPt, drag.shiftKey, pageAnns);
               doc.lastModifiedAt = Date.now();
               const currentAnn = updatedList[0];
-              const targetPt = resolveDraggedHandleTargetPoint(currentAnn, drag.handle, drag.lastPt);
-              this._activeLoupeTarget = targetPt;
               let loupeBox: BoundingBox | null = null;
-              this.withScratchOffset(c, cv, () => {
-                annotationEngine.renderCommittedAnnotations(c, updatedList, [], rs);
-                selectionManager.render(c, updatedList, rs);
-                loupeBox = this.renderHandleLoupe(c, scratchCanvas, pageIndex, targetPt, rs);
-              });
+              if (isElectron()) {
+                this._activeLoupeTarget = null;
+                this.withScratchOffset(c, cv, () => {
+                  annotationEngine.renderCommittedAnnotations(c, updatedList, [], rs);
+                  selectionManager.render(c, updatedList, rs);
+                });
+              } else {
+                const targetPt = resolveDraggedHandleTargetPoint(currentAnn, drag.handle, drag.lastPt);
+                this._activeLoupeTarget = targetPt;
+                this.withScratchOffset(c, cv, () => {
+                  annotationEngine.renderCommittedAnnotations(c, updatedList, [], rs);
+                  selectionManager.render(c, updatedList, rs);
+                  loupeBox = this.renderHandleLoupe(c, scratchCanvas, pageIndex, targetPt, rs);
+                });
+              }
               const selDirty = updatedList.length > 0
                 ? this.computeSelectionDirtyBox(
                     mergeBoundingBoxes(updatedList.map(getAnnotationSelectionBox)),
@@ -2758,6 +2839,19 @@ export class PointerHandler {
             shapesTool.renderScratchpad(c, rs);
             if (magnetic) this.renderSnapTarget(c, rs);
           });
+          if (isElectron()) {
+            let dirtyBox = shapesTool.getLiveBoundingBox();
+            if (magnetic && this._snapTarget) {
+              const snapBox: BoundingBox = {
+                x: this._snapTarget.x - 16,
+                y: this._snapTarget.y - 16,
+                width: 32,
+                height: 32
+              };
+              dirtyBox = dirtyBox ? mergeBoundingBoxes([dirtyBox, snapBox]) : snapBox;
+            }
+            this.setScratchpadDirtyFromPageBox(dirtyBox, rs);
+          }
         });
         break;
       }
@@ -2831,14 +2925,42 @@ export class PointerHandler {
     this.cancelScratchRaf();
     this._isPointerDown = false;
     this._activeCanvasRect = null;
-    this._scratchDirtyRect = null;
-    this._cachedShapeVertices = null;
     const tool = this._strokeTool ?? store.activeTool;
     const defaultLayerId = 'layer-default';
 
     if (tool === 'polygon') {
       this._isPointerDown = false;
       this._strokeTool = null;
+      if (isElectron()) {
+        // Polygons remain active across clicks until closed or completed.
+        // Preserve _scratchDirtyRect and _cachedShapeVertices so the next hover
+        // pixel never rescans all page vertices or wipes the full scratchpad.
+        if (this._pageScratchCtx && this._pageScratchCanvas && shapesTool.isPolygonActive() && !this._scratchDirtyRect) {
+          const c = this._pageScratchCtx;
+          const cv = this._pageScratchCanvas;
+          const polyNote = this._activeStickyPolygonNoteId
+            ? store.activeDocument?.annotations[pageIndex]?.find(
+                (a): a is StickyNoteAnnotation => a.id === this._activeStickyPolygonNoteId && a.type === 'sticky-note'
+              )
+            : undefined;
+          const rs = store.zoom * this.renderDpr();
+          this.withScratchOffset(c, cv, () => {
+            if (polyNote) {
+              stickyNoteTool.withNoteClip(c, polyNote, rs, () => {
+                shapesTool.renderScratchpad(c, rs);
+              });
+            } else {
+              shapesTool.renderScratchpad(c, rs);
+            }
+          });
+          this.setScratchpadDirtyFromPageBox(shapesTool.getLiveBoundingBox(), rs);
+        }
+        this._predictedPtsBuffer.length = 0;
+        this.restoreStylusEraserCursor(_e);
+        return;
+      }
+      this._scratchDirtyRect = null;
+      this._cachedShapeVertices = null;
       // Polygons remain active across clicks until closed or completed
       if (this._pageScratchCtx && this._pageScratchCanvas && shapesTool.isPolygonActive()) {
         const c = this._pageScratchCtx;
@@ -2865,6 +2987,8 @@ export class PointerHandler {
     if ((tool === 'measure-angle' || tool === 'measure-area') && measureTool.isMultiPointActive()) {
       this._isPointerDown = false;
       this._strokeTool = null;
+      this._scratchDirtyRect = null;
+      this._cachedShapeVertices = null;
       if (this._pageScratchCtx && this._pageScratchCanvas) {
         const c = this._pageScratchCtx;
         const cv = this._pageScratchCanvas;
@@ -2888,16 +3012,34 @@ export class PointerHandler {
       return;
     }
 
-    // Defer clearing the scratchpad for live pen/highlighter strokes (page or sticky note)
-    // until right after commit/repaint so there is 0ms blank flicker and O(1) dirty-rect clear.
-    const isIncrementalInkUp =
+    const isElectronFastClearUp =
+      isElectron() &&
       !this._stickyItemDrag &&
-      (
-        (!this._activeStickyStroke && ((tool === 'pen' && !this._holdFired) || tool === 'highlighter')) ||
-        (!!this._activeStickyStroke &&
-          !this._holdFired &&
-          (this._activeStickyStroke.mode === 'pen' || this._activeStickyStroke.mode === 'highlighter'))
-      );
+      !this._activeStickyStroke &&
+      (tool === 'rectangle' ||
+        tool === 'ellipse' ||
+        tool === 'line' ||
+        tool === 'arrow' ||
+        tool === 'freeform-shape' ||
+        ((tool === 'select' || tool === 'lasso') && Boolean(this._selectDrag)));
+
+    if (!isElectronFastClearUp) {
+      this._scratchDirtyRect = null;
+    }
+    this._cachedShapeVertices = null;
+
+    // Defer clearing the scratchpad for live pen/highlighter strokes (page or sticky note)
+    // and Electron shape/select commits until right after commit/repaint so there is 0ms
+    // blank flicker and O(1) tight dirty-rect clear instead of full-page clearRect.
+    const isIncrementalInkUp =
+      isElectronFastClearUp ||
+      (!this._stickyItemDrag &&
+        (
+          (!this._activeStickyStroke && ((tool === 'pen' && !this._holdFired) || tool === 'highlighter')) ||
+          (!!this._activeStickyStroke &&
+            !this._holdFired &&
+            (this._activeStickyStroke.mode === 'pen' || this._activeStickyStroke.mode === 'highlighter'))
+        ));
     if (!isIncrementalInkUp && this._pageScratchCtx && this._pageScratchCanvas) {
       this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
     }
@@ -3063,7 +3205,10 @@ export class PointerHandler {
         const wasTinyClick = dragBeforeCommit
           ? distance(dragBeforeCommit.startPt, clickUpPt) < 4
           : false;
-        this.commitSelectDrag();
+        const didCommitSelect = this.commitSelectDrag();
+        if (isElectron() && didCommitSelect && !this._textSelectDrag && !this._lasso && !this._marquee) {
+          handledIncrementally = true;
+        }
         // If user clicked an already-selected collapsed Sticky Note icon without dragging, expand it
         if (wasTinyClick && this._wasCollapsedNoteSelectedOnDown) {
           const doc = store.activeDocument;
@@ -3221,6 +3366,8 @@ export class PointerHandler {
       case 'line':
       case 'arrow':
       case 'freeform-shape': {
+        const scratchCtx = this._pageScratchCtx;
+        const scratchCv = this._pageScratchCanvas;
         const shapeAnn = shapesTool.finish(defaultLayerId);
         if (shapeAnn) {
           // "Connect Lines": fold coincident line/arrow endpoints into one
@@ -3231,9 +3378,27 @@ export class PointerHandler {
             : null;
           if (connected) {
             history.execute(new ReplaceAnnotationsCommand(pageIndex, connected.remove, [connected.add]));
+            if (isElectron()) {
+              if (scratchCtx && scratchCv) {
+                this.clearScratchpadDirty(scratchCtx, scratchCv);
+              }
+              handledIncrementally = true;
+            }
+          } else if (isElectron()) {
+            history.execute(
+              new AddAnnotationCommand(pageIndex, shapeAnn),
+              { kind: 'incremental-annotation', pageIndex, annotation: shapeAnn }
+            );
+            if (scratchCtx && scratchCv) {
+              this.clearScratchpadDirty(scratchCtx, scratchCv);
+            }
+            handledIncrementally = true;
           } else {
             history.execute(new AddAnnotationCommand(pageIndex, shapeAnn));
           }
+        } else if (isElectron() && scratchCtx && scratchCv) {
+          this.clearScratchpadDirty(scratchCtx, scratchCv);
+          handledIncrementally = true;
         }
         break;
       }
@@ -3397,9 +3562,31 @@ export class PointerHandler {
             updatedAt: Date.now()
           };
           history.execute(new ModifyAnnotationCommand(pageIndex, targetNote, updatedNote));
-        } else {
-          history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
+          if (this._pageScratchCtx && this._pageScratchCanvas) {
+            this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
+          }
+          this._pageScratchCanvas = null;
+          this._pageScratchCtx = null;
+          this._scratchDirtyRect = null;
+          this._cachedShapeVertices = null;
+          onNeedRepaint?.();
+          return true;
         }
+        if (isElectron()) {
+          history.execute(
+            new AddAnnotationCommand(pageIndex, polyAnn),
+            { kind: 'incremental-annotation', pageIndex, annotation: polyAnn }
+          );
+          if (this._pageScratchCtx && this._pageScratchCanvas) {
+            this.clearScratchpadDirty(this._pageScratchCtx, this._pageScratchCanvas);
+          }
+          this._pageScratchCanvas = null;
+          this._pageScratchCtx = null;
+          this._scratchDirtyRect = null;
+          this._cachedShapeVertices = null;
+          return true;
+        }
+        history.execute(new AddAnnotationCommand(pageIndex, polyAnn));
         if (this._pageScratchCtx && this._pageScratchCanvas) {
           this._pageScratchCtx.clearRect(0, 0, this._pageScratchCanvas.width, this._pageScratchCanvas.height);
         }
@@ -3644,19 +3831,22 @@ export class PointerHandler {
     }
   }
 
-  /** Commits an in-progress selection drag as ONE undo step. No-op otherwise. */
-  private commitSelectDrag(): void {
+  /** Commits an in-progress selection drag as ONE undo step. Returns true if history was committed. */
+  private commitSelectDrag(): boolean {
     const drag = this._selectDrag;
     this._selectDrag = null;
     this._activeLoupeTarget = null;
+    if (isElectron() && this._pageScratchCtx && this._pageScratchCanvas && this._scratchDirtyRect) {
+      this.clearScratchpadDirty(this._pageScratchCtx, this._pageScratchCanvas);
+    }
     this._scratchDirtyRect = null;
     this.destroyDragOverlay();
-    if (!drag) return;
+    if (!drag) return false;
     const movedEnough = drag.lastPt.x !== drag.startPt.x || drag.lastPt.y !== drag.startPt.y;
-    if (!drag.hasLifted && !movedEnough) return;
+    if (!drag.hasLifted && !movedEnough) return false;
     const doc = store.activeDocument;
     const pageAnns = doc?.annotations[drag.pageIndex];
-    if (!doc || !pageAnns) return;
+    if (!doc || !pageAnns) return false;
 
     if (drag.mode === 'move') {
       const dx = drag.lastPt.x - drag.startPt.x;
@@ -3693,7 +3883,9 @@ export class PointerHandler {
     }
     if (pairs.length > 0) {
       history.pushCommitted(new BulkModifyCommand(drag.pageIndex, pairs));
+      return true;
     }
+    return false;
   }
 
   /**

@@ -8,6 +8,8 @@
  * (72 * devicePixelRatio), which keeps HiDPI displays native.
  */
 
+import { isElectron } from '../core/platform';
+
 export const BASE_PDF_DPI = 72;
 
 /**
@@ -24,6 +26,14 @@ export const MAX_RENDER_DIMENSION = 6144;
  */
 export const ADAPTIVE_CANVAS_MAX_DIMENSION = 3840;
 export const ADAPTIVE_CANVAS_MAX_PIXELS = 3072 * 3072;
+
+/**
+ * Electron-only interactive canvas ceilings (~4.2 MP / 2560px) to prevent
+ * massive 27-37MB Skia surface stalls on Linux Ozone/Wayland while keeping
+ * 1x-2x displays crisp.
+ */
+export const ELECTRON_CANVAS_MAX_DIMENSION = 2560;
+export const ELECTRON_CANVAS_MAX_PIXELS = 2048 * 2048;
 
 export function getDevicePixelRatio(): number {
   if (typeof window !== 'undefined' && window.devicePixelRatio) {
@@ -74,14 +84,26 @@ export function clampRenderMultiplier(
 /**
  * Hardware-friendly backing-store multiplier for live interactive canvases
  * (annotations, scratchpad, and viewport chunks). Uses a 2.5x–3.0x supersampled
- * HiDPI floor/ceiling bounded by the 3840px / 9.4MP budget on Linux, Windows,
- * and Web so even the finest 1px pen strokes render razor-sharp at 100% zoom.
+ * HiDPI floor/ceiling bounded by the 3840px / 9.4MP budget on Web/Tauri,
+ * and a leaner 1.5x–2.0x / 2560px / 4.2MP budget on Electron Linux so shape
+ * dragging, resizing, polygon drawing, and pen strokes stay lag-free.
  */
 export function resolveAdaptiveCanvasDpr(
   cssWidth: number,
   cssHeight: number,
   targetDPI?: number
 ): number {
+  if (isElectron()) {
+    const maxDpr = 2.0;
+    const minDpr = 1.5;
+    const rawDpr = Math.min(maxDpr, Math.max(minDpr, getDevicePixelRatio(), resolveRenderDpr(targetDPI)));
+    let mult = clampRenderMultiplier(cssWidth, cssHeight, rawDpr, ELECTRON_CANVAS_MAX_DIMENSION);
+    const area = (cssWidth * mult) * (cssHeight * mult);
+    if (area > ELECTRON_CANVAS_MAX_PIXELS && area > 0) {
+      mult *= Math.sqrt(ELECTRON_CANVAS_MAX_PIXELS / area);
+    }
+    return mult;
+  }
   const maxDpr = 3.0;
   const minDpr = 2.5;
   const rawDpr = Math.min(maxDpr, Math.max(minDpr, getDevicePixelRatio(), resolveRenderDpr(targetDPI)));

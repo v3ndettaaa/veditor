@@ -3323,6 +3323,30 @@ html.platform-desktop .tool-popover {
   background: var(--bg-surface);
 }
 
+/* Electron Linux (Ozone/Wayland): eliminate live backdrop-filter blur passes over
+   the interactive PDF/annotation/drag canvases on toolbar rows and floating Chrome. */
+html.platform-electron .toolbar-main-row,
+html.platform-electron .toolbar-sub-row,
+html.platform-electron .app-header,
+html.platform-electron .header-docs-menu,
+html.platform-electron .floating-toolbar,
+html.platform-electron .floating-view-controls,
+html.platform-electron .floating-props-bar .props-bar-inner,
+html.platform-electron .tool-popover,
+html.platform-electron .modal-overlay,
+html.platform-electron .pdf-loading-overlay,
+html.platform-electron .context-menu,
+html.platform-electron .toast-item,
+html.platform-electron .jump-back-pill {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.platform-electron .toolbar-main-row,
+html.platform-electron .toolbar-sub-row {
+  background: var(--bg-surface);
+}
+
 .fp-text-selection-bar {
   display: flex;
   align-items: center;

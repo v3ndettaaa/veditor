@@ -240,6 +240,7 @@ class VeditorApp {
       document.documentElement.classList.add('platform-desktop');
     }
     if (isElectron()) {
+      document.documentElement.classList.add('platform-electron');
       this.initElectronEraserCursor();
     }
 
@@ -1513,9 +1514,10 @@ class VeditorApp {
     if (this._zoomCommitTimer !== null) window.clearTimeout(this._zoomCommitTimer);
     // Commit right after the last tick/finger move so zoom snaps immediately
     // back to full native resolution with zero lingering blur.
-    // Electron touchpad pinch delivers lower-frequency Wayland bursts, so a 160ms
-    // settle window prevents choppy mid-pinch re-rasterization.
-    const commitDelayMs = isElectron() ? 160 : 65;
+    // Electron touchpad pinch delivers lower-frequency Wayland bursts, so a 120ms
+    // settle window prevents choppy mid-pinch re-rasterization while committing
+    // promptly before the user places the pen down.
+    const commitDelayMs = isElectron() ? 120 : 65;
     this._zoomCommitTimer = window.setTimeout(() => this.commitZoomPreview(), commitDelayMs);
   }
 
@@ -1609,6 +1611,9 @@ class VeditorApp {
     }
     this.updateCanvasCursors();
     this.updateVisiblePageChunks(true, true);
+    if (isElectron() && store.activeDocument) {
+      this.scheduleScratchpadPrewarm(store.activePageIndex, 0);
+    }
   }
 
   private scheduleChunkUpdate(delayMs: number = 85): void {
@@ -1724,6 +1729,7 @@ class VeditorApp {
   private updateVisiblePageChunks(renderPdfRaster: boolean = true, forceUpdate: boolean = false): void {
     if (this._isZoomGestureActive || store.isDocSwitching || store.isZoomAdjusting) return;
     if (this._isFastScrolling && !forceUpdate) return;
+    if (isElectron() && pointerHandler.isPointerDown) return;
     const doc = store.activeDocument;
     if (!doc || !this._scrollContainer) return;
 
@@ -2111,18 +2117,28 @@ class VeditorApp {
     const prevWarm = this._warmScratchPageIndex;
     this._warmScratchPageIndex = pageIndex;
     if (prevWarm !== -1 && prevWarm !== pageIndex && !pointerHandler.isPolygonActiveOnPage(prevWarm)) {
-      const prevPage = this._renderedPages.get(prevWarm);
-      if (prevPage) {
-        if (prevPage.scratchCanvas.width > 1 || prevPage.scratchCanvas.height > 1) {
-          prevPage.scratchCanvas.width = 1;
-          prevPage.scratchCanvas.height = 1;
-          delete prevPage.scratchCanvas.dataset.gpuPrimed;
+      const teardownPrev = () => {
+        if (prevWarm === this._warmScratchPageIndex || pointerHandler.isPolygonActiveOnPage(prevWarm)) return;
+        const prevPage = this._renderedPages.get(prevWarm);
+        if (prevPage) {
+          if (prevPage.scratchCanvas.width > 1 || prevPage.scratchCanvas.height > 1) {
+            prevPage.scratchCanvas.width = 1;
+            prevPage.scratchCanvas.height = 1;
+            delete prevPage.scratchCanvas.dataset.gpuPrimed;
+          }
+          if (prevPage.scratchChunkCanvas && (prevPage.scratchChunkCanvas.width > 1 || prevPage.scratchChunkCanvas.height > 1)) {
+            prevPage.scratchChunkCanvas.width = 1;
+            prevPage.scratchChunkCanvas.height = 1;
+            delete prevPage.scratchChunkCanvas.dataset.gpuPrimed;
+          }
         }
-        if (prevPage.scratchChunkCanvas && (prevPage.scratchChunkCanvas.width > 1 || prevPage.scratchChunkCanvas.height > 1)) {
-          prevPage.scratchChunkCanvas.width = 1;
-          prevPage.scratchChunkCanvas.height = 1;
-          delete prevPage.scratchChunkCanvas.dataset.gpuPrimed;
-        }
+      };
+      if (isElectron()) {
+        window.setTimeout(() => {
+          if (!pointerHandler.isPointerDown) teardownPrev();
+        }, 0);
+      } else {
+        teardownPrev();
       }
     }
     const p = this._renderedPages.get(pageIndex);
@@ -2188,6 +2204,9 @@ class VeditorApp {
       p.scratchCanvas.width = w;
       p.scratchCanvas.height = h;
       delete p.scratchCanvas.dataset.gpuPrimed;
+      if (isElectron()) {
+        this.primeScratchCanvasSurface(p.scratchCanvas);
+      }
     }
     if (p.scratchCanvas.dataset.offsetX) delete p.scratchCanvas.dataset.offsetX;
     if (p.scratchCanvas.dataset.offsetY) delete p.scratchCanvas.dataset.offsetY;
@@ -2239,7 +2258,7 @@ class VeditorApp {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    if (dirtyPageBox && store.selectedAnnotationIds.size === 0) {
+    if (dirtyPageBox && (store.selectedAnnotationIds.size === 0 || (isElectron() && Boolean(dragIds && dragIds.size > 0)))) {
       const dx = Math.max(0, Math.floor(dirtyPageBox.x * scale - ox * dpr) - 6);
       const dy = Math.max(0, Math.floor(dirtyPageBox.y * scale - oy * dpr) - 6);
       const dr = Math.min(chunk.width, Math.ceil((dirtyPageBox.x + dirtyPageBox.width) * scale - ox * dpr) + 6);
@@ -2436,6 +2455,7 @@ class VeditorApp {
         if (store.activeDocument && !store.isDocSwitching && !this._isZoomGestureActive) {
           viewportManager.handleScroll(true);
           this.updateVisiblePageChunks(true, false);
+          this.scheduleScratchpadPrewarm(store.activePageIndex, 0);
         }
       });
     }
@@ -2709,9 +2729,24 @@ class VeditorApp {
           }
         }
       }
-      // Pre-warm PDF text layout and interactive links for on-screen pages
-      void pdfEngine.getPageTextLayout(pageIndex);
-      void this.populatePageLinks(pageIndex, p, docId);
+      // Pre-warm PDF text layout and interactive links for on-screen pages.
+      // On Electron when pen/highlighter is active, defer extraction slightly so
+      // opening a PDF, scrolling, or zooming never competes with a first pen stroke.
+      if (isElectron() && (store.activeTool === 'pen' || store.activeTool === 'highlighter')) {
+        const deferTextAndLinks = () => {
+          if (!docStillCurrent() || this._isFastScrolling || this._isZoomGestureActive) return;
+          if (pointerHandler.isPointerDown) {
+            window.setTimeout(deferTextAndLinks, 220);
+            return;
+          }
+          void pdfEngine.getPageTextLayout(pageIndex);
+          void this.populatePageLinks(pageIndex, p, docId);
+        };
+        window.setTimeout(deferTextAndLinks, 250);
+      } else {
+        void pdfEngine.getPageTextLayout(pageIndex);
+        void this.populatePageLinks(pageIndex, p, docId);
+      }
       if (p.needsRepaint) {
         p.needsRepaint = false;
         this.repaintPageAnnotations(pageIndex, p);
@@ -2747,6 +2782,10 @@ class VeditorApp {
     if (deferredTier2.length > 0) {
       const renderTier2 = () => {
         if (!docStillCurrent() || this._isFastScrolling || this._isZoomGestureActive) return;
+        if (isElectron() && pointerHandler.isPointerDown) {
+          window.setTimeout(renderTier2, 180);
+          return;
+        }
         for (const pageIndex of deferredTier2) {
           const p = this._renderedPages.get(pageIndex);
           if (!p || !p.needsRaster) continue;
@@ -2777,7 +2816,7 @@ class VeditorApp {
       ? store.activePageIndex
       : (visibleIndices.find(idx => onScreenSet.has(idx)) ?? -1);
     if (prewarmTarget >= 0) {
-      this.scheduleScratchpadPrewarm(prewarmTarget);
+      this.scheduleScratchpadPrewarm(prewarmTarget, isElectron() ? 0 : 80);
     }
   }
 
@@ -2980,7 +3019,7 @@ class VeditorApp {
     if (annCtx && p.annotCanvas.width > 1 && p.annotCanvas.height > 1) {
       const dragIds = pointerHandler.getSelectDragExcludedIds(pageIndex);
 
-      if (dirtyPageBox && store.selectedAnnotationIds.size === 0) {
+      if (dirtyPageBox && (store.selectedAnnotationIds.size === 0 || (isElectron() && Boolean(dragIds && dragIds.size > 0)))) {
         const dx = Math.max(0, Math.floor(dirtyPageBox.x * scale) - 6);
         const dy = Math.max(0, Math.floor(dirtyPageBox.y * scale) - 6);
         const dr = Math.min(p.annotCanvas.width, Math.ceil((dirtyPageBox.x + dirtyPageBox.width) * scale) + 6);
@@ -3306,6 +3345,9 @@ class VeditorApp {
         canvas.releasePointerCapture(e.pointerId);
       } catch (_) {}
       pointerHandler.handlePointerUp(e, pageIndex, canvas, onRepaint);
+      if (isElectron() && pointerHandler.isPolygonActiveOnPage(pageIndex)) {
+        return;
+      }
       this.releasePageScratchpad(pageIndex);
       this.scheduleCoveredLinksUpdate(pageIndex);
       // A notebook grows once the stroke is committed, so there is always
