@@ -7,7 +7,9 @@ const path = require('node:path');
 
 // Enable native Wayland (when active) and touchpad pinch / smooth scrolling on Linux.
 if (process.platform === 'linux') {
-  const hasExplicitOzone = process.argv.some((arg) => arg.startsWith('--ozone-platform'));
+  const hasExplicitOzone = process.argv.some(
+    (arg) => arg === '--ozone-platform' || arg.startsWith('--ozone-platform=')
+  );
   const isWaylandSession = Boolean(
     process.env.WAYLAND_DISPLAY ||
       (process.env.XDG_SESSION_TYPE || '').toLowerCase() === 'wayland'
@@ -21,10 +23,22 @@ if (process.platform === 'linux') {
   }
   app.commandLine.appendSwitch('enable-pinch');
   app.commandLine.appendSwitch('enable-smooth-scrolling');
-  app.commandLine.appendSwitch(
-    'enable-features',
-    'UseOzonePlatform,TouchpadOverscrollHistoryNavigation'
-  );
+
+  const existingFeatures = (app.commandLine.getSwitchValue('enable-features') || '')
+    .split(',')
+    .map((f) => f.trim())
+    .filter(Boolean);
+  const desiredFeatures = [
+    'UseOzonePlatform',
+    'WaylandWindowDecorations',
+    'TouchpadOverscrollHistoryNavigation'
+  ];
+  for (const feature of desiredFeatures) {
+    if (!existingFeatures.includes(feature)) {
+      existingFeatures.push(feature);
+    }
+  }
+  app.commandLine.appendSwitch('enable-features', existingFeatures.join(','));
 }
 
 // Register a stable privileged custom origin (`app://veditor`) BEFORE app is ready.
@@ -433,6 +447,28 @@ function createMainWindow() {
   applyVisualZoomLimits();
   win.webContents.on('dom-ready', applyVisualZoomLimits);
   win.webContents.on('did-finish-load', applyVisualZoomLimits);
+  win.webContents.on('did-navigate', applyVisualZoomLimits);
+
+  // Forward raw Chromium touchpad pinch gestures (Wayland zwp_pointer_gestures_v1)
+  // to preload as a deduplicated fallback in case Blink does not synthesize ctrl+wheel.
+  win.webContents.on('input-event', (_event, inputEvent) => {
+    if (win.isDestroyed() || !inputEvent || typeof inputEvent.type !== 'string') return;
+    if (inputEvent.type === 'gesturePinchUpdate') {
+      const scale =
+        typeof inputEvent.scale === 'number' && Number.isFinite(inputEvent.scale)
+          ? inputEvent.scale
+          : null;
+      if (scale && scale > 0 && scale !== 1) {
+        win.webContents.send('native:pinch-gesture-update', {
+          scale,
+          x: typeof inputEvent.x === 'number' ? inputEvent.x : undefined,
+          y: typeof inputEvent.y === 'number' ? inputEvent.y : undefined
+        });
+      }
+    } else if (inputEvent.type === 'gesturePinchEnd') {
+      win.webContents.send('native:pinch-gesture-end');
+    }
+  });
 
   // Fallback: if Chromium routes a pinch/zoom gesture through WebContents zoom-changed
   // instead of a cancelable wheel event, keep the app chrome at 1:1 and forward it to

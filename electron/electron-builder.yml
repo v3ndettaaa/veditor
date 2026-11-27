@@ -31,6 +31,7 @@ linux:
     - --ozone-platform-hint=auto
     - --enable-pinch
     - --enable-smooth-scrolling
+    - --enable-features=WaylandWindowDecorations,TouchpadOverscrollHistoryNavigation
   mimeTypes:
     - application/pdf
   desktop:
@@ -43,6 +44,11 @@ linux:
 
 appImage:
   artifactName: veditor-electron-${version}-linux-${arch}.${ext}
+  executableArgs:
+    - --ozone-platform-hint=auto
+    - --enable-pinch
+    - --enable-smooth-scrolling
+    - --enable-features=WaylandWindowDecorations,TouchpadOverscrollHistoryNavigation
 
 deb:
   artifactName: veditor-electron-${version}-linux-${arch}.${ext}
