@@ -19,7 +19,8 @@
     }
   },
   "background": {
-    "scripts": ["service-worker.js"]
+    "scripts": ["service-worker.js"],
+    "type": "module"
   },
   "permissions": [
     "storage",
@@ -32,7 +33,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "veditor@local.extension",
-      "strict_min_version": "109.0"
+      "strict_min_version": "112.0"
     }
   },
   "web_accessible_resources": [
